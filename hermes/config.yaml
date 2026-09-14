@@ -1,0 +1,53 @@
+# Luca — Hermes Config
+
+# Agent identity
+agent:
+  name: luca
+  soul: ~/.hermes/SOUL.md
+  project: ~/.hermes/luca
+
+# LLM — Bankr Agent API
+llm:
+  provider: bankr
+  api_base: https://api.bankr.bot/v1
+  model: bankr-agent
+  context_window: 128000
+  temperature: 0.2
+
+# Memory
+memory:
+  path: ~/.hermes/memories
+  durable: MEMORY.md
+  user: USER.md
+
+# Skills
+skills:
+  path: ~/.hermes/skills
+  active:
+    - luca-finance
+
+# Telegram
+telegram:
+  enabled: true
+  token: ${TELEGRAM_BOT_TOKEN}
+  allowed_users:
+    - ${TELEGRAM_ALLOWED_USER_ID}
+
+# Monitoring
+heartbeat:
+  enabled: true
+  interval_minutes: 10
+
+# Materiality
+materiality:
+  default_usd: 50
+
+# Security
+security:
+  execution: false
+  read_only: true
+
+# Logging
+logging:
+  level: info
+  path: ~/.hermes/logs/luca.log
