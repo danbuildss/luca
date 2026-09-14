@@ -1,0 +1,49 @@
+{
+  "name": "luca",
+  "version": "0.1.0",
+  "description": "Private financial agent for on-chain operators",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"npm run worker:dev\" \"npm run bot:dev\" \"npm run api:dev\"",
+    "worker:dev": "tsx watch apps/worker/index.ts",
+    "bot:dev": "tsx watch apps/telegram/index.ts",
+    "api:dev": "tsx watch apps/api/index.ts",
+    "build": "tsc",
+    "start": "node dist/apps/worker/index.js & node dist/apps/telegram/index.js & node dist/apps/api/index.js",
+    "db:migrate": "node scripts/migrate.js",
+    "db:reset": "node scripts/reset.js",
+    "backfill": "tsx scripts/backfill.ts",
+    "test-wallet": "tsx scripts/test-wallet.ts",
+    "lint": "eslint . --ext .ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "telegraf": "^4.16.3",
+    "pg": "^8.11.3",
+    "axios": "^1.6.7",
+    "viem": "^2.7.0",
+    "openai": "^4.28.0",
+    "@anthropic-ai/sdk": "^0.17.1",
+    "dotenv": "^16.4.1",
+    "zod": "^3.22.4",
+    "date-fns": "^3.3.1",
+    "pino": "^8.18.0",
+    "fastify": "^4.26.2",
+    "node-cron": "^3.0.3",
+    "p-retry": "^6.2.0",
+    "p-queue": "^8.0.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "tsx": "^4.7.1",
+    "concurrently": "^8.2.2",
+    "@types/node": "^20.11.5",
+    "@types/pg": "^8.11.0",
+    "eslint": "^8.56.0",
+    "@typescript-eslint/eslint-plugin": "^6.19.1",
+    "@typescript-eslint/parser": "^6.19.1"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
