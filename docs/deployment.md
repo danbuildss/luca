@@ -1,107 +1,48 @@
-# Luca — Deployment
+# Luca Deployment Status
 
-## Development (Mac)
+Production deployment is not part of Phase 1. This document records the supported
+development topology and the boundary for the later VPS phase.
 
-### Prerequisites
-- Node.js 20+
-- Postgres (local or Docker)
-- Telegram Bot Token (from @BotFather)
-- Alchemy API key (Base RPC + Transfers API)
-- OpenAI or Anthropic API key (for Hermes)
+## Development Topology
 
-### Setup
+```text
+Mac
+├── Luca API
+├── Luca worker foundation
+└── PostgreSQL 16
+```
+
+Use Docker Compose for PostgreSQL when Docker is available:
 
 ```bash
-git clone https://github.com/danbuildss/luca
-cd luca
-cp .env.example .env
-# fill in .env values
-npm install
+docker compose up -d postgres
 npm run db:migrate
 npm run dev
 ```
 
-### Local Postgres via Docker
+The application can also use any PostgreSQL 16 instance configured through
+`DATABASE_URL`.
 
-```bash
-docker run --name luca-db \
-  -e POSTGRES_PASSWORD=luca \
-  -e POSTGRES_DB=luca \
-  -p 5432:5432 \
-  -d postgres:16
-```
+## Process Checks
 
-### Run locally
+- `GET /health` verifies that the API process is alive.
+- `GET /ready` verifies that the API can reach PostgreSQL.
+- The worker verifies PostgreSQL before declaring itself ready.
 
-```bash
-npm run worker   # ingestion + classification
-npm run bot      # telegram bot
-npm run api      # api server
-```
+Neither endpoint exposes connection strings or provider errors.
 
-## Production (VPS)
+## Production Boundary
 
-### Recommended Stack
-- Ubuntu 22.04 LTS
-- Node.js 20
-- Postgres 16
-- PM2 (process manager)
-- Nginx (reverse proxy for API)
-- Certbot (SSL)
+The VPS phase will define and verify:
 
-### Setup
+- a dedicated Linux user;
+- system services for the API, worker, scheduler, and Hermes gateway;
+- a private PostgreSQL service;
+- firewall and SSH policy;
+- secret storage and rotation;
+- structured log redaction and rotation;
+- encrypted backups and a restore drill;
+- rollback and degraded-mode procedures.
 
-```bash
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt-get install -y nodejs
-npm install -g pm2
-git clone https://github.com/danbuildss/luca
-cd luca
-cp .env.example .env
-npm install
-npm run db:migrate
-pm2 start ecosystem.config.js
-pm2 save
-pm2 startup
-```
-
-### PM2 Ecosystem (ecosystem.config.js)
-
-```js
-module.exports = {
-  apps: [
-    { name: 'luca-worker', script: 'dist/apps/worker/index.js', instances: 1, autorestart: true },
-    { name: 'luca-bot', script: 'dist/apps/telegram/index.js', instances: 1, autorestart: true },
-    { name: 'luca-api', script: 'dist/apps/api/index.js', instances: 1, autorestart: true },
-  ],
-};
-```
-
-## Environment Variables
-
-Required:
-- DATABASE_URL
-- TELEGRAM_BOT_TOKEN
-- ALCHEMY_API_KEY
-- OPENAI_API_KEY or ANTHROPIC_API_KEY
-- BASE_RPC_URL
-
-## Backups
-
-```bash
-# daily postgres backup
-pg_dump $DATABASE_URL > backup_$(date +%Y%m%d).sql
-
-# automate with cron
-0 2 * * * pg_dump $DATABASE_URL > /backups/luca_$(date +\%Y\%m\%d).sql
-```
-
-## Updates
-
-```bash
-git pull
-npm install
-npm run build
-npm run db:migrate
-pm2 restart all
-```
+Do not deploy the Phase 1 worker as a financial service. It contains no ingestion,
+classification, reporting, Bankr, Telegram, or monitoring jobs.

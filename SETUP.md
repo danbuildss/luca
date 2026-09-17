@@ -1,151 +1,98 @@
-# Luca Setup Guide
+# Luca Phase 1 Setup
 
-## What Luca is
-
-Luca is a private financial agent for on-chain operators.
-
-He runs on Hermes, uses the Bankr Agent API as his LLM, and talks to you through Telegram.
-
-He watches your wallets, keeps your books, remembers your financial context, and tells you what matters.
-
----
+Phase 1 is the local engineering foundation. It does not connect Base, Bankr,
+Hermes, Telegram, or a real wallet.
 
 ## Prerequisites
 
-- Mac with Hermes installed
-- Bankr account and API key
-- Telegram bot token from @BotFather
-- Alchemy API key (for Base blockchain data)
+- Node.js 20 or newer
+- npm 10 or newer
+- PostgreSQL 16, or Docker with Docker Compose
 
----
-
-## Step 1 — Delete the existing Hermes agent
-
-If you have an existing agent in Hermes, back it up first, then clear the workspace:
-
-```bash
-cp -r ~/.hermes ~/.hermes-backup
-rm -rf ~/.hermes/SOUL.md
-rm -rf ~/.hermes/luca
-rm -rf ~/.hermes/memories
-rm -rf ~/.hermes/skills/luca-finance
-```
-
----
-
-## Step 2 — Clone the repo
+## Install
 
 ```bash
 git clone https://github.com/danbuildss/luca.git
 cd luca
+cp .env.example .env
+npm ci
 ```
 
----
+The example configuration uses a local PostgreSQL database and contains no real
+credentials.
 
-## Step 3 — Copy Hermes files into place
+## Start PostgreSQL
+
+Start the persistent development database:
 
 ```bash
-# Core identity
-cp hermes/SOUL.md ~/.hermes/SOUL.md
-cp hermes/config.yaml ~/.hermes/config.yaml
-
-# Luca project files
-mkdir -p ~/.hermes/luca
-cp hermes/luca/* ~/.hermes/luca/
-
-# Memory files
-mkdir -p ~/.hermes/memories
-cp hermes/memories/* ~/.hermes/memories/
-
-# Luca finance skill
-mkdir -p ~/.hermes/skills/luca-finance
-cp hermes/skills/luca-finance/SKILL.md ~/.hermes/skills/luca-finance/SKILL.md
-
-# Bootstrap file
-cp hermes/BOOTSTRAP.md ~/.hermes/BOOTSTRAP.md
+docker compose up -d postgres
 ```
 
----
+The default `DATABASE_URL` in `.env.example` matches this service.
 
-## Step 4 — Set up environment variables
+## Apply Migrations
 
 ```bash
-cp hermes/.env.example ~/.hermes/.env
+npm run db:migrate
 ```
 
-Then open `~/.hermes/.env` and fill in:
+Migrations are immutable and recorded in `schema_migrations`. The runner refuses to
+continue if an already applied migration has been edited.
 
-- `BANKR_API_KEY` — your Bankr API key
-- `TELEGRAM_BOT_TOKEN` — from @BotFather
-- `TELEGRAM_ALLOWED_USER_ID` — your Telegram user ID
-- `ALCHEMY_API_KEY` — your Alchemy API key
-- `OPERATOR_WALLETS` — your wallet addresses (comma-separated)
-
----
-
-## Step 5 — Start Hermes
+## Run Luca
 
 ```bash
-hermes
+npm run dev
 ```
 
-Luca will boot, load his identity, and ask you which wallets to watch.
+This starts:
 
----
+- the API at `http://127.0.0.1:3000`;
+- the worker foundation, which verifies PostgreSQL and then waits for future jobs.
 
-## Step 6 — First conversation
-
-Tell Luca:
-
-> "This is my operations wallet: [YOUR WALLET ADDRESS]. Watch it. Do not execute transactions."
-
-Then:
-
-> "Analyze the last 30 days of activity and give me the first financial report. Separate revenue, expenses, internal transfers, gas, x402 activity and unknowns. Do not guess."
-
----
-
-## Step 7 — Connect Telegram
-
-Once Luca is running, open Telegram and message your bot.
-
-Luca will respond through Telegram from that point forward.
-
----
-
-## What Luca will NOT do
-
-- Transfer funds
-- Sign transactions
-- Swap tokens
-- Request your seed phrase or private key
-- Depend on Zetta
-- Send unsolicited messages unless something material happens
-
----
-
-## Keeping Luca running on your Mac
-
-To keep Luca running while you work:
+Check the API:
 
 ```bash
-hermes --daemon
+curl http://127.0.0.1:3000/health
+curl http://127.0.0.1:3000/ready
 ```
 
-Or keep the terminal window open.
+`/health` reports process liveness and does not require PostgreSQL. `/ready` returns
+HTTP 503 until PostgreSQL is reachable.
 
-When you get a VPS, we will migrate Luca there for 24/7 uptime.
+## Run Verification
 
----
+Unit tests do not require PostgreSQL:
 
-## Private users
+```bash
+npm test
+```
 
-Luca is currently private. Only users you explicitly invite can use it.
+Run the complete disposable-database workflow:
 
-To add a private user, add their Telegram user ID to `TELEGRAM_ALLOWED_USER_ID` in `.env`.
+```bash
+npm run db:test:up
+cp .env.test.example .env.test
+set -a
+source .env.test
+set +a
+npm run db:test:migrate
+npm run verify
+npm run db:test:down
+```
 
----
+The test migration command refuses any database whose name does not end in `_test`.
 
-## Support
+## Configuration Safety
 
-Built by danbuildss. Powered by Hermes + Bankr.
+Startup validates required configuration and exits when it is invalid. Error
+responses and configuration errors do not include credential values.
+
+Never commit `.env`. The repository tracks only placeholder examples.
+
+## Deferred Integrations
+
+Hermes, Telegram, Bankr, Base providers, and wallet configuration are intentionally
+deferred. Do not copy the files under `hermes/` into a live profile yet; those files
+will be reconciled and installed during the approved Hermes phase.

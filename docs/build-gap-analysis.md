@@ -1,5 +1,11 @@
 # Luca V1 — Current-State and Build-Gap Analysis
 
+> **Status update:** Phase 1 foundation has now been implemented. The repository has
+> validated configuration, versioned migrations, a runnable API and worker shell,
+> health/readiness checks, automated tests, Docker Compose database workflows, and
+> CI. The analysis below is retained as the decision record that led to this build;
+> references to the foundation being absent describe the pre-Phase-1 repository.
+
 ## Executive summary
 
 The repository is a strong **product and agent-behaviour specification**, but it is

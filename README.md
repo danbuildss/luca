@@ -2,12 +2,10 @@
 
 > Luca is the employee who keeps books on the wallets that work while you sleep.
 
-> **Repository status:** this repository currently contains the product specification,
-> Hermes profile material, prompts, and an initial PostgreSQL schema. The runnable
-> Luca Core, Telegram bot, API, worker, migrations, and automated tests described
-> below have not been implemented yet. See the
-> [current-state and build-gap analysis](docs/build-gap-analysis.md) for the audited
-> implementation plan.
+> **Repository status:** Phase 1 foundation is implemented. The repository now has a
+> runnable API and worker shell, validated configuration, versioned PostgreSQL
+> migrations, automated tests, and CI. Base ingestion, classification, books, Bankr,
+> Hermes, and Telegram remain disabled until their separately approved phases.
 
 Luca is a private financial agent for on-chain operators and autonomous agents. It watches your wallets, classifies activity into books, remembers your corrections, and briefs you like an employee — not a dashboard.
 
@@ -38,20 +36,20 @@ Luca is a private financial agent for on-chain operators and autonomous agents. 
 - Database: Postgres
 - Runtime: Mac (dev) → VPS (production)
 
-## Quick Start
-
-The commands below describe the intended application workflow; they will not work
-until the Phase 1 implementation in the build-gap analysis is complete.
+## Phase 1 Quick Start
 
 ```bash
 git clone https://github.com/danbuildss/luca
 cd luca
 cp .env.example .env
-# fill in .env
 npm install
+docker compose up -d postgres
 npm run db:migrate
 npm run dev
 ```
+
+Check process liveness at `http://127.0.0.1:3000/health` and database readiness at
+`http://127.0.0.1:3000/ready`. See [SETUP.md](SETUP.md) for the complete local flow.
 
 ## Project Structure
 
@@ -59,9 +57,8 @@ npm run dev
 luca/
 ├── LUCA.md              # Product constitution
 ├── apps/
-│   ├── telegram/        # Telegram bot
 │   ├── api/             # REST API
-│   └── worker/          # Ingestion + classification worker
+│   └── worker/          # Deterministic background worker
 ├── core/
 │   ├── ingest/          # Chain data ingestion
 │   ├── normalize/       # Canonical event format
@@ -71,8 +68,15 @@ luca/
 │   ├── alerts/          # Alert engine
 │   └── briefs/          # Brief generation
 ├── prompts/             # Hermes prompt files
-├── db/                  # Schema and migrations
+├── db/migrations/       # Immutable PostgreSQL migrations
+├── test/                # Unit and integration tests
 └── docs/                # Architecture and deployment
 ```
 
-## Powered by $LUCA
+The directories above describe the target architecture. Phase 1 contains only the
+foundational modules required to build later phases safely.
+
+## Safety Boundary
+
+Phase 1 makes no blockchain, Bankr, Hermes, Telegram, or wallet calls. Luca contains
+no transaction signing or execution path.

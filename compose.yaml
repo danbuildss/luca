@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: luca
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: luca
+    ports:
+      - '5432:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d luca']
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    volumes:
+      - luca-postgres:/var/lib/postgresql/data
+
+  postgres-test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: luca_test
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: luca
+    ports:
+      - '55432:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d luca_test']
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    tmpfs:
+      - /var/lib/postgresql/data
+
+volumes:
+  luca-postgres:
