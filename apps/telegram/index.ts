@@ -8,6 +8,8 @@ import { handleReview } from '../../src/telegram/commands/review.js';
 import { handleBalance } from '../../src/telegram/commands/balance.js';
 import { handleCallback } from '../../src/telegram/callbacks.js';
 import { sendPendingAlerts } from '../../src/telegram/alerts.js';
+import { generateDailyBrief, generateWeeklyBrief } from '../../src/briefs/generate.js';
+import { saveBrief, markBriefSent } from '../../src/briefs/store.js';
 
 if (config.NODE_ENV === 'production') {
   requireProductionConfig();
@@ -42,7 +44,8 @@ bot.command('start', async (ctx) => {
     `👋 Hi! I'm Luca, your on-chain financial agent.\n\n` +
     `/summary — P&L for the last 30 days\n` +
     `/review  — Label unknown transactions\n` +
-    `/balance — Current wallet balances`,
+    `/balance — Current wallet balances\n` +
+    `/brief   — On-demand daily or weekly brief`,
   );
 });
 
@@ -63,6 +66,39 @@ bot.command('balance', async (ctx) => {
   const user = await requireUser(ctx);
   if (!user) { await ctx.reply("You're not registered."); return; }
   await handleBalance(ctx, user);
+});
+
+// On-demand brief: /brief [daily|weekly]
+bot.command('brief', async (ctx) => {
+  const user = await requireUser(ctx);
+  if (!user) { await ctx.reply("You're not registered."); return; }
+
+  const args = ctx.message.text.split(' ').slice(1);
+  const type = args[0] === 'weekly' ? 'weekly' : 'daily';
+
+  await ctx.reply(`Generating ${type} brief…`);
+  try {
+    const now = new Date();
+    const periodDays = type === 'weekly' ? 7 : 1;
+    const periodStart = new Date(now.getTime() - periodDays * 24 * 60 * 60 * 1000);
+    const content = type === 'weekly'
+      ? await generateWeeklyBrief(user.userId)
+      : await generateDailyBrief(user.userId);
+
+    const briefId = await saveBrief({
+      userId: user.userId,
+      type,
+      content,
+      periodStart,
+      periodEnd: now,
+    });
+
+    const msg = await ctx.reply(content, { parse_mode: 'Markdown' });
+    await markBriefSent(briefId, msg.message_id);
+  } catch (err) {
+    logger.error({ err, userId: user.userId }, '/brief command failed');
+    await ctx.reply('Failed to generate brief — try again shortly.');
+  }
 });
 
 // Power-user: /label <event_id> <label>
