@@ -745,6 +745,71 @@ Optional: `REDIS_URL`, `QUICKNODE_BASE_RPC`
 
 ---
 
+## GitHub & Deployment Setup
+
+- **GitHub repo:** `danbuildss/luca` — all code lives here
+- **Production branch:** `claude/brave-pasteur-mayw5k` (PR #2 tracks it)
+- **Local Mac:** Hermes installed — use for testing Luca profile and Telegram bot locally
+- **Production:** VPS (Ubuntu) — all real deployment goes here, driven from GitHub
+- **Deployment flow:** push to GitHub → SSH to VPS → `git pull && pm2 restart all` (or systemd)
+- **Process manager:** systemd on VPS (not PM2 — keep consistent with design doc)
+
+## CEO Plan Decisions (locked 2026-09-19)
+
+Full plan: `~/.gstack/projects/danbuildss-luca/ceo-plans/2026-09-19-luca-build-in-public.md`
+
+**Mode:** SELECTIVE EXPANSION — 6 features reviewed, 5 accepted, 1 skipped.
+
+| Feature | Decision | Notes |
+|---------|----------|-------|
+| `/alias` command | SKIPPED | Label capture via counterparty alert reply only |
+| `/runway` command | ACCEPTED | Treasury ÷ burn rate (7d/30d). Build LAST in Week 8 after books exist |
+| New counterparty alert | ACCEPTED | State machine via `pending_counterparty_alerts` table, 48h timeout, 30-day re-alert |
+| MCP server | ACCEPTED | 4 endpoints: `get_treasury_balance`, `get_recent_books`, `get_runway`, `can_afford` |
+| Gas trend in daily brief | ACCEPTED | "Gas spend: $7.41 (↑40% vs last week)" |
+| Solana support | CONDITIONAL | Must pass normalization spike (2-4h investigation) before building |
+
+**New tables added to `db/schema.sql`:**
+- `mcp_keys (key_hash, user_id, caller_name, created_at)` — MCP API key auth
+- `pending_counterparty_alerts (id, user_id, counterparty_address, watched_wallet_address, telegram_message_id, sent_at, status, resolved_at)` — counterparty labeling state machine
+- `balance_snapshots (wallet_id, user_id, asset, balance, snapshot_at)` — for /runway treasury
+- Fixed `corrections` table: added `type[tx|counterparty]`, `counterparty_address`, `source_message`
+- Added `provider` and `chain` to `sync_runs`
+
+**Critical pre-code decisions (must lock in Gate A):**
+1. Classification label enum: `revenue, expense, internal_transfer, treasury, gas, x402_income, x402_spend, refund, unknown` — TypeScript enum + DB CHECK constraint
+2. Balance computation: use `balance_snapshots` (snapshot on every sync run)
+3. Deployment runtime: systemd on VPS, not PM2
+4. OPERATIONS.md rule: Markdown files (BOOKS.md, MEMORY.md) = Hermes context only. All corrections/counterparties/wallet state → Postgres exclusively
+5. LLM circuit breaker: DB counter, $1/day cap, resets midnight UTC
+
+## `/runway` Command Rules
+
+- Treasury = USDC + USDC.e + DAI + USDT across all watched wallets for user_id
+- Burn rate = 7-day and 30-day trailing averages
+- Output: "At current burn: 14 weeks. Treasury: $12,400 USDC. Burn: $890/wk (7d avg) | $720/wk (30d avg)."
+- Edge: burn = 0 → "No spend detected in lookback window — runway undefined."
+- Edge: treasury = 0 → "⚠️ Treasury empty."
+- **Prerequisite:** Books layer must exist. Build LAST in Week 8.
+
+## New Counterparty Alert Rules
+
+- Fires when: address not in `counterparty_rules` for that user_id transacts with watched wallet
+- Template: "⚠️ New counterparty: 0xabc…def sent $420 USDC to [wallet-name]. What should I call this? Reply with a label (e.g. 'Vendor: AWS', 'Revenue: CORTX') or 'skip'."
+- Wallet-name MUST be sanitized (strip non-alphanumeric) before embedding in message — prompt injection risk
+- Reply creates counterparty rule. No reply in 48h → `status='timed_out'`. Re-alert 30 days from `sent_at`.
+- First-time senders only per user_id.
+- After label: "Got it. 0xabc…def is now labeled 'Vendor: AWS'. I'll apply this to future transactions."
+
+## MCP Server Auth Model
+
+- **Distribution:** `MCP_KEY_<CALLER_NAME>=<token>` in `.env.production` (how keys are handed out)
+- **Runtime validation:** hash the token, look up `key_hash` in `mcp_keys` table → get `user_id`
+- **The env var is NOT queried at runtime** — only used to distribute keys to callers
+- **Secondary defense:** IP allowlist (nginx level)
+- **All endpoints:** enforce `user_id` scoping — zero cross-user financial leakage
+- **`lookback_days` cap:** 365 days max; return 400 if exceeded
+
 ## Build Log
 
 | Date | What was done |
@@ -753,3 +818,4 @@ Optional: `REDIS_URL`, `QUICKNODE_BASE_RPC`
 | 2026-09-19 | Added gstack (20 skills) and jakubkrehel/skills (11 UI skills) to .claude/skills/. |
 | 2026-09-19 | Full architecture document reviewed and captured in NOTES.md. Product thesis locked. |
 | 2026-09-19 | Product/startup layer captured: website split, app nav, design direction, 8 business areas, 3 build phases, founder priorities. |
+| 2026-09-19 | CEO plan review complete (SELECTIVE EXPANSION mode). 5 features accepted, 1 skipped. Schema updated: 4 new tables, corrections table fixed, /runway added to COMMANDS.md. |
