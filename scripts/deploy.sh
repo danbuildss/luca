@@ -8,7 +8,7 @@ set -euo pipefail
 
 APP_DIR="/opt/luca"
 BRANCH="${BRANCH:-main}"
-SERVICES="luca-worker luca-telegram"
+SERVICES="luca-worker luca-api"
 
 cd "$APP_DIR"
 
@@ -48,5 +48,5 @@ done
 
 echo ""
 echo "  Tail logs:"
-echo "    journalctl -u luca-worker   -f"
-echo "    journalctl -u luca-telegram -f"
+echo "    journalctl -u luca-worker -f"
+echo "    journalctl -u luca-api    -f"

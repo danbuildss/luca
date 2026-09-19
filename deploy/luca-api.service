@@ -1,0 +1,22 @@
+[Unit]
+Description=Luca Core API (Fastify :3000)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=luca
+Group=luca
+WorkingDirectory=/opt/luca
+EnvironmentFile=/opt/luca/.env
+ExecStart=/usr/bin/node dist/apps/api/index.js
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=luca-api
+KillMode=process
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
