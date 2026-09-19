@@ -463,7 +463,7 @@ Enable systemd linger for cron workers to survive gateway lifecycle.
 19. **More chains** — only after Base books are reliably correct
 20. **Execution** — much later, with permissions/previews/limits/approval/audit trail
 
-Current stage: **0 — no application code yet**. Next: Stage 1 (identity lock) → Stage 6 (ledger).
+Current stage: **Gate A complete**. Next: VPS provisioning + Hermes profile (Gate B prep).
 
 ---
 
@@ -819,3 +819,4 @@ Full plan: `~/.gstack/projects/danbuildss-luca/ceo-plans/2026-09-19-luca-build-i
 | 2026-09-19 | Full architecture document reviewed and captured in NOTES.md. Product thesis locked. |
 | 2026-09-19 | Product/startup layer captured: website split, app nav, design direction, 8 business areas, 3 build phases, founder priorities. |
 | 2026-09-19 | CEO plan review complete (SELECTIVE EXPANSION mode). 5 features accepted, 1 skipped. Schema updated: 4 new tables, corrections table fixed, /runway added to COMMANDS.md. |
+| 2026-09-19 | Gate A complete. TypeScript (NodeNext ESM, strict), vitest, ESLint, pino logger, zod config, pg pool, migration runner, health endpoint, canonical type enum. 6 tests passing. Build clean. |
