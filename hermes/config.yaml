@@ -6,14 +6,14 @@ agent:
   soul: ~/.hermes/SOUL.md
   project: ~/.hermes/luca
 
-# LLM — OpenAI (gpt-4o-mini for classification; gpt-4o for conversation)
-# To use ChatGPT subscription via GitHub Copilot OAuth: hermes model → select "GitHub Copilot"
-llm:
-  provider: openai
-  api_key: ${OPENAI_API_KEY}
-  model: gpt-4o-mini
-  context_window: 128000
-  temperature: 0.2
+# LLM — ChatGPT subscription via Bankr/Codex (matches working Mac config)
+# This uses the openai-codex provider that Hermes sets up when you connect ChatGPT.
+# api_key_env points to whichever env var holds your ChatGPT auth token.
+model:
+  default: gpt-5.5
+  provider: openai-codex
+  base_url: https://chatgpt.com/backend-api/codex
+  api_key_env: BANKR_API_KEY
 
 # Memory
 memory:

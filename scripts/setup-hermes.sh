@@ -7,7 +7,7 @@
 # Usage: bash scripts/setup-hermes.sh
 #
 # BEFORE running this script, have ready:
-#   - OPENAI_API_KEY
+#   - BANKR_API_KEY
 #   - TELEGRAM_BOT_TOKEN
 #   - Your Telegram user ID (get it from @userinfobot)
 #   - LUCA_USER_ID  (UUID from: SELECT id FROM users WHERE telegram_id = '<id>';)
@@ -114,8 +114,8 @@ else
 # Hermes profile secrets for the 'luca' profile
 # NEVER commit this file to git
 
-# LLM — OpenAI API key OR leave blank and run: hermes model (select GitHub Copilot)
-OPENAI_API_KEY=
+# ChatGPT auth — same BANKR_API_KEY you use on your Mac
+BANKR_API_KEY=
 
 # Telegram gateway
 TELEGRAM_BOT_TOKEN=
@@ -191,7 +191,7 @@ echo "  REQUIRED: Fill in the profile .env before starting:"
 echo "    nano $PROFILE_ENV"
 echo ""
 echo "  Values needed:"
-echo "    OPENAI_API_KEY      — your OpenAI key"
+echo "    BANKR_API_KEY       — same value from your Mac"
 echo "    TELEGRAM_BOT_TOKEN  — from @BotFather"
 echo "    TELEGRAM_ALLOWED_USER_ID — your Telegram user ID (from @userinfobot)"
 echo "    LUCA_USER_ID        — UUID from the users table"
