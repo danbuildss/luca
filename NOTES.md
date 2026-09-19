@@ -206,8 +206,15 @@ Luca is ready when it can:
 
 ---
 
+## Pull Request
+
+https://github.com/danbuildss/luca/pull/2 — tracks branch `claude/brave-pasteur-mayw5k`.
+Push commits to this branch to update the PR. Do not open a new PR.
+
+---
+
 ## Build Log
 
 | Date | What was done |
 |---|---|
-| 2026-09-19 | Created NOTES.md (project memory). No code built yet. Established session workflow. |
+| 2026-09-19 | Created NOTES.md (project memory). No code built yet. Established session workflow. PR #2 opened. |
