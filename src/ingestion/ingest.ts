@@ -8,7 +8,14 @@ import {
   BLOCKS_30_DAYS,
 } from './alchemy.js';
 import { normalizeTransfer } from './normalize.js';
+import {
+  fetchTokenTransfers,
+  fetchNativeTransactions,
+  normalizeTokenTransfer,
+  normalizeNativeTx,
+} from './blockscout.js';
 import { snapshotBalances } from './snapshot.js';
+import type { TxRow, EventRow } from './normalize.js';
 
 export type WatchJobRow = {
   id: string;
@@ -30,19 +37,51 @@ export async function getActiveWatchJobs(): Promise<WatchJobRow[]> {
   return res.rows;
 }
 
+// Fetch transfers via Alchemy (primary) with Blockscout fallback
+async function fetchTransfers(
+  walletAddress: string,
+  fromBlock: string,        // hex for Alchemy
+  fromBlockNumber: number,  // decimal for Blockscout
+  toBlock: string,
+  apiKey: string | undefined,
+): Promise<{ pairs: Array<{ tx: TxRow; event: EventRow }>; provider: string }> {
+  if (apiKey) {
+    try {
+      const transfers = await fetchAllTransfers(apiKey, walletAddress, fromBlock, toBlock);
+      const pairs = transfers.map((t) => normalizeTransfer(t, walletAddress, '', ''));
+      // wallet_id / user_id are injected by the caller — return placeholders here
+      return { pairs, provider: 'alchemy' };
+    } catch (err) {
+      logger.warn({ err, wallet: walletAddress }, 'Alchemy failed — falling back to Blockscout');
+    }
+  }
+
+  // Blockscout fallback
+  const [tokens, native] = await Promise.all([
+    fetchTokenTransfers(walletAddress, fromBlockNumber),
+    fetchNativeTransactions(walletAddress, fromBlockNumber),
+  ]);
+
+  const pairs = [
+    ...tokens.map((t) => normalizeTokenTransfer(t, walletAddress, '', '')),
+    ...native.map((t) => normalizeNativeTx(t, walletAddress, '', '')),
+  ];
+
+  return { pairs, provider: 'blockscout' };
+}
+
 async function insertOrGetTxId(
   walletId: string,
   hash: string,
   chain: string,
-  params: unknown[],
   sql: string,
+  params: unknown[],
 ): Promise<string> {
-  // Try insert; on conflict return existing id
   const client = await pool.connect();
   try {
     const res = await client.query<{ id: string }>(sql, params);
     if (res.rows.length > 0) return res.rows[0].id;
-    // Conflict — row already exists, fetch it
+    // Conflict — row exists already, fetch its id
     const existing = await client.query<{ id: string }>(
       'SELECT id FROM transactions WHERE chain = $1 AND hash = $2 AND wallet_id = $3',
       [chain, hash, walletId],
@@ -53,15 +92,27 @@ async function insertOrGetTxId(
   }
 }
 
-export async function syncWallet(job: WatchJobRow, apiKey: string): Promise<void> {
+export async function syncWallet(job: WatchJobRow, apiKey: string | undefined): Promise<void> {
   const { wallet_id, user_id, wallet_address, last_block } = job;
 
-  // Determine sync range
-  const currentBlock = await getCurrentBlock(apiKey);
+  // Get current tip — use Alchemy if available, else Blockscout isn't block-aware so we
+  // derive current block from the latest Blockscout tx (best-effort; Alchemy preferred).
+  let currentBlock: number;
+  if (apiKey) {
+    currentBlock = await getCurrentBlock(apiKey);
+  } else {
+    // Approximate: Blockscout's tx list gives us the newest block seen
+    // We'll use a large sentinel and let the timestamp filter do the work
+    // For production, ALCHEMY_API_KEY should always be set
+    currentBlock = 999_999_999;
+    logger.warn({ wallet_id }, 'No ALCHEMY_API_KEY — using Blockscout only; current block unknown');
+  }
+
   const isBackfill = last_block === null;
-  const fromBlock = isBackfill
-    ? backfillFromBlock(currentBlock)
-    : blockToHex(parseInt(last_block, 10) + 1);
+  const fromBlockNumber = isBackfill
+    ? Math.max(0, currentBlock - BLOCKS_30_DAYS)
+    : parseInt(last_block, 10) + 1;
+  const fromBlock = backfillFromBlock(currentBlock);
   const toBlock = blockToHex(currentBlock);
 
   if (!isBackfill && parseInt(last_block, 10) >= currentBlock) {
@@ -70,14 +121,13 @@ export async function syncWallet(job: WatchJobRow, apiKey: string): Promise<void
   }
 
   logger.info(
-    { wallet_id, wallet_address, fromBlock, toBlock, isBackfill, lookback: isBackfill ? BLOCKS_30_DAYS : undefined },
+    { wallet_id, wallet_address, fromBlockNumber, currentBlock, isBackfill },
     'Starting wallet sync',
   );
 
-  // Record sync run
   const runRes = await query<{ id: string }>(
     `INSERT INTO sync_runs (wallet_id, provider, chain, started_at, status)
-     VALUES ($1, 'alchemy', 'base', NOW(), 'running')
+     VALUES ($1, 'pending', 'base', NOW(), 'running')
      RETURNING id`,
     [wallet_id],
   );
@@ -85,15 +135,24 @@ export async function syncWallet(job: WatchJobRow, apiKey: string): Promise<void
 
   let ingested = 0;
   let failed = 0;
+  let provider = 'unknown';
 
   try {
-    const transfers = await fetchAllTransfers(apiKey, wallet_address, fromBlock, toBlock);
+    const { pairs, provider: usedProvider } = await fetchTransfers(
+      wallet_address,
+      fromBlock,
+      fromBlockNumber,
+      toBlock,
+      apiKey,
+    );
+    provider = usedProvider;
 
-    for (const t of transfers) {
+    for (const pair of pairs) {
+      // Inject wallet_id and user_id (normalizers used placeholders)
+      const tx: TxRow = { ...pair.tx, wallet_id, };
+      const event: EventRow = { ...pair.event, wallet_id, user_id };
+
       try {
-        const { tx, event } = normalizeTransfer(t, wallet_address, wallet_id, user_id);
-
-        // Insert transaction (idempotent — return existing id on conflict)
         const txSql = `
           INSERT INTO transactions
             (wallet_id, chain, hash, block_number, block_time, from_address, to_address,
@@ -101,6 +160,7 @@ export async function syncWallet(job: WatchJobRow, apiKey: string): Promise<void
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
           ON CONFLICT (chain, hash, wallet_id) DO UPDATE SET chain = EXCLUDED.chain
           RETURNING id`;
+
         const txParams = [
           tx.wallet_id, tx.chain, tx.hash, tx.block_number, tx.block_time,
           tx.from_address, tx.to_address, tx.asset, tx.amount, tx.usd_value,
@@ -108,9 +168,8 @@ export async function syncWallet(job: WatchJobRow, apiKey: string): Promise<void
           JSON.stringify(tx.raw_payload),
         ];
 
-        const txId = await insertOrGetTxId(wallet_id, tx.hash, tx.chain, txParams, txSql);
+        const txId = await insertOrGetTxId(wallet_id, tx.hash, tx.chain, txSql, txParams);
 
-        // Insert normalized event (idempotent)
         await query(
           `INSERT INTO normalized_events
              (transaction_id, wallet_id, user_id, chain, hash, log_index, block_time,
@@ -128,36 +187,40 @@ export async function syncWallet(job: WatchJobRow, apiKey: string): Promise<void
         ingested++;
       } catch (err) {
         failed++;
-        logger.error({ err, hash: t.hash, wallet_id }, 'Failed to store transfer');
+        logger.error({ err, hash: tx.hash, wallet_id }, 'Failed to store transfer');
       }
     }
 
-    // Snapshot balances after sync
+    // Snapshot balances
     await snapshotBalances(apiKey, wallet_id, user_id, wallet_address);
 
-    // Advance the cursor
+    // Advance cursor (only when Alchemy gave us a real block number)
+    const newLastBlock = apiKey ? currentBlock : null;
     await query(
-      `UPDATE watch_jobs SET last_synced_at = NOW(), last_block = $1, status = 'active', updated_at = NOW()
+      `UPDATE watch_jobs
+       SET last_synced_at = NOW(), last_block = $1, status = 'active', updated_at = NOW()
        WHERE id = $2`,
-      [currentBlock, job.id],
+      [newLastBlock, job.id],
     );
 
-    // Mark sync run complete
     await query(
-      `UPDATE sync_runs SET status = 'completed', completed_at = NOW(), events_ingested = $1
-       WHERE id = $2`,
-      [ingested, syncRunId],
+      `UPDATE sync_runs
+       SET status = 'completed', completed_at = NOW(), events_ingested = $1, provider = $2
+       WHERE id = $3`,
+      [ingested, provider, syncRunId],
     );
 
-    logger.info({ wallet_id, ingested, failed, currentBlock }, 'Wallet sync complete');
+    logger.info({ wallet_id, ingested, failed, provider, currentBlock }, 'Wallet sync complete');
   } catch (err) {
     await query(
       `UPDATE watch_jobs SET status = 'error', error_message = $1, updated_at = NOW() WHERE id = $2`,
       [String(err), job.id],
     );
     await query(
-      `UPDATE sync_runs SET status = 'failed', completed_at = NOW(), error_message = $1 WHERE id = $2`,
-      [String(err), syncRunId],
+      `UPDATE sync_runs
+       SET status = 'failed', completed_at = NOW(), error_message = $1, provider = $2
+       WHERE id = $3`,
+      [String(err), provider, syncRunId],
     );
     throw err;
   }
