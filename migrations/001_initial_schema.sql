@@ -100,9 +100,11 @@ CREATE TABLE IF NOT EXISTS normalized_events (
   price_source TEXT,                -- 'alchemy', 'coingecko', 'fixed:1.00'
   price_at TIMESTAMPTZ,             -- timestamp of the price used
   direction TEXT CHECK (direction IN ('in', 'out')),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(chain, hash, wallet_id, COALESCE(log_index, -1))
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_events_unique
+  ON normalized_events(chain, hash, wallet_id, COALESCE(log_index, -1));
 
 CREATE INDEX IF NOT EXISTS idx_events_user_id ON normalized_events(user_id);
 CREATE INDEX IF NOT EXISTS idx_events_block_time ON normalized_events(block_time DESC);
