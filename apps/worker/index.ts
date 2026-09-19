@@ -3,6 +3,8 @@ import { closeDb } from '../../src/db.js';
 import { logger } from '../../src/logger.js';
 import { getActiveWatchJobs, syncWallet } from '../../src/ingestion/ingest.js';
 import { classifyAllUsers } from '../../src/classification/engine.js';
+import { getDistinctUserIds } from '../../src/classification/store.js';
+import { detectUnknownCounterparties } from '../../src/alerts/counterparty.js';
 
 if (config.NODE_ENV === 'production') {
   requireProductionConfig();
@@ -33,6 +35,13 @@ async function runCycle(): Promise<void> {
 
   if (!shuttingDown) {
     await classifyAllUsers();
+  }
+
+  if (!shuttingDown) {
+    const userIds = await getDistinctUserIds();
+    for (const userId of userIds) {
+      await detectUnknownCounterparties(userId);
+    }
   }
 }
 
