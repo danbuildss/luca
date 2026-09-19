@@ -6,11 +6,12 @@ agent:
   soul: ~/.hermes/SOUL.md
   project: ~/.hermes/luca
 
-# LLM — Bankr Agent API
+# LLM — OpenAI (gpt-4o-mini for classification; gpt-4o for conversation)
+# To use ChatGPT subscription via GitHub Copilot OAuth: hermes model → select "GitHub Copilot"
 llm:
-  provider: bankr
-  api_base: https://api.bankr.bot/v1
-  model: bankr-agent
+  provider: openai
+  api_key: ${OPENAI_API_KEY}
+  model: gpt-4o-mini
   context_window: 128000
   temperature: 0.2
 
@@ -25,6 +26,17 @@ skills:
   path: ~/.hermes/skills
   active:
     - luca-finance
+
+# Plugins (Python tools Luca can call)
+plugins:
+  path: ~/.hermes/luca/plugins
+  active:
+    - luca_core
+
+# Environment passed to plugins
+env:
+  LUCA_API_BASE: http://127.0.0.1:3000
+  LUCA_USER_ID: ${LUCA_USER_ID}
 
 # Telegram
 telegram:

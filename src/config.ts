@@ -14,8 +14,7 @@ const schema = z.object({
   ALCHEMY_API_KEY: z.string().min(1, 'ALCHEMY_API_KEY is required').optional(),
   BASE_RPC_URL: z.string().url('BASE_RPC_URL must be a valid URL').optional(),
 
-  // LLM — at least one required in production
-  ANTHROPIC_API_KEY: z.string().optional(),
+  // LLM — OpenAI (gpt-4o-mini) used for transaction classification
   OPENAI_API_KEY: z.string().optional(),
 
   // Optional
@@ -51,9 +50,7 @@ export function requireProductionConfig() {
   if (!config.TELEGRAM_BOT_TOKEN) missing.push('TELEGRAM_BOT_TOKEN');
   if (!config.ALCHEMY_API_KEY) missing.push('ALCHEMY_API_KEY');
   if (!config.BASE_RPC_URL) missing.push('BASE_RPC_URL');
-  if (!config.ANTHROPIC_API_KEY && !config.OPENAI_API_KEY) {
-    missing.push('ANTHROPIC_API_KEY or OPENAI_API_KEY');
-  }
+  if (!config.OPENAI_API_KEY) missing.push('OPENAI_API_KEY');
   if (missing.length > 0) {
     console.error(`Luca cannot start in production — missing:\n${missing.map(k => `  ${k}`).join('\n')}`);
     process.exit(1);

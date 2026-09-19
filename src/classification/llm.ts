@@ -1,15 +1,15 @@
-import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 import { query } from '../db.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { ClassificationLabel, CLASSIFICATION_LABELS } from '../types/index.js';
 import type { ClassificationResult, UnclassifiedEvent } from './types.js';
 
-const LLM_MODEL = 'claude-haiku-4-5-20251001';
+const LLM_MODEL = 'gpt-4o-mini';
 const LLM_BATCH_SIZE = 20;
-// Haiku 4.5 pricing (per token)
-const INPUT_COST_PER_TOKEN = 0.8 / 1_000_000;
-const OUTPUT_COST_PER_TOKEN = 4.0 / 1_000_000;
+// gpt-4o-mini pricing (per token)
+const INPUT_COST_PER_TOKEN = 0.15 / 1_000_000;
+const OUTPUT_COST_PER_TOKEN = 0.60 / 1_000_000;
 
 const SYSTEM_PROMPT = `You are a financial transaction classifier for an on-chain business.
 Classify each transaction into exactly one of these labels:
@@ -70,7 +70,7 @@ export async function classifyWithLlm(
   events: UnclassifiedEvent[],
   userId: string,
 ): Promise<Map<string, ClassificationResult>> {
-  if (!config.ANTHROPIC_API_KEY || events.length === 0) return new Map();
+  if (!config.OPENAI_API_KEY || events.length === 0) return new Map();
 
   const dailySpend = await getDailySpendUsd();
   if (dailySpend >= config.LLM_DAILY_SPEND_CAP_USD) {
@@ -81,7 +81,7 @@ export async function classifyWithLlm(
     return new Map();
   }
 
-  const anthropic = new Anthropic({ apiKey: config.ANTHROPIC_API_KEY });
+  const openai = new OpenAI({ apiKey: config.OPENAI_API_KEY });
   const results = new Map<string, ClassificationResult>();
 
   for (let i = 0; i < events.length; i += LLM_BATCH_SIZE) {
@@ -97,33 +97,36 @@ export async function classifyWithLlm(
     }));
 
     try {
-      const response = await anthropic.messages.create({
+      const response = await openai.chat.completions.create({
         model: LLM_MODEL,
         max_tokens: 1024,
-        system: SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: JSON.stringify(payload, null, 2) }],
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'user', content: JSON.stringify(payload, null, 2) },
+        ],
       });
 
-      const { input_tokens: inputTokens, output_tokens: outputTokens } = response.usage;
+      const inputTokens = response.usage?.prompt_tokens ?? 0;
+      const outputTokens = response.usage?.completion_tokens ?? 0;
       const costUsd = inputTokens * INPUT_COST_PER_TOKEN + outputTokens * OUTPUT_COST_PER_TOKEN;
 
       await logSpend({ userId, model: LLM_MODEL, inputTokens, outputTokens, costUsd });
 
-      const textBlock = response.content.find((b) => b.type === 'text');
-      if (!textBlock || textBlock.type !== 'text') {
-        logger.warn('LLM returned no text block for classification batch');
+      const text = response.choices[0]?.message?.content ?? '';
+      if (!text) {
+        logger.warn('LLM returned empty content for classification batch');
         continue;
       }
 
       let parsed: LlmResponseItem[];
       try {
-        const raw = textBlock.text
+        const raw = text
           .replace(/^```(?:json)?\n?/, '')
           .replace(/\n?```$/, '')
           .trim();
         parsed = JSON.parse(raw) as LlmResponseItem[];
       } catch {
-        logger.warn({ text: textBlock.text }, 'LLM response is not valid JSON');
+        logger.warn({ text }, 'LLM response is not valid JSON');
         continue;
       }
 

@@ -1,6 +1,6 @@
 import Fastify from 'fastify';
 import { config, requireProductionConfig } from '../../src/config.js';
-import { checkDbReady, closeDb } from '../../src/db.js';
+import { checkDbReady, closeDb, query } from '../../src/db.js';
 import { logger } from '../../src/logger.js';
 import { CLASSIFICATION_LABELS } from '../../src/types/index.js';
 import type { ClassificationLabel } from '../../src/types/index.js';
@@ -139,6 +139,35 @@ app.get('/books/events', async (req, reply) => {
 
   const events = await getBooksEvents({ userId, label, periodDays, limit });
   return reply.send({ events });
+});
+
+// ---------------------------------------------------------------------------
+// Wallet balances: GET /balances
+// ---------------------------------------------------------------------------
+app.get('/balances', async (req, reply) => {
+  const userId = getUserId(req);
+  if (!userId) return reply.status(401).send({ error: 'x-user-id header required' });
+
+  const res = await query<{
+    wallet_address: string;
+    wallet_label: string | null;
+    asset: string;
+    balance: string;
+    snapshot_at: string;
+  }>(
+    `SELECT DISTINCT ON (bs.wallet_id, bs.asset)
+       w.address AS wallet_address,
+       w.label   AS wallet_label,
+       bs.asset,
+       bs.balance::text AS balance,
+       bs.snapshot_at::text
+     FROM balance_snapshots bs
+     JOIN wallets w ON w.id = bs.wallet_id
+     WHERE bs.user_id = $1
+     ORDER BY bs.wallet_id, bs.asset, bs.snapshot_at DESC`,
+    [userId],
+  );
+  return reply.send({ balances: res.rows });
 });
 
 // ---------------------------------------------------------------------------
