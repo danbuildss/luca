@@ -5,6 +5,8 @@ import { getActiveWatchJobs, syncWallet } from '../../src/ingestion/ingest.js';
 import { classifyAllUsers } from '../../src/classification/engine.js';
 import { getDistinctUserIds } from '../../src/classification/store.js';
 import { detectUnknownCounterparties } from '../../src/alerts/counterparty.js';
+import { runAlertDetectors } from '../../src/alerts/engine.js';
+import { deliverPendingAlerts } from '../../src/alerts/deliver.js';
 
 if (config.NODE_ENV === 'production') {
   requireProductionConfig();
@@ -41,6 +43,8 @@ async function runCycle(): Promise<void> {
     const userIds = await getDistinctUserIds();
     for (const userId of userIds) {
       await detectUnknownCounterparties(userId);
+      await runAlertDetectors(userId);
+      await deliverPendingAlerts(userId);
     }
   }
 }
