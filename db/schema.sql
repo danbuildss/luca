@@ -135,18 +135,23 @@ CREATE TABLE memory_entries (
 CREATE INDEX idx_memory_user_id ON memory_entries(user_id);
 CREATE INDEX idx_memory_type ON memory_entries(type);
 
--- Corrections
+-- Corrections (tx-level or counterparty-level)
 CREATE TABLE corrections (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  type TEXT NOT NULL CHECK (type IN ('tx', 'counterparty')),
   event_id UUID REFERENCES normalized_events(id),
+  counterparty_address TEXT,
   old_label TEXT,
   new_label TEXT NOT NULL,
   reason TEXT,
+  source_message TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX idx_corrections_user_id ON corrections(user_id);
+CREATE INDEX idx_corrections_type ON corrections(type);
+CREATE INDEX idx_corrections_counterparty ON corrections(counterparty_address);
 
 -- Briefs
 CREATE TABLE briefs (
@@ -200,5 +205,52 @@ CREATE TABLE sync_runs (
   events_ingested INTEGER DEFAULT 0,
   events_classified INTEGER DEFAULT 0,
   status TEXT DEFAULT 'running',
-  error_message TEXT
+  error_message TEXT,
+  provider TEXT DEFAULT 'alchemy',
+  chain TEXT DEFAULT 'base'
 );
+
+-- MCP API Keys
+CREATE TABLE mcp_keys (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  key_hash TEXT NOT NULL UNIQUE,
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  caller_name TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_mcp_keys_key_hash ON mcp_keys(key_hash);
+CREATE INDEX idx_mcp_keys_user_id ON mcp_keys(user_id);
+
+-- Pending Counterparty Alerts (state machine for unknown counterparty labeling)
+CREATE TABLE pending_counterparty_alerts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  counterparty_address TEXT NOT NULL,
+  watched_wallet_address TEXT NOT NULL,
+  telegram_message_id BIGINT,
+  sent_at TIMESTAMPTZ DEFAULT NOW(),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'labeled', 'skipped', 'timed_out')),
+  resolved_at TIMESTAMPTZ,
+  UNIQUE(user_id, counterparty_address)
+);
+
+CREATE INDEX idx_counterparty_alerts_user_id ON pending_counterparty_alerts(user_id);
+CREATE INDEX idx_counterparty_alerts_status ON pending_counterparty_alerts(status);
+CREATE INDEX idx_counterparty_alerts_sent_at ON pending_counterparty_alerts(sent_at);
+
+-- Balance Snapshots (for /runway and treasury queries)
+CREATE TABLE balance_snapshots (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  wallet_id UUID REFERENCES wallets(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  asset TEXT NOT NULL,
+  balance NUMERIC NOT NULL,
+  snapshot_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(wallet_id, asset, snapshot_at)
+);
+
+CREATE INDEX idx_balance_snapshots_wallet_id ON balance_snapshots(wallet_id);
+CREATE INDEX idx_balance_snapshots_user_id ON balance_snapshots(user_id);
+CREATE INDEX idx_balance_snapshots_snapshot_at ON balance_snapshots(snapshot_at DESC);

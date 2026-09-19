@@ -156,6 +156,20 @@ Accept inline changes: /settings materiality 100 sets the threshold to $100.
 
 ---
 
+## /runway
+Calculate weeks of runway based on current treasury and trailing burn rate.
+Treasury = sum of USDC + USDC.e + DAI + USDT balances across all watched wallets.
+Burn rate = 7-day and 30-day trailing averages.
+
+Example responses:
+"At current burn: 14 weeks. Treasury: $12,400 USDC. Burn: $890/wk (7d avg) | $720/wk (30d avg)."
+"⚠️ Treasury empty." (if treasury = 0)
+"No spend detected in lookback window — runway undefined." (if burn rate = 0)
+
+Note: /runway requires the books layer to be operational. If books are not yet built, say so.
+
+---
+
 ## Unknown commands
 If the principal sends a command not on this list, treat it as a natural language message and respond normally as Luca.
 Do not say "I don't understand that command."
