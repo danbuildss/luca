@@ -463,7 +463,7 @@ Enable systemd linger for cron workers to survive gateway lifecycle.
 19. **More chains** — only after Base books are reliably correct
 20. **Execution** — much later, with permissions/previews/limits/approval/audit trail
 
-Current stage: **Gate A complete**. Next: VPS provisioning + Hermes profile (Gate B prep).
+Current stage: **Gate B complete**. Next: Gate C — classification engine.
 
 ---
 
@@ -820,3 +820,4 @@ Full plan: `~/.gstack/projects/danbuildss-luca/ceo-plans/2026-09-19-luca-build-i
 | 2026-09-19 | Product/startup layer captured: website split, app nav, design direction, 8 business areas, 3 build phases, founder priorities. |
 | 2026-09-19 | CEO plan review complete (SELECTIVE EXPANSION mode). 5 features accepted, 1 skipped. Schema updated: 4 new tables, corrections table fixed, /runway added to COMMANDS.md. |
 | 2026-09-19 | Gate A complete. TypeScript (NodeNext ESM, strict), vitest, ESLint, pino logger, zod config, pg pool, migration runner, health endpoint, canonical type enum. 6 tests passing. Build clean. |
+| 2026-09-19 | Gate B complete. Alchemy Transfers API adapter (pRetry, pagination), normalizer (direction/log_index/tx_type), ingest orchestrator (30d backfill + incremental, idempotent ON CONFLICT, sync_runs audit, watch_jobs cursor), balance snapshots (ETH + USDC), 60s worker loop (SIGTERM-safe). 21/21 tests. |
