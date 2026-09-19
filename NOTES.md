@@ -507,6 +507,188 @@ Most important metric: **How often is Luca right about what the money means?**
 
 ---
 
+## Product Architecture (Full)
+
+```
+                    LUCA
+                      │
+        ┌─────────────┼─────────────┐
+        │             │             │
+      Web App      Telegram      MCP / API
+        │             │           (later)
+        └─────────────┼─────────────┘
+                      │
+                  Luca Core
+                      │
+                    Hermes
+                      │
+          Financial data + Bankr
+```
+
+Telegram and the web app are two interfaces to the same Luca. Not two products.
+
+---
+
+## Surfaces (by phase)
+
+**Human:**
+- Telegram — conversational, fastest
+- Luca Web App — financial workspace
+
+**Agent / Developer (later):**
+- Luca MCP — agent-to-agent financial queries
+- Luca API — structured reads
+
+MCP unlocks: "What is the treasury balance?", "How much did we spend through x402 this week?" — Luca becomes financial intelligence infrastructure, not just an app. Earn it by getting the books right first.
+
+---
+
+## Website Split
+
+**`luca...`** — marketing/discovery site. Understand what Luca is, security/privacy, docs, sign up.
+
+**`app.luca...`** — Luca application. Connect wallets, books, activity, alerts, reports, talk to Luca.
+
+### Landing page (minimal — not 15 sections)
+
+Key sections only:
+1. Hero: tagline + CTA + product UI preview in the hero
+2. Live financial snapshot (shows Luca working)
+3. Four pillars: WATCH / UNDERSTAND / REMEMBER / SPEAK
+4. Surface switcher: Telegram / Web / MCP soon
+5. Trust line: Private by default. Read-only by default. Open source.
+6. CTA
+
+Design reference: clarity and trust over dumping metrics. Current fintech direction is
+dashboards that answer the operator's immediate question, not walls of charts.
+
+### Web app navigation
+
+| Page | Purpose |
+|---|---|
+| **Home** | Financial state + Luca brief |
+| **Activity** | Every transaction + classification |
+| **Books** | Revenue, expenses, transfers, gas, x402 |
+| **Wallets** | Watched wallets + roles |
+| **Reports** | Daily/weekly/monthly financial reports |
+| **Alerts** | Important events Luca surfaced |
+| **Luca** | Full conversation interface |
+| **Settings** | Rules, thresholds, notifications, account |
+
+### Home screen concept
+
+NOT a crypto dashboard. Answers: "What is happening with my operation right now?"
+
+```
+Good morning.
+Your operation is net +$1,204 this week.
+
+Cash $12,840  |  Revenue +$3,291
+Expenses -$1,994  |  Gas -$93  |  Unknown $184
+
+──────────────────────────
+Luca noticed
+Treasury spending is 34% higher than your 30-day average.
+Investigate →
+──────────────────────────
+Recent Activity
++$620   Revenue   USDC
+-$124   Expense   USDC
+-$14    Gas       ETH
+──────────────────────────
+Ask Luca anything...
+[ What did we spend this week? ]
+```
+
+---
+
+## Design Direction
+
+**Mercury / Linear / Stripe restraint + AI employee. Not a trading app.**
+
+- Black / off-white palette
+- Very little accent color
+- Great typography
+- Monospace numbers
+- Lots of whitespace
+- Green ONLY when communicating healthy / confirmed / positive state
+- No charts for the sake of charts
+- No "AI Crypto Portfolio Dashboard 🚀" energy
+
+Goal: financial infrastructure someone trusts with business information.
+Trust judgments in fintech form from clarity and presentation — not visual gimmicks.
+
+Dribbble search terms for reference: `AI finance dashboard`, `fintech SaaS dashboard`,
+`financial operations dashboard`, `AI agent dashboard`, `treasury dashboard`,
+`fintech landing page dark`, `accounting dashboard`
+
+---
+
+## 8 Areas of the Business
+
+| Area | What Luca needs |
+|---|---|
+| **Product** | Agent, ledger, classification, monitoring |
+| **Brand** | Identity, visual system, language |
+| **Website** | Explain and convert |
+| **App** | Actual financial workspace |
+| **Trust** | Security, privacy, read-only positioning |
+| **Docs** | How Luca works + self-hosting later |
+| **Distribution** | X, demos, operator community |
+| **Operations** | VPS, logging, uptime, backups |
+
+---
+
+## Founder Priorities (before worrying about scale)
+
+1. **Use Luca on your own wallets every day.** Every misunderstanding = product feedback.
+2. **Create visual identity now.** Wordmark, icon, typography, colors, screenshots, X banner, GitHub assets.
+3. **Build the landing page before the full app.** Ship the page while the agent is still being built.
+4. **Design the app before building every screen.** Figma: Home, Activity, Books, Wallets, Luca Chat, Onboarding — then build.
+5. **Document the product publicly.** "How Luca classifies money", "Why inflow isn't revenue", "How Luca handles wallet permissions".
+6. **Start showing the build on X.** Screenshots of briefs, catching unknown transactions, dashboard taking shape. Don't wait for perfect.
+7. **Build trust aggressively.** Privacy page, security page, read-only statement, what is stored, architecture page.
+8. **Find 5 actual operators.** Not 1,000 waitlist users. Five people running wallets/businesses/agents with this problem.
+
+---
+
+## Three Build Phases
+
+### Phase 1 — Luca Alpha (current)
+```
+Brand identity → Landing page → Hermes + VPS → @AskLucaBot
+→ Wallet ingestion → Books/classification → Owner's daily usage
+```
+
+### Phase 2 — Luca Private Beta
+```
+Web app → Wallet onboarding → Home dashboard → Activity + Books
+→ Reports + Alerts → 5–10 external operators
+```
+
+### Phase 3 — Luca Platform
+```
+Postgres / multi-user → Luca Cloud → API → MCP
+→ Self-hosted/open-source distribution → More chains
+```
+
+**Much later:** Controlled actions. Only after Luca reliably understands the money.
+
+---
+
+## Immediate Next Action (before more backend code)
+
+One focused day on visual identity:
+1. Collect ~10 reference screenshots from Dribbble
+2. Narrow to one visual direction
+3. Design Luca landing page
+4. Design Luca app Home dashboard
+
+Once those two feel right, everything else inherits the same system.
+This is what makes Luca look like a financial software company, not "a Telegram bot Dan is working on."
+
+---
+
 ## Open Source / Business Model
 
 - **Luca Core** = open source Hermes profile distribution + financial engine
@@ -570,3 +752,4 @@ Optional: `REDIS_URL`, `QUICKNODE_BASE_RPC`
 | 2026-09-19 | Created NOTES.md (project memory). No code built yet. Established session workflow. PR #2 opened. |
 | 2026-09-19 | Added gstack (20 skills) and jakubkrehel/skills (11 UI skills) to .claude/skills/. |
 | 2026-09-19 | Full architecture document reviewed and captured in NOTES.md. Product thesis locked. |
+| 2026-09-19 | Product/startup layer captured: website split, app nav, design direction, 8 business areas, 3 build phases, founder priorities. |
