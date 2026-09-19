@@ -2,14 +2,14 @@ import { config, requireProductionConfig } from '../../src/config.js';
 import { closeDb } from '../../src/db.js';
 import { logger } from '../../src/logger.js';
 import { getActiveWatchJobs, syncWallet } from '../../src/ingestion/ingest.js';
+import { classifyAllUsers } from '../../src/classification/engine.js';
 
 if (config.NODE_ENV === 'production') {
   requireProductionConfig();
 }
 
 if (!config.ALCHEMY_API_KEY) {
-  logger.error('ALCHEMY_API_KEY is required for the worker — exiting');
-  process.exit(1);
+  logger.warn('ALCHEMY_API_KEY not set — falling back to Blockscout for all wallets');
 }
 
 const apiKey = config.ALCHEMY_API_KEY;
@@ -29,6 +29,10 @@ async function runCycle(): Promise<void> {
     } catch (err) {
       logger.error({ err, wallet_id: job.wallet_id }, 'Sync failed — wallet marked error');
     }
+  }
+
+  if (!shuttingDown) {
+    await classifyAllUsers();
   }
 }
 
