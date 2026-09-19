@@ -7,6 +7,7 @@ import { getDistinctUserIds } from '../../src/classification/store.js';
 import { detectUnknownCounterparties } from '../../src/alerts/counterparty.js';
 import { runAlertDetectors } from '../../src/alerts/engine.js';
 import { deliverPendingAlerts } from '../../src/alerts/deliver.js';
+import { startBriefScheduler } from '../../src/briefs/scheduler.js';
 
 if (config.NODE_ENV === 'production') {
   requireProductionConfig();
@@ -71,4 +72,5 @@ process.on('SIGTERM', async () => {
 });
 
 logger.info({ pollIntervalMs: POLL_INTERVAL_MS }, 'Luca worker starting');
+startBriefScheduler();
 void poll();
