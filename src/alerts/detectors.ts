@@ -1,6 +1,5 @@
 import { query } from '../db.js';
 import { formatAddress } from '../telegram/format.js';
-import { logger } from '../logger.js';
 
 type AlertType =
   | 'large_inflow'

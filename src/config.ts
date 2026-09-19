@@ -21,6 +21,9 @@ const schema = z.object({
   // Optional
   BASESCAN_API_KEY: z.string().optional(),
 
+  // Bankr Wallet API — read-only portfolio enrichment
+  BANKR_API_KEY: z.string().optional(),
+
   // App
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(3000),
