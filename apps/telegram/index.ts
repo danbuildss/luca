@@ -118,7 +118,6 @@ bot.command('label', async (ctx) => {
     return;
   }
   const { applyCorrection, EventNotFoundError } = await import('../../src/corrections/handler.js');
-  const { ClassificationLabel } = await import('../../src/types/index.js');
   try {
     await applyCorrection({
       userId: user.userId,

@@ -66,7 +66,7 @@ async function handleLabelCallback(ctx: Context, user: AuthedUser, data: string)
   }
 }
 
-async function handleSkipCallback(ctx: Context, data: string): Promise<void> {
+async function handleSkipCallback(ctx: Context, _data: string): Promise<void> {
   // skip:<eventId>
   await ctx.answerCbQuery('Skipped');
   try {

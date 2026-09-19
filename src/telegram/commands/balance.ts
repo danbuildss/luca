@@ -2,6 +2,7 @@ import type { Context } from 'telegraf';
 import { query } from '../../db.js';
 import { formatAddress } from '../format.js';
 import type { AuthedUser } from '../auth.js';
+import { getBankrPortfolio } from '../../bankr/portfolio.js';
 
 type BalanceRow = {
   wallet_address: string;
@@ -29,40 +30,59 @@ async function getLatestBalances(userId: string): Promise<BalanceRow[]> {
 }
 
 export async function handleBalance(ctx: Context, user: AuthedUser): Promise<void> {
-  const rows = await getLatestBalances(user.userId);
+  const [rows, bankr] = await Promise.all([
+    getLatestBalances(user.userId),
+    getBankrPortfolio(user.userId),
+  ]);
 
-  if (rows.length === 0) {
+  if (rows.length === 0 && !bankr.available) {
     await ctx.reply('No balance snapshots yet — sync is still running.');
     return;
   }
 
-  // Group by wallet address
-  const wallets = new Map<string, BalanceRow[]>();
-  for (const row of rows) {
-    const existing = wallets.get(row.wallet_address) ?? [];
-    existing.push(row);
-    wallets.set(row.wallet_address, existing);
-  }
-
   const lines: string[] = ['💼 *Balances*', ''];
 
-  for (const [address, assets] of wallets) {
-    const label = assets[0].wallet_label;
-    const header = label
-      ? `\`${formatAddress(address)}\` (${label})`
-      : `\`${formatAddress(address)}\``;
-    lines.push(header);
-
-    for (const asset of assets) {
-      const bal = parseFloat(asset.balance);
-      const formatted = bal.toLocaleString('en-US', {
-        minimumFractionDigits: asset.asset === 'ETH' ? 4 : 2,
-        maximumFractionDigits: asset.asset === 'ETH' ? 4 : 2,
-      });
-      lines.push(`  ${asset.asset.padEnd(6)} ${formatted}`);
+  // --- Our indexed wallets ---
+  if (rows.length > 0) {
+    const wallets = new Map<string, BalanceRow[]>();
+    for (const row of rows) {
+      const existing = wallets.get(row.wallet_address) ?? [];
+      existing.push(row);
+      wallets.set(row.wallet_address, existing);
     }
 
+    for (const [address, assets] of wallets) {
+      const label = assets[0].wallet_label;
+      const header = label
+        ? `\`${formatAddress(address)}\` (${label})`
+        : `\`${formatAddress(address)}\``;
+      lines.push(header);
+
+      for (const asset of assets) {
+        const bal = parseFloat(asset.balance);
+        const formatted = bal.toLocaleString('en-US', {
+          minimumFractionDigits: asset.asset === 'ETH' ? 4 : 2,
+          maximumFractionDigits: asset.asset === 'ETH' ? 4 : 2,
+        });
+        lines.push(`  ${asset.asset.padEnd(6)} ${formatted}`);
+      }
+      lines.push('');
+    }
+  }
+
+  // --- Bankr DeFi positions ---
+  if (bankr.available && bankr.defiPositions.length > 0) {
+    lines.push('🏦 *DeFi positions*', '');
+    for (const pos of bankr.defiPositions) {
+      const usd = pos.usd_value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      lines.push(`  ${pos.protocol} (${pos.position_type})  $${usd}`);
+      for (const asset of pos.assets) {
+        lines.push(`    ${asset.symbol} ${parseFloat(asset.balance).toFixed(4)}`);
+      }
+    }
     lines.push('');
+    const total = bankr.totalUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    lines.push(`Portfolio total  $${total}`);
   }
 
   await ctx.reply(lines.join('\n'), { parse_mode: 'Markdown' });

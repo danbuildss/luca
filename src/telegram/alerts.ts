@@ -2,7 +2,7 @@ import type { Telegraf, Context } from 'telegraf';
 import { Markup } from 'telegraf';
 import { query } from '../db.js';
 import { logger } from '../logger.js';
-import { formatAddress, formatAmount, sanitizeName } from './format.js';
+import { formatAddress, formatAmount } from './format.js';
 
 type UnsentAlert = {
   id: string;

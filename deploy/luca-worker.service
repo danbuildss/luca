@@ -1,0 +1,24 @@
+[Unit]
+Description=Luca Worker (sync + classify + alerts + briefs)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=luca
+Group=luca
+WorkingDirectory=/opt/luca
+EnvironmentFile=/opt/luca/.env
+ExecStart=/usr/bin/node dist/apps/worker/index.js
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=luca-worker
+
+# Graceful shutdown — worker handles SIGTERM
+KillMode=process
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

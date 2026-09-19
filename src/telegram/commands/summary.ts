@@ -1,5 +1,5 @@
 import type { Context } from 'telegraf';
-import { getPnlSummary, getBooksSummary } from '../../books/query.js';
+import { getPnlSummary } from '../../books/query.js';
 import { formatPeriod } from '../format.js';
 import type { AuthedUser } from '../auth.js';
 
