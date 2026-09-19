@@ -50,7 +50,7 @@ export function requireProductionConfig() {
   if (!config.TELEGRAM_BOT_TOKEN) missing.push('TELEGRAM_BOT_TOKEN');
   if (!config.ALCHEMY_API_KEY) missing.push('ALCHEMY_API_KEY');
   if (!config.BASE_RPC_URL) missing.push('BASE_RPC_URL');
-  if (!config.OPENAI_API_KEY) missing.push('OPENAI_API_KEY');
+  // OPENAI_API_KEY is optional — classification degrades gracefully without it
   if (missing.length > 0) {
     console.error(`Luca cannot start in production — missing:\n${missing.map(k => `  ${k}`).join('\n')}`);
     process.exit(1);
