@@ -45,8 +45,8 @@ env:
 telegram:
   enabled: true
   token: ${TELEGRAM_BOT_TOKEN}
-  allowed_users:
-    - ${TELEGRAM_ALLOWED_USER_ID}
+  # allowed_users removed — beta access is gated by the beta_invites table in the DB.
+  # Anyone can message the bot; uninvited users get a "not in beta" response.
 
 # Monitoring
 heartbeat:
