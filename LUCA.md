@@ -588,3 +588,79 @@ Eventually:
 ```
 
 Then: Open-source Luca Core + Managed Luca Cloud.
+
+---
+
+## 53. Build Log — What Has Been Shipped
+
+### Infrastructure (VPS — 167.233.18.210, Ubuntu 24.04)
+
+- PostgreSQL 16 running, database `luca`, app user `luca` with full schema grants
+- Node 24, systemd services: `luca-api` (Fastify :3000, localhost-only), `luca-worker` (sync + classify + alerts + briefs)
+- Hermes installed for `luca` user, profile at `/home/luca/.hermes/profiles/luca/`, systemd linger enabled (survives reboot)
+- Hermes gateway auto-starts on boot via `hermes-gateway-luca.service` (user systemd)
+- Hermes model: OpenAI Codex (ChatGPT Plus subscription, device auth)
+- Telegram gateway: @AskLucaBot, allowed user 7021605011
+
+### Luca Core API (`apps/api/index.ts`)
+
+Endpoints live on `http://127.0.0.1:3000`. Auth: `x-user-id` header (localhost-only, V1 trust model).
+
+| Method | Route | Purpose |
+|--------|-------|---------|
+| GET | `/health` | Liveness + DB check |
+| GET | `/wallets` | List registered wallets with last sync time |
+| POST | `/wallets` | Register wallet + create watch_job |
+| GET | `/balances` | Latest balance snapshot per wallet/asset |
+| GET | `/activity` | Paginated event feed with classification labels |
+| GET | `/events` | Events filtered by label, for review |
+| GET | `/unknowns` | Alias for `/events?label=unknown` |
+| POST | `/corrections` | Submit classification correction |
+| GET | `/books/summary` | P&L summary for a period |
+| GET | `/books/events` | Line-item events by label |
+
+### Luca Worker (`apps/worker/index.ts`)
+
+- Polls every 60s, syncs all active wallets via Alchemy (Blockscout fallback)
+- Snapshots ETH + USDC balances after each sync
+- Classification engine: deterministic → counterparty rules → LLM (gpt-4o-mini, optional)
+- Alert detectors: large inflow/outflow, new counterparty, spend spike, treasury floor
+- Brief scheduler: daily/weekly (per user `brief_time` in DB)
+
+### Hermes Plugin (`hermes/luca/plugins/luca_core.py`)
+
+Tools available to Luca in Telegram:
+
+| Tool | Description |
+|------|-------------|
+| `get_pnl_summary` | P&L breakdown for a period |
+| `get_recent_events` | Transactions filtered by label |
+| `get_wallet_balances` | Latest balance snapshots |
+| `list_wallets` | Registered wallets |
+| `register_wallet` | Add a new wallet to tracking |
+| `get_activity` | Paginated activity feed with labels |
+| `apply_correction` | Correct a transaction classification |
+| `check_health` | API + DB liveness |
+
+### Wallets Tracked (project wallets, owned by Dan)
+
+| Label | Address | Chain |
+|-------|---------|-------|
+| treasury | `0xf1e958db7d1e4c074377946018ad645db4fb158e` | Base |
+| deployer | `0x67976cebb5266b50a08c0dcb676e03baf305e3a2` | Base |
+
+First sync: treasury 75 txns / $20,308 USDC, deployer 194 txns / 0.016 ETH. Both classified on first pass.
+
+### Key Fixes Shipped
+
+- `src/config.ts`: `OPENAI_API_KEY` removed from `requireProductionConfig()` — classification degrades gracefully
+- `src/ingestion/ingest.ts:115`: incremental sync used 30-day backfill block range instead of `last_block+1` — fixed to `blockToHex(fromBlockNumber)`
+- `migrations/001_initial_schema.sql`: added `GRANT ALL ON ALL TABLES/SEQUENCES` to avoid permission errors on fresh deploys
+
+### Remaining Before Private Beta
+
+- [ ] Label the 10 unknown counterparties flagged by the alert engine
+- [ ] Landing page (Vercel, Phase 8)
+- [ ] Invite 2–5 beta operators (Phase 9)
+- [ ] Remove unused `@anthropic-ai/sdk` from package.json
+- [ ] Delete `db/schema.sql` (diverged from migrations)
