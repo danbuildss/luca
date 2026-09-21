@@ -302,3 +302,12 @@ CREATE TABLE IF NOT EXISTS llm_spend_log (
 );
 
 CREATE INDEX IF NOT EXISTS idx_llm_spend_created_at ON llm_spend_log(created_at DESC);
+
+-- Grant all table and sequence permissions to the application user.
+-- The app connects as 'luca'; this must run after all tables are created.
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'luca') THEN
+    EXECUTE 'GRANT ALL ON ALL TABLES IN SCHEMA public TO luca';
+    EXECUTE 'GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO luca';
+  END IF;
+END $$;
