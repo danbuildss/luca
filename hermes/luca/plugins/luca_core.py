@@ -2,17 +2,37 @@
 Luca Core plugin — bridges Hermes to the Luca Core API (Fastify, localhost:3000).
 
 All endpoints are localhost-only. Auth is x-user-id header.
-User ID is read from LUCA_USER_ID env var (set at Hermes startup).
+
+User resolution order:
+  1. LUCA_TELEGRAM_USER_ID — numeric Telegram ID; resolved to DB UUID via /users/resolve.
+     This is the multi-user path: set this to the current conversation's Telegram sender ID.
+  2. LUCA_USER_ID — static DB UUID fallback for backwards compatibility / dev.
 """
 
 import os
 import json
+import urllib.parse
 import urllib.request
 import urllib.error
 from typing import Any
 
 _API_BASE = os.environ.get("LUCA_API_BASE", "http://127.0.0.1:3000")
-_USER_ID = os.environ.get("LUCA_USER_ID", "")
+
+
+def _resolve_user_id() -> str:
+    telegram_id = os.environ.get("LUCA_TELEGRAM_USER_ID", "").strip()
+    if telegram_id:
+        try:
+            url = f"{_API_BASE}/users/resolve?telegram_id={telegram_id}"
+            with urllib.request.urlopen(urllib.request.Request(url), timeout=5) as resp:
+                data = json.loads(resp.read())
+                return data["user_id"]
+        except Exception:
+            pass  # fall through to UUID fallback
+    return os.environ.get("LUCA_USER_ID", "")
+
+
+_USER_ID = _resolve_user_id()
 
 
 def _get(path: str, params: dict[str, str] | None = None) -> Any:
@@ -35,9 +55,6 @@ def _post(path: str, body: dict) -> Any:
     )
     with urllib.request.urlopen(req, timeout=15) as resp:
         return json.loads(resp.read())
-
-
-import urllib.parse  # noqa: E402 — kept after helpers to avoid circular at module load
 
 
 def get_pnl_summary(period_days: int = 30) -> dict:

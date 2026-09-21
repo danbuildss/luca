@@ -36,6 +36,9 @@ plugins:
 # Environment passed to plugins
 env:
   LUCA_API_BASE: http://127.0.0.1:3000
+  # LUCA_TELEGRAM_USER_ID: set to the numeric Telegram sender ID for multi-user resolution.
+  # The plugin calls /users/resolve to map this to a DB UUID. Falls back to LUCA_USER_ID.
+  LUCA_TELEGRAM_USER_ID: ${TELEGRAM_ALLOWED_USER_ID}
   LUCA_USER_ID: ${LUCA_USER_ID}
 
 # Telegram

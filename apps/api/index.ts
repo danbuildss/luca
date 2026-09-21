@@ -307,6 +307,38 @@ app.get('/unknowns', async (req, reply) => {
 });
 
 // ---------------------------------------------------------------------------
+// Users: GET /users/resolve?telegram_id=<bigint>
+// Looks up user by Telegram ID; auto-creates on first call (upsert).
+// Returns { user_id, telegram_id, created }
+// This is the multi-user entry point — plugins call this to map a Telegram
+// sender to a DB user_id without needing a static UUID in env.
+// ---------------------------------------------------------------------------
+const TELEGRAM_ID_RE = /^\d{1,20}$/;
+
+app.get('/users/resolve', async (req, reply) => {
+  const { telegram_id: rawId } = req.query as { telegram_id?: string };
+  if (!rawId || !TELEGRAM_ID_RE.test(rawId)) {
+    return reply.status(400).send({ error: 'telegram_id query param required (numeric)' });
+  }
+  const telegramId = BigInt(rawId);
+
+  const existing = await query<{ id: string }>(
+    'SELECT id FROM users WHERE telegram_id = $1',
+    [telegramId],
+  );
+  if (existing.rows.length > 0) {
+    return reply.send({ user_id: existing.rows[0].id, telegram_id: rawId, created: false });
+  }
+
+  // Auto-create user on first contact
+  const created = await query<{ id: string }>(
+    `INSERT INTO users (telegram_id) VALUES ($1) RETURNING id`,
+    [telegramId],
+  );
+  return reply.status(201).send({ user_id: created.rows[0].id, telegram_id: rawId, created: true });
+});
+
+// ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
 const start = async () => {
