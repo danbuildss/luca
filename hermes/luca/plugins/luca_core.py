@@ -107,6 +107,51 @@ def apply_correction(event_id: str, label: str, reason: str = "", counterparty_n
     return _post("/corrections", body)
 
 
+def list_wallets() -> dict:
+    """
+    List all wallets registered for the principal.
+
+    Returns:
+        dict with key 'wallets' — list of {id, address, chain, label,
+        active, created_at, last_synced_at}.
+    """
+    return _get("/wallets")
+
+
+def register_wallet(address: str, chain: str = "base", label: str = "") -> dict:
+    """
+    Register a new wallet for tracking.
+
+    Args:
+        address: Wallet address (0x... for Base).
+        chain: Chain identifier — 'base' or 'solana'. Default 'base'.
+        label: Human-readable name (e.g. 'treasury', 'ops'). Optional.
+
+    Returns:
+        dict with keys: wallet_id, address, chain, label.
+    """
+    body: dict = {"address": address, "chain": chain}
+    if label:
+        body["label"] = label
+    return _post("/wallets", body)
+
+
+def get_activity(limit: int = 50, offset: int = 0) -> dict:
+    """
+    Return recent on-chain activity with classification labels.
+
+    Args:
+        limit: Max events to return (1–200). Default 50.
+        offset: Pagination offset. Default 0.
+
+    Returns:
+        dict with key 'events' — list of {id, hash, block_time, direction,
+        asset, amount, usd_value, from_address, to_address, label,
+        confidence, wallet_address, wallet_label}.
+    """
+    return _get("/activity", {"limit": str(min(int(limit), 200)), "offset": str(int(offset))})
+
+
 def check_health() -> dict:
     """
     Check whether the Luca Core API and database are reachable.

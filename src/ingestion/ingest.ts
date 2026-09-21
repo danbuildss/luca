@@ -3,7 +3,6 @@ import { logger } from '../logger.js';
 import {
   fetchAllTransfers,
   getCurrentBlock,
-  backfillFromBlock,
   blockToHex,
   BLOCKS_30_DAYS,
 } from './alchemy.js';
@@ -112,7 +111,7 @@ export async function syncWallet(job: WatchJobRow, apiKey: string | undefined): 
   const fromBlockNumber = isBackfill
     ? Math.max(0, currentBlock - BLOCKS_30_DAYS)
     : parseInt(last_block, 10) + 1;
-  const fromBlock = backfillFromBlock(currentBlock);
+  const fromBlock = blockToHex(fromBlockNumber);
   const toBlock = blockToHex(currentBlock);
 
   if (!isBackfill && parseInt(last_block, 10) >= currentBlock) {
