@@ -171,6 +171,142 @@ app.get('/balances', async (req, reply) => {
 });
 
 // ---------------------------------------------------------------------------
+// Wallets: GET /wallets
+// ---------------------------------------------------------------------------
+app.get('/wallets', async (req, reply) => {
+  const userId = getUserId(req);
+  if (!userId) return reply.status(401).send({ error: 'x-user-id header required' });
+
+  const res = await query<{
+    id: string;
+    address: string;
+    chain: string;
+    label: string | null;
+    active: boolean;
+    created_at: string;
+    last_synced_at: string | null;
+  }>(
+    `SELECT w.id, w.address, w.chain, w.label, w.active, w.created_at::text,
+            wj.last_synced_at::text
+     FROM wallets w
+     LEFT JOIN watch_jobs wj ON wj.wallet_id = w.id
+     WHERE w.user_id = $1
+     ORDER BY w.created_at ASC`,
+    [userId],
+  );
+  return reply.send({ wallets: res.rows });
+});
+
+// ---------------------------------------------------------------------------
+// Register wallet: POST /wallets
+// Body: { address, chain?, label? }
+// ---------------------------------------------------------------------------
+const BASE_ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
+
+app.post('/wallets', async (req, reply) => {
+  const userId = getUserId(req);
+  if (!userId) return reply.status(401).send({ error: 'x-user-id header required' });
+
+  const body = req.body as { address?: string; chain?: string; label?: string };
+
+  if (!body.address || typeof body.address !== 'string') {
+    return reply.status(400).send({ error: 'address required' });
+  }
+
+  const chain = body.chain ?? 'base';
+  if (!['base', 'solana'].includes(chain)) {
+    return reply.status(400).send({ error: 'chain must be base or solana' });
+  }
+
+  // Basic address validation for Base (EVM) addresses
+  if (chain === 'base' && !BASE_ADDR_RE.test(body.address)) {
+    return reply.status(400).send({ error: 'Invalid Base address — must be 0x + 40 hex chars' });
+  }
+
+  const address = body.address.toLowerCase();
+
+  const walletRes = await query<{ id: string }>(
+    `INSERT INTO wallets (user_id, address, chain, label)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (user_id, address, chain) DO UPDATE SET label = COALESCE(EXCLUDED.label, wallets.label)
+     RETURNING id`,
+    [userId, address, chain, body.label ?? null],
+  );
+  const walletId = walletRes.rows[0].id;
+
+  await query(
+    `INSERT INTO watch_jobs (user_id, wallet_id, status)
+     VALUES ($1, $2, 'active')
+     ON CONFLICT (wallet_id) DO NOTHING`,
+    [userId, walletId],
+  );
+
+  return reply.status(201).send({ wallet_id: walletId, address, chain, label: body.label ?? null });
+});
+
+// ---------------------------------------------------------------------------
+// Activity: GET /activity?limit=50&offset=0
+// Returns recent events with their active classification label
+// ---------------------------------------------------------------------------
+app.get('/activity', async (req, reply) => {
+  const userId = getUserId(req);
+  if (!userId) return reply.status(401).send({ error: 'x-user-id header required' });
+
+  const { limit: limitStr, offset: offsetStr } = req.query as { limit?: string; offset?: string };
+  const limit = Math.min(parseInt(limitStr ?? '50', 10) || 50, 200);
+  const offset = Math.max(parseInt(offsetStr ?? '0', 10) || 0, 0);
+
+  const res = await query<{
+    id: string;
+    hash: string;
+    block_time: string;
+    direction: string;
+    asset: string | null;
+    amount: string | null;
+    usd_value: string | null;
+    from_address: string;
+    to_address: string | null;
+    label: string | null;
+    confidence: string | null;
+    wallet_address: string;
+    wallet_label: string | null;
+  }>(
+    `SELECT ne.id, ne.hash, ne.block_time::text, ne.direction,
+            ne.asset, ne.amount::text, ne.usd_value::text,
+            ne.from_address, ne.to_address,
+            c.label, c.confidence::text,
+            w.address AS wallet_address, w.label AS wallet_label
+     FROM normalized_events ne
+     JOIN wallets w ON w.id = ne.wallet_id
+     LEFT JOIN LATERAL (
+       SELECT label, confidence FROM classifications
+       WHERE event_id = ne.id AND superseded_at IS NULL
+       ORDER BY created_at DESC LIMIT 1
+     ) c ON TRUE
+     WHERE ne.user_id = $1
+     ORDER BY ne.block_time DESC
+     LIMIT $2 OFFSET $3`,
+    [userId, limit, offset],
+  );
+  return reply.send({ events: res.rows, limit, offset });
+});
+
+// ---------------------------------------------------------------------------
+// Unknowns: GET /unknowns?limit=50
+// Convenience alias for GET /events?label=unknown
+// ---------------------------------------------------------------------------
+app.get('/unknowns', async (req, reply) => {
+  const userId = getUserId(req);
+  if (!userId) return reply.status(401).send({ error: 'x-user-id header required' });
+
+  const { limit: limitStr } = req.query as { limit?: string };
+  const limit = Math.min(parseInt(limitStr ?? '50', 10) || 50, 200);
+
+  const events = await getEventsForReview({ userId, label: 'unknown', limit });
+  return reply.send({ events });
+});
+
+// ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
 const start = async () => {
