@@ -30,6 +30,9 @@ const schema = z.object({
 
   // LLM circuit breaker (dollars per day — halt LLM calls if exceeded)
   LLM_DAILY_SPEND_CAP_USD: z.coerce.number().positive().default(1.0),
+
+  // Admin key for beta invite management (POST /admin/invite)
+  LUCA_ADMIN_KEY: z.string().min(1).optional(),
 });
 
 const result = schema.safeParse(process.env);

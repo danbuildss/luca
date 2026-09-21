@@ -19,7 +19,11 @@ from typing import Any
 _API_BASE = os.environ.get("LUCA_API_BASE", "http://127.0.0.1:3000")
 
 
+_NOT_INVITED = False  # set True when /users/resolve returns 403
+
+
 def _resolve_user_id() -> str:
+    global _NOT_INVITED
     telegram_id = os.environ.get("LUCA_TELEGRAM_USER_ID", "").strip()
     if telegram_id:
         try:
@@ -27,12 +31,29 @@ def _resolve_user_id() -> str:
             with urllib.request.urlopen(urllib.request.Request(url), timeout=5) as resp:
                 data = json.loads(resp.read())
                 return data["user_id"]
+        except urllib.error.HTTPError as e:
+            if e.code == 403:
+                _NOT_INVITED = True
+                return ""
         except Exception:
             pass  # fall through to UUID fallback
     return os.environ.get("LUCA_USER_ID", "")
 
 
 _USER_ID = _resolve_user_id()
+
+_BETA_MESSAGE = (
+    "Luca is currently in private beta. "
+    "You're not on the invite list yet. "
+    "To request access, message @danbuildss on Telegram."
+)
+
+
+def _check_access() -> dict | None:
+    """Returns an error dict if the user is not invited, else None."""
+    if _NOT_INVITED:
+        return {"error": "not_invited", "message": _BETA_MESSAGE}
+    return None
 
 
 def _get(path: str, params: dict[str, str] | None = None) -> Any:
@@ -68,6 +89,7 @@ def get_pnl_summary(period_days: int = 30) -> dict:
         dict with keys: period_days, pnl (revenue_usdc, expenses_usdc, gas_usdc,
         net_usdc, unknown_count), breakdown (label-level rows).
     """
+    if err := _check_access(): return err
     return _get("/books/summary", {"period": str(period_days)})
 
 
@@ -84,6 +106,7 @@ def get_recent_events(label: str | None = None, limit: int = 20) -> dict:
     Returns:
         dict with key 'events' — list of transaction records.
     """
+    if err := _check_access(): return err
     params: dict[str, str] = {"limit": str(min(int(limit), 200))}
     if label:
         params["label"] = label
@@ -98,6 +121,7 @@ def get_wallet_balances() -> dict:
         dict with key 'balances' — list of {wallet_address, wallet_label,
         asset, balance, snapshot_at}.
     """
+    if err := _check_access(): return err
     return _get("/balances")
 
 
@@ -116,6 +140,7 @@ def apply_correction(event_id: str, label: str, reason: str = "", counterparty_n
     Returns:
         dict with key 'ok': True on success.
     """
+    if err := _check_access(): return err
     body: dict = {"event_id": event_id, "label": label}
     if reason:
         body["reason"] = reason
@@ -132,6 +157,7 @@ def list_wallets() -> dict:
         dict with key 'wallets' — list of {id, address, chain, label,
         active, created_at, last_synced_at}.
     """
+    if err := _check_access(): return err
     return _get("/wallets")
 
 
@@ -147,6 +173,7 @@ def register_wallet(address: str, chain: str = "base", label: str = "") -> dict:
     Returns:
         dict with keys: wallet_id, address, chain, label.
     """
+    if err := _check_access(): return err
     body: dict = {"address": address, "chain": chain}
     if label:
         body["label"] = label
@@ -166,6 +193,7 @@ def get_activity(limit: int = 50, offset: int = 0) -> dict:
         asset, amount, usd_value, from_address, to_address, label,
         confidence, wallet_address, wallet_label}.
     """
+    if err := _check_access(): return err
     return _get("/activity", {"limit": str(min(int(limit), 200)), "offset": str(int(offset))})
 
 

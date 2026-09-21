@@ -310,8 +310,7 @@ app.get('/unknowns', async (req, reply) => {
 // Users: GET /users/resolve?telegram_id=<bigint>
 // Looks up user by Telegram ID; auto-creates on first call (upsert).
 // Returns { user_id, telegram_id, created }
-// This is the multi-user entry point — plugins call this to map a Telegram
-// sender to a DB user_id without needing a static UUID in env.
+// Gated by beta_invites — 403 if telegram_id has no active invite.
 // ---------------------------------------------------------------------------
 const TELEGRAM_ID_RE = /^\d{1,20}$/;
 
@@ -321,6 +320,18 @@ app.get('/users/resolve', async (req, reply) => {
     return reply.status(400).send({ error: 'telegram_id query param required (numeric)' });
   }
   const telegramId = BigInt(rawId);
+
+  // Beta gate: must have an active invite
+  const invite = await query<{ status: string }>(
+    `SELECT status FROM beta_invites WHERE telegram_id = $1`,
+    [telegramId],
+  );
+  if (invite.rows.length === 0 || invite.rows[0].status !== 'active') {
+    return reply.status(403).send({
+      error: 'not_invited',
+      message: 'Luca is in private beta. Request access to get an invite.',
+    });
+  }
 
   const existing = await query<{ id: string }>(
     'SELECT id FROM users WHERE telegram_id = $1',
@@ -336,6 +347,90 @@ app.get('/users/resolve', async (req, reply) => {
     [telegramId],
   );
   return reply.status(201).send({ user_id: created.rows[0].id, telegram_id: rawId, created: true });
+});
+
+// ---------------------------------------------------------------------------
+// Admin: POST /admin/invite  { telegram_id, telegram_username? }
+// Add a Telegram user to the beta invite list.
+// Requires x-admin-key header matching LUCA_ADMIN_KEY env var.
+// ---------------------------------------------------------------------------
+function getAdminKey(req: { headers: Record<string, string | string[] | undefined> }): string | null {
+  const raw = req.headers['x-admin-key'];
+  if (!raw || typeof raw !== 'string') return null;
+  return raw.trim();
+}
+
+app.post('/admin/invite', async (req, reply) => {
+  const adminKey = config.LUCA_ADMIN_KEY;
+  if (!adminKey) return reply.status(503).send({ error: 'Admin invites not configured (LUCA_ADMIN_KEY not set)' });
+
+  const provided = getAdminKey(req);
+  if (!provided || provided !== adminKey) {
+    return reply.status(401).send({ error: 'x-admin-key header required' });
+  }
+
+  const body = req.body as { telegram_id?: string | number; telegram_username?: string };
+  const rawId = String(body?.telegram_id ?? '');
+  if (!rawId || !TELEGRAM_ID_RE.test(rawId)) {
+    return reply.status(400).send({ error: 'telegram_id required (numeric)' });
+  }
+
+  await query(
+    `INSERT INTO beta_invites (telegram_id, telegram_username, invited_by, status)
+     VALUES ($1, $2, 'admin', 'active')
+     ON CONFLICT (telegram_id) DO UPDATE SET status = 'active', telegram_username = COALESCE(EXCLUDED.telegram_username, beta_invites.telegram_username)`,
+    [BigInt(rawId), body.telegram_username ?? null],
+  );
+
+  return reply.status(201).send({ ok: true, telegram_id: rawId });
+});
+
+// ---------------------------------------------------------------------------
+// Admin: DELETE /admin/invite/:telegram_id — revoke an invite
+// ---------------------------------------------------------------------------
+app.delete('/admin/invite/:telegram_id', async (req, reply) => {
+  const adminKey = config.LUCA_ADMIN_KEY;
+  if (!adminKey) return reply.status(503).send({ error: 'Admin invites not configured' });
+
+  const provided = getAdminKey(req);
+  if (!provided || provided !== adminKey) {
+    return reply.status(401).send({ error: 'x-admin-key header required' });
+  }
+
+  const { telegram_id } = req.params as { telegram_id: string };
+  if (!TELEGRAM_ID_RE.test(telegram_id)) {
+    return reply.status(400).send({ error: 'telegram_id must be numeric' });
+  }
+
+  await query(
+    `UPDATE beta_invites SET status = 'revoked' WHERE telegram_id = $1`,
+    [BigInt(telegram_id)],
+  );
+  return reply.send({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Admin: GET /admin/invites — list all invitees
+// ---------------------------------------------------------------------------
+app.get('/admin/invites', async (req, reply) => {
+  const adminKey = config.LUCA_ADMIN_KEY;
+  if (!adminKey) return reply.status(503).send({ error: 'Admin invites not configured' });
+
+  const provided = getAdminKey(req);
+  if (!provided || provided !== adminKey) {
+    return reply.status(401).send({ error: 'x-admin-key header required' });
+  }
+
+  const res = await query<{
+    telegram_id: string;
+    telegram_username: string | null;
+    status: string;
+    invited_at: string;
+  }>(
+    `SELECT telegram_id::text, telegram_username, status, invited_at::text
+     FROM beta_invites ORDER BY invited_at DESC`,
+  );
+  return reply.send({ invites: res.rows });
 });
 
 // ---------------------------------------------------------------------------
