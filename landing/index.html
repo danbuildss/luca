@@ -339,7 +339,7 @@ nav.scrolled {
 
 /* ═══ SECURITY ══════════════════════════════════════════ */
 .security-section { border-top: 1px solid var(--border); }
-.sec-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 64px; align-items: center; }
+.sec-layout { max-width: 600px; }
 .sec-big {
   font-size: clamp(26px,4vw,46px); font-weight: 600; line-height: 1.1;
   letter-spacing: -0.025em; color: var(--t1); margin-bottom: 12px; text-wrap: balance;
@@ -354,15 +354,12 @@ nav.scrolled {
 }
 .sec-chk { color: var(--indigo); font-size: 12px; flex-shrink: 0; }
 
-/* mascot — transparent bg, no blend tricks needed */
-.mascot-img {
-  width: 100%; max-width: 340px; display: block;
-}
-/* dark stage for the security section so the grayscale mascot reads on both themes */
-.mascot-wrap-dark {
-  background: var(--bg-dk2); border-radius: var(--r-lg);
+/* mascot card — cream card on the dark CTA so the black-on-white art reads cleanly */
+.mascot-card {
+  background: #F5F5F0; border-radius: var(--r-lg);
   padding: 32px; display: flex; align-items: center; justify-content: center;
 }
+.mascot-card img { width: 100%; max-width: 300px; display: block; }
 
 /* logo — white watermark: invert to black in light mode, show white in dark */
 .logo-img {
@@ -501,10 +498,10 @@ footer {
   .brief-layout { grid-template-columns: 1fr; gap: 32px; }
   .plat-grid { grid-template-columns: 1fr; }
   .product-grid { grid-template-columns: 1fr; }
-  .sec-layout { grid-template-columns: 1fr; gap: 36px; }
-  .mascot-img { max-width: 240px; margin: 0 auto; }
+  .sec-grid { grid-template-columns: 1fr 1fr; }
   .final-inner { grid-template-columns: 1fr; gap: 32px; padding-block: 56px; }
-  .final-mascot-wrap { max-width: 240px; }
+  .final-mascot-wrap { max-width: 340px; }
+  .mascot-card { padding: 24px; }
   .footer-top { grid-template-columns: 1fr 1fr; gap: 32px; padding-bottom: 32px; }
   .footer-brand-col { grid-column: 1 / -1; }
   .demo-kv-row { gap: 24px; }
@@ -751,20 +748,15 @@ a:focus-visible { outline: 2px solid var(--indigo); outline-offset: 3px; border-
 <section class="section security-section fade-up" id="security">
   <div class="wrap">
     <div class="sec-layout">
-      <div>
-        <h2 class="sec-big">Read-only<br>by design.</h2>
-        <p class="sec-sub">Luca watches your financial operation without controlling your money.</p>
-        <div class="sec-grid">
-          <div class="sec-item"><span class="sec-chk">✓</span>No signing</div>
-          <div class="sec-item"><span class="sec-chk">✓</span>No trading</div>
-          <div class="sec-item"><span class="sec-chk">✓</span>No transfers</div>
-          <div class="sec-item"><span class="sec-chk">✓</span>No private keys</div>
-          <div class="sec-item"><span class="sec-chk">✓</span>No seed phrases</div>
-          <div class="sec-item"><span class="sec-chk">✓</span>Self-hostable</div>
-        </div>
-      </div>
-      <div class="mascot-wrap-dark">
-        <img src="./assets/mascot-transparent.webp" alt="Luca" class="mascot-img mascot-float">
+      <h2 class="sec-big">Read-only<br>by design.</h2>
+      <p class="sec-sub">Luca watches your financial operation without controlling your money.</p>
+      <div class="sec-grid">
+        <div class="sec-item"><span class="sec-chk">✓</span>No signing</div>
+        <div class="sec-item"><span class="sec-chk">✓</span>No trading</div>
+        <div class="sec-item"><span class="sec-chk">✓</span>No transfers</div>
+        <div class="sec-item"><span class="sec-chk">✓</span>No private keys</div>
+        <div class="sec-item"><span class="sec-chk">✓</span>No seed phrases</div>
+        <div class="sec-item"><span class="sec-chk">✓</span>Self-hostable</div>
       </div>
     </div>
   </div>
@@ -779,7 +771,9 @@ a:focus-visible { outline: 2px solid var(--indigo); outline-offset: 3px; border-
       <a href="https://tally.so/r/J9yy8X" class="btn-beta-inv" target="_blank" rel="noopener">Join private beta →</a>
     </div>
     <div class="final-mascot-wrap">
-      <img src="./assets/mascot-transparent.webp" alt="Luca" class="mascot-float">
+      <div class="mascot-card">
+        <img src="./assets/mascot.png" alt="Luca" class="mascot-float">
+      </div>
     </div>
   </div>
 </section>
