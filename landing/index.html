@@ -110,7 +110,7 @@ nav.scrolled {
 }
 .theme-btn:hover { color: var(--t1); border-color: var(--t2); }
 .theme-btn:active { transform: scale(0.96); }
-.icon-sun, .icon-moon { position: absolute; transition: opacity .2s, transform .2s cubic-bezier(0.2,0,0,1); }
+.icon-sun, .icon-moon { position: absolute; transition: opacity .2s cubic-bezier(0.2,0,0,1), transform .2s cubic-bezier(0.2,0,0,1), filter .2s cubic-bezier(0.2,0,0,1); }
 .theme-btn { position: relative; }
 
 /* hamburger */
@@ -129,11 +129,13 @@ nav.scrolled {
 
 /* mobile drawer */
 .nav-drawer {
-  display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  display: flex; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
   background: var(--bg); z-index: 99; padding: 80px 24px 40px;
   flex-direction: column; gap: 8px;
+  opacity: 0; transform: translateY(-8px); pointer-events: none;
+  transition: opacity .22s cubic-bezier(0.2,0,0,1), transform .22s cubic-bezier(0.2,0,0,1);
 }
-.nav-drawer.open { display: flex; }
+.nav-drawer.open { opacity: 1; transform: translateY(0); pointer-events: auto; }
 .nav-drawer a {
   font-size: 22px; font-weight: 500; color: var(--t1); text-decoration: none;
   padding: 12px 0; border-bottom: 1px solid var(--border);
@@ -356,6 +358,11 @@ nav.scrolled {
 .mascot-img {
   width: 100%; max-width: 340px; display: block;
 }
+/* dark stage for the security section so the grayscale mascot reads on both themes */
+.mascot-wrap-dark {
+  background: var(--bg-dk2); border-radius: var(--r-lg);
+  padding: 32px; display: flex; align-items: center; justify-content: center;
+}
 
 /* logo — white watermark: invert to black in light mode, show white in dark */
 .logo-img {
@@ -373,7 +380,7 @@ nav.scrolled {
   0%,100% { transform: translateY(0px); }
   50%      { transform: translateY(-8px); }
 }
-.mascot-float { animation: mascot-float 3.2s ease-in-out infinite; }
+.mascot-float { animation: mascot-float 3.2s ease-in-out infinite; will-change: transform; }
 
 /* ═══ FINAL CTA ═════════════════════════════════════════ */
 .final-cta { background: var(--bg-dk); overflow: hidden; }
@@ -438,9 +445,13 @@ footer {
 .footer-copy a { color: rgba(255,255,255,.35); text-decoration: none; transition: color .15s; }
 .footer-copy a:hover { color: rgba(255,255,255,.6); }
 .footer-ca {
-  font-size: 11px; font-family: var(--mono); color: rgba(255,255,255,.15);
-  letter-spacing: 0.02em;
+  font-size: 11px; font-family: var(--mono); color: rgba(255,255,255,.3);
+  letter-spacing: 0.02em; display: inline-flex; align-items: center; gap: 6px;
+  cursor: pointer; user-select: all; transition: color .15s;
 }
+.footer-ca:hover { color: rgba(255,255,255,.6); }
+.footer-ca .ca-copy { font-size: 10px; color: rgba(255,255,255,.2); transition: color .15s; user-select: none; }
+.footer-ca:hover .ca-copy { color: rgba(255,255,255,.5); }
 .footer-socials { display: flex; gap: 8px; }
 .footer-social-btn {
   width: 34px; height: 34px; border-radius: var(--r-sm);
@@ -460,12 +471,12 @@ footer {
 .fade-up.visible { opacity: 1; transform: translateY(0); }
 
 /* hero entrance */
-.hero-anim-1 { opacity: 0; transform: translateY(14px); transition: opacity .4s .05s ease-out, transform .4s .05s ease-out; }
-.hero-anim-2 { opacity: 0; transform: translateY(14px); transition: opacity .4s .15s ease-out, transform .4s .15s ease-out; }
-.hero-anim-3 { opacity: 0; transform: translateY(14px); transition: opacity .4s .25s ease-out, transform .4s .25s ease-out; }
-.hero-anim-4 { opacity: 0; transform: translateY(14px); transition: opacity .4s .35s ease-out, transform .4s .35s ease-out; }
-.hero-anim-5 { opacity: 0; transform: translateY(14px); transition: opacity .4s .45s ease-out, transform .4s .45s ease-out; }
-.hero-anim-6 { opacity: 0; transform: translateY(18px); transition: opacity .5s .55s ease-out, transform .5s .55s ease-out; }
+.hero-anim-1 { opacity: 0; transform: translateY(14px); transition: opacity .4s .05s cubic-bezier(0.2,0,0,1), transform .4s .05s cubic-bezier(0.2,0,0,1); }
+.hero-anim-2 { opacity: 0; transform: translateY(14px); transition: opacity .4s .15s cubic-bezier(0.2,0,0,1), transform .4s .15s cubic-bezier(0.2,0,0,1); }
+.hero-anim-3 { opacity: 0; transform: translateY(14px); transition: opacity .4s .25s cubic-bezier(0.2,0,0,1), transform .4s .25s cubic-bezier(0.2,0,0,1); }
+.hero-anim-4 { opacity: 0; transform: translateY(14px); transition: opacity .4s .35s cubic-bezier(0.2,0,0,1), transform .4s .35s cubic-bezier(0.2,0,0,1); }
+.hero-anim-5 { opacity: 0; transform: translateY(14px); transition: opacity .4s .45s cubic-bezier(0.2,0,0,1), transform .4s .45s cubic-bezier(0.2,0,0,1); }
+.hero-anim-6 { opacity: 0; transform: translateY(18px); transition: opacity .5s .55s cubic-bezier(0.2,0,0,1), transform .5s .55s cubic-bezier(0.2,0,0,1); }
 .hero-loaded .hero-anim-1,
 .hero-loaded .hero-anim-2,
 .hero-loaded .hero-anim-3,
@@ -520,7 +531,7 @@ a:focus-visible { outline: 2px solid var(--indigo); outline-offset: 3px; border-
     <div class="nav-right">
       <button class="theme-btn" id="theme-toggle" aria-label="Toggle theme">
         <svg class="icon-sun" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
-        <svg class="icon-moon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0;transform:scale(0.5)"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <svg class="icon-moon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0;transform:scale(0.25);filter:blur(4px)"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
       </button>
       <a href="https://tally.so/r/J9yy8X" class="btn-cta" target="_blank" rel="noopener">Join beta →</a>
       <button class="nav-hamburger" id="nav-hamburger" aria-label="Open menu">
@@ -752,7 +763,7 @@ a:focus-visible { outline: 2px solid var(--indigo); outline-offset: 3px; border-
           <div class="sec-item"><span class="sec-chk">✓</span>Self-hostable</div>
         </div>
       </div>
-      <div>
+      <div class="mascot-wrap-dark">
         <img src="./assets/mascot-transparent.webp" alt="Luca" class="mascot-img mascot-float">
       </div>
     </div>
@@ -805,7 +816,7 @@ a:focus-visible { outline: 2px solid var(--indigo); outline-offset: 3px; border-
     <div class="footer-bottom">
       <div class="footer-bottom-left">
         <p class="footer-copy">© 2026 Luca · Built by <a href="https://somehow-internet.vercel.app" target="_blank" rel="noopener">SOMEHOW</a></p>
-        <p class="footer-ca">CA: 0xB2b335F832FD3f43461ebD1CD9831D93D9CA4ba3</p>
+        <p class="footer-ca" id="footer-ca" title="Click to copy address">CA: 0xB2b335F832FD3f43461ebD1CD9831D93D9CA4ba3 <span class="ca-copy" id="ca-copy-hint">copy</span></p>
       </div>
       <div class="footer-socials">
         <a href="https://x.com/AskLucaAI" class="footer-social-btn" target="_blank" rel="noopener" aria-label="X">
@@ -842,11 +853,11 @@ function applyTheme(t) {
 }
 function updateIcon(t) {
   if (t === 'dark') {
-    sun.style.opacity = '0'; sun.style.transform = 'scale(0.5) rotate(90deg)';
-    moon.style.opacity = '1'; moon.style.transform = 'scale(1) rotate(0deg)';
+    sun.style.opacity = '0'; sun.style.transform = 'scale(0.25)'; sun.style.filter = 'blur(4px)';
+    moon.style.opacity = '1'; moon.style.transform = 'scale(1)'; moon.style.filter = 'blur(0px)';
   } else {
-    sun.style.opacity = '1'; sun.style.transform = 'scale(1) rotate(0deg)';
-    moon.style.opacity = '0'; moon.style.transform = 'scale(0.5) rotate(-90deg)';
+    sun.style.opacity = '1'; sun.style.transform = 'scale(1)'; sun.style.filter = 'blur(0px)';
+    moon.style.opacity = '0'; moon.style.transform = 'scale(0.25)'; moon.style.filter = 'blur(4px)';
   }
 }
 try { var saved = localStorage.getItem('luca-theme'); if (saved) applyTheme(saved); else updateIcon(getTheme()); } catch(e){ updateIcon(getTheme()); }
@@ -882,6 +893,28 @@ var observer = new IntersectionObserver(function(entries) {
   });
 }, { threshold: 0.08 });
 document.querySelectorAll('.fade-up').forEach(function(el) { observer.observe(el); });
+
+// ─── footer CA copy ────────────────────────────────────
+var caEl = document.getElementById('footer-ca');
+var caHint = document.getElementById('ca-copy-hint');
+if (caEl) {
+  caEl.addEventListener('click', function() {
+    var addr = '0xB2b335F832FD3f43461ebD1CD9831D93D9CA4ba3';
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(addr).then(function() {
+        caHint.textContent = 'copied!';
+        setTimeout(function() { caHint.textContent = 'copy'; }, 1800);
+      });
+    } else {
+      var tmp = document.createElement('textarea');
+      tmp.value = addr; tmp.style.position = 'fixed'; tmp.style.opacity = '0';
+      document.body.appendChild(tmp); tmp.select();
+      document.execCommand('copy'); document.body.removeChild(tmp);
+      caHint.textContent = 'copied!';
+      setTimeout(function() { caHint.textContent = 'copy'; }, 1800);
+    }
+  });
+}
 </script>
 </body>
 </html>
