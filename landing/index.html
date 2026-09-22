@@ -13,6 +13,7 @@
 <meta name="twitter:title" content="Luca — Your financial employee on-chain">
 <meta name="twitter:description" content="Private financial agent for on-chain operators.">
 <link rel="icon" type="image/png" href="./assets/5dee34ddc4a2478a90ce58fb9dcc890c.png">
+<link rel="icon" type="image/webp" href="./assets/logo-watermark.webp">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
 
 <style>
@@ -351,14 +352,21 @@ nav.scrolled {
 }
 .sec-chk { color: var(--indigo); font-size: 12px; flex-shrink: 0; }
 
-/* mascot — blend-mode removes white bg cleanly */
+/* mascot — transparent bg, no blend tricks needed */
 .mascot-img {
   width: 100%; max-width: 340px; display: block;
-  mix-blend-mode: multiply;
+}
+
+/* logo — white watermark: invert to black in light mode, show white in dark */
+.logo-img {
+  filter: invert(1) brightness(0.85);
 }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .mascot-img { mix-blend-mode: multiply; }
+  :root:not([data-theme="light"]) .logo-img { filter: none; }
 }
+:root[data-theme="dark"] .logo-img { filter: none; }
+/* footer logo always on dark bg — never invert */
+.footer-logo-img { filter: none !important; }
 
 /* mascot float animation */
 @keyframes mascot-float {
@@ -388,7 +396,7 @@ nav.scrolled {
 .btn-beta-inv:hover { opacity: .87; }
 .btn-beta-inv:active { transform: scale(0.96); }
 .final-mascot-wrap { display: flex; align-items: flex-end; justify-content: center; }
-.final-mascot-wrap img { width: 100%; max-width: 340px; display: block; mix-blend-mode: multiply; }
+.final-mascot-wrap img { width: 100%; max-width: 340px; display: block; }
 
 /* ═══ FOOTER ════════════════════════════════════════════ */
 footer {
@@ -501,7 +509,7 @@ a:focus-visible { outline: 2px solid var(--indigo); outline-offset: 3px; border-
 <nav id="main-nav">
   <div class="nav-row">
     <a href="#" class="nav-brand">
-      <img src="./assets/5dee34ddc4a2478a90ce58fb9dcc890c.png" class="logo-img" alt="Luca">
+      <img src="./assets/logo-watermark.webp" class="logo-img" alt="Luca">
       <span class="wordmark">Luca</span>
     </a>
     <ul class="nav-links">
@@ -745,7 +753,7 @@ a:focus-visible { outline: 2px solid var(--indigo); outline-offset: 3px; border-
         </div>
       </div>
       <div>
-        <img src="./assets/16c6082c9c9a62bdcd98ceed059e4550.webp" alt="Luca" class="mascot-img mascot-float">
+        <img src="./assets/mascot-transparent.webp" alt="Luca" class="mascot-img mascot-float">
       </div>
     </div>
   </div>
@@ -760,7 +768,7 @@ a:focus-visible { outline: 2px solid var(--indigo); outline-offset: 3px; border-
       <a href="https://tally.so/r/J9yy8X" class="btn-beta-inv" target="_blank" rel="noopener">Join private beta →</a>
     </div>
     <div class="final-mascot-wrap">
-      <img src="./assets/101eb34a560dd9616a4cb2b3fc0310ae.webp" alt="Luca" class="mascot-float">
+      <img src="./assets/mascot-transparent.webp" alt="Luca" class="mascot-float">
     </div>
   </div>
 </section>
@@ -771,7 +779,7 @@ a:focus-visible { outline: 2px solid var(--indigo); outline-offset: 3px; border-
     <div class="footer-top">
       <div class="footer-brand-col">
         <div class="footer-logo-row">
-          <img src="./assets/5dee34ddc4a2478a90ce58fb9dcc890c.png" class="footer-logo-img" alt="Luca">
+          <img src="./assets/logo-watermark.webp" class="footer-logo-img" alt="Luca">
           <span class="footer-wordmark">Luca</span>
         </div>
         <p class="footer-tagline-text">Money moves. Luca keeps track.</p>
