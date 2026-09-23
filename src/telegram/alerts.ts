@@ -60,7 +60,9 @@ function buildAlertKeyboard(alertId: string, eventId: string | null) {
       [Markup.button.callback('Skip', `alert_skip:${alertId}`)],
     ]);
   }
-  const p = `alert_label:${alertId}:${eventId}`;
+  // Use short prefix to stay under Telegram's 64-byte callback_data limit.
+  // Format: al:<alertId>:<label> — eventId is resolved server-side from alertId.
+  const p = `al:${alertId}`;
   return Markup.inlineKeyboard([
     [
       Markup.button.callback('Revenue', `${p}:revenue`),
