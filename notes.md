@@ -262,3 +262,75 @@ EVENTUALLY  Financial control plane
 **Constraint to protect throughout**: One agent. One domain. One job.
 
 > Luca's superpower: when someone asks "What's happening with my money?" — Luca knows the answer better than anything else they use.
+
+---
+
+## Build log — active development
+
+### Principles (locked)
+
+- One agent. One domain. One job. Trust + reliability mode.
+- V1 is READ ONLY — Luca must never send funds, sign transactions, swap, approve contracts, trade, bridge, deploy contracts, request private keys or seed phrases.
+- No secrets committed to git. API secrets server-side only.
+- Hermes memory must not be used as Luca's accounting database.
+- Every financial tool invocation scoped to the authenticated user. Cross-user leakage must be architecturally impossible.
+- The database is financial truth. LLM reasons over truth, never replaces it.
+
+### VPS
+
+- Host: root@167.233.18.210, Ubuntu 24.04, `/opt/luca`
+- Services: `luca-worker`, `luca-telegram`, `luca-api` (systemd)
+- DB: Supabase Postgres
+- Tracked wallets: treasury (`0xf1e958...`) + deployer (`0x67976c...`) on Base, Aeon founder wallets
+- `materiality_usd = $50` (alert threshold)
+- Brief fires at 08:00 UTC daily, weekly on Mondays
+
+### Phase 1 — Verify services (complete)
+
+Confirmed worker loop, watch jobs, Telegram bot, and brief scheduler all survive reboots. Fixed stuck watch_jobs.
+
+### Phase 2 — Review/label unknown transactions (complete)
+
+Built `/review` command. Counterparty alert flow: `detectUnknownCounterparties` → `pending_counterparty_alerts` → Telegram inline keyboard → `applyCorrection` → `counterparty_rules`.
+
+**Key bug fixed**: Telegram callback_data limit is 64 bytes. Old format `alert_label:uuid:uuid:label` = 93+ chars → `BUTTON_DATA_INVALID`. Fixed to `al:uuid:label` = 47 chars in `src/telegram/alerts.ts:buildAlertKeyboard`. Server-side resolves `eventId` from `alertId`.
+
+### Phase 3 — Classification quality harness (complete, PR #30 merged)
+
+New files:
+- `src/quality/metrics.ts` — SQL functions: `getHealthSnapshot`, `getMethodErrorRates`, `getCalibrationBuckets`, `getCounterpartyCorrections`, `getLabelPrecision`, `getUnknownDecomposition`, `getHighConfidenceErrorRate`
+- `src/quality/report.ts` — formats 7-day quality report (6 sections: health snapshot → label precision → method error rates → calibration gaps → unknown decomposition → to-do list)
+- `src/telegram/commands/quality.ts` — `/quality` Telegram command
+- Added `detectClassifierDegradation` to `src/alerts/detectors.ts` — fires when high-conf error rate >5% with ≥10 samples
+- Wired into `src/alerts/engine.ts`
+- Added `/quality` to bot + `/start` menu
+
+All 11 stuck counterparty alerts delivered after Phase 3 deploy (restart cleared the old BUTTON_DATA_INVALID backlog).
+
+### Phase 4 — Gate C proactive alerts (verified, no new code)
+
+Verified all detectors live and healthy:
+- `large_inflow` / `large_outflow`: 12 alerts fired Sept 21
+- `spend_spike`, `treasury_floor`, `unusual_gas`: wired, no fires (conditions not met)
+- `classifier_degradation`: wired
+- Brief scheduler: running, first automated brief fires at 08:00 UTC
+- Counterparty alerts: 11 delivered after Phase 3 deploy
+
+### Phase 5 — Reliability (complete, PR #31 merged)
+
+New files:
+- `migrations/004_worker_heartbeat.sql` — single-row `worker_heartbeat` table
+- `src/health/monitor.ts` — `pingWorkerHeartbeat`, `getWorkerHeartbeat`, `getStaleWallets`, `getDiskUsage`
+- `src/health/detectors.ts` — `detectWorkerStale` (fires if heartbeat >5min stale), `detectStaleWallets` (>4h), `detectDiskPressure` (80%/90%)
+- `scripts/backup.sh` — pg_dump → gzip → `/opt/luca/backups/`, 7-day retention
+- `deploy/luca-backup.{service,timer}` — systemd daily backup at 02:00 UTC
+
+Changes:
+- Worker pings heartbeat at top of every `runCycle()`
+- Worker runs `detectStaleWallets` + `detectDiskPressure` per user each cycle
+- Telegram bot runs `detectWorkerStale` every 5min independently (so if worker dies, bot still raises the alarm)
+- All health alerts land in `alerts` table, delivered by normal pipeline
+
+VPS deploy: migration applied, `luca-telegram` restarted. Backup timer enabled.
+
+### Phase 6 — Daily use evaluation (next)
