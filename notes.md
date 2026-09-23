@@ -262,3 +262,172 @@ EVENTUALLY  Financial control plane
 **Constraint to protect throughout**: One agent. One domain. One job.
 
 > Luca's superpower: when someone asks "What's happening with my money?" — Luca knows the answer better than anything else they use.
+
+---
+
+## Build log — active development
+
+### Principles (locked)
+
+- One agent. One domain. One job. Trust + reliability mode.
+- V1 is READ ONLY — Luca must never send funds, sign transactions, swap, approve contracts, trade, bridge, deploy contracts, request private keys or seed phrases.
+- No secrets committed to git. API secrets server-side only.
+- Hermes memory must not be used as Luca's accounting database.
+- Every financial tool invocation scoped to the authenticated user. Cross-user leakage must be architecturally impossible.
+- The database is financial truth. LLM reasons over truth, never replaces it.
+
+### VPS
+
+- Host: root@167.233.18.210, Ubuntu 24.04, `/opt/luca`
+- Services: `luca-worker`, `luca-telegram`, `luca-api` (systemd)
+- DB: Supabase Postgres
+- Tracked wallets: treasury (`0xf1e958...`) + deployer (`0x67976c...`) on Base, Aeon founder wallets
+- `materiality_usd = $50` (alert threshold)
+- Brief fires at 08:00 UTC daily, weekly on Mondays
+
+### Phase 1 — Verify services (complete)
+
+Confirmed worker loop, watch jobs, Telegram bot, and brief scheduler all survive reboots. Fixed stuck watch_jobs.
+
+### Phase 2 — Review/label unknown transactions (complete)
+
+Built `/review` command. Counterparty alert flow: `detectUnknownCounterparties` → `pending_counterparty_alerts` → Telegram inline keyboard → `applyCorrection` → `counterparty_rules`.
+
+**Key bug fixed**: Telegram callback_data limit is 64 bytes. Old format `alert_label:uuid:uuid:label` = 93+ chars → `BUTTON_DATA_INVALID`. Fixed to `al:uuid:label` = 47 chars in `src/telegram/alerts.ts:buildAlertKeyboard`. Server-side resolves `eventId` from `alertId`.
+
+### Phase 3 — Classification quality harness (complete, PR #30 merged)
+
+New files:
+- `src/quality/metrics.ts` — SQL functions: `getHealthSnapshot`, `getMethodErrorRates`, `getCalibrationBuckets`, `getCounterpartyCorrections`, `getLabelPrecision`, `getUnknownDecomposition`, `getHighConfidenceErrorRate`
+- `src/quality/report.ts` — formats 7-day quality report (6 sections: health snapshot → label precision → method error rates → calibration gaps → unknown decomposition → to-do list)
+- `src/telegram/commands/quality.ts` — `/quality` Telegram command
+- Added `detectClassifierDegradation` to `src/alerts/detectors.ts` — fires when high-conf error rate >5% with ≥10 samples
+- Wired into `src/alerts/engine.ts`
+- Added `/quality` to bot + `/start` menu
+
+All 11 stuck counterparty alerts delivered after Phase 3 deploy (restart cleared the old BUTTON_DATA_INVALID backlog).
+
+### Phase 4 — Gate C proactive alerts (verified, no new code)
+
+Verified all detectors live and healthy:
+- `large_inflow` / `large_outflow`: 12 alerts fired Sept 21
+- `spend_spike`, `treasury_floor`, `unusual_gas`: wired, no fires (conditions not met)
+- `classifier_degradation`: wired
+- Brief scheduler: running, first automated brief fires at 08:00 UTC
+- Counterparty alerts: 11 delivered after Phase 3 deploy
+
+### Phase 5 — Reliability (complete, PR #31 merged)
+
+New files:
+- `migrations/004_worker_heartbeat.sql` — single-row `worker_heartbeat` table
+- `src/health/monitor.ts` — `pingWorkerHeartbeat`, `getWorkerHeartbeat`, `getStaleWallets`, `getDiskUsage`
+- `src/health/detectors.ts` — `detectWorkerStale` (fires if heartbeat >5min stale), `detectStaleWallets` (>4h), `detectDiskPressure` (80%/90%)
+- `scripts/backup.sh` — pg_dump → gzip → `/opt/luca/backups/`, 7-day retention
+- `deploy/luca-backup.{service,timer}` — systemd daily backup at 02:00 UTC
+
+Changes:
+- Worker pings heartbeat at top of every `runCycle()`
+- Worker runs `detectStaleWallets` + `detectDiskPressure` per user each cycle
+- Telegram bot runs `detectWorkerStale` every 5min independently (so if worker dies, bot still raises the alarm)
+- All health alerts land in `alerts` table, delivered by normal pipeline
+
+VPS deploy: migration applied, `luca-telegram` restarted. Backup timer enabled.
+
+### Phase 6 — Daily use evaluation (next)
+
+---
+
+## Final phase sequence (locked 2026-09-23)
+
+Incorporates Bankr's feedback. This is the sequence we follow.
+
+**Constraint to protect throughout:**
+> trustworthy books → financial heartbeat → proactive jobs → daily brief → memory → real operators → more channels
+
+No WhatsApp, iMessage, MCP, Solana, dashboards, or execution until classification is trusted. Sequence is the product strategy.
+
+---
+
+### Phase 3 — Classification Quality *(current)*
+
+Exit criteria: "Luca's books are becoming more accurate as I correct it."
+
+**Gate:** Do not start Phase 4 until at least one week of real correction data is flowing and baselines are readable.
+
+Build order:
+1. Audit corrections table schema — verify all fields captured: `classification_id`, `old_label`, `new_label`, `old_confidence`, `correction_timestamp`, `user_context`, `counterparty`, `created_rule`
+2. Rewrite `/quality` metrics as a SQL view — parameterizable by date, label, method, counterparty (not application code)
+3. High-confidence error query — run against real wallet history, read what it surfaces
+4. Calibration bucket view — verify confidence scores are honest
+5. Root cause tagging on corrections — bad rule / missing counterparty / bad model inference / missing protocol / bad data
+6. Gold set — 100 transactions in own DB table, stratified across 9 labels and 4 methods, run on every deploy
+7. Trend tracking — correction rate and unknown rate week over week, not just snapshots
+
+**Built so far:** `/quality` command, metrics queries, `detectClassifierDegradation` alert. Error rate by label/method, high-conf errors, calibration, unknown decomposition all queryable. Root cause tagging, gold set, trend tracking, and SQL view still to build.
+
+---
+
+### Phase 4 — Financial Heartbeat
+
+Health of Luca's financial *understanding*, not process liveness.
+
+- `heartbeat_baselines` table — stored explicitly, not computed dynamically
+- Track: classified %, unknown %, low-confidence %, high-confidence corrections, data freshness, provider status, blocks processed, last successful brief, Telegram delivery, model failures
+- Anomaly detection: unknown rate spikes from baseline → alert
+- Distinguish data freshness degradation (RPC/blocks) from classification quality degradation (unknown rate spike) — different causes, different fixes
+
+---
+
+### Phase 5 — Financial Jobs
+
+Luca as a set of recurring jobs. Each job has purpose, trigger, inputs, rules, output, quality metric — stored in Postgres with `last_run`, `last_success`, `last_output_summary`, `quality_score`.
+
+Start with: `transaction-classifier`, `unknown-review`, `counterparty-watch`, `daily-brief`, `treasury-watch`, `spend-velocity`, `large-movement-watch`, `reclassification-watch`
+
+`reclassification-watch`: when a new counterparty rule is created from a correction, find all prior transactions from that counterparty and flag for review. Propose, never auto-apply.
+
+Later: `cash-runway`, `weekly-close`, `monthly-close`, `round-trip-detector`
+
+---
+
+### Phase 6 — Proactive Monitoring
+
+Worker loop: `ingest → classify → update books → evaluate jobs → stay silent unless something matters`
+
+Luca messages you unprompted. Treasury floor hit. Spend spike. First payment to new counterparty. Transactions needing context. This is when Luca stops feeling like a chatbot.
+
+---
+
+### Phase 7 — Daily Brief (perfected)
+
+Numbers from deterministic books. No AI essay. Short. Ships only after books are trusted.
+
+---
+
+### Phase 8 — Financial Memory
+
+Wallet roles as first-class DB entities (`added_by`, `added_at`, `confidence`, `source`). Counterparty correction history is the moat. Every correction permanently improves future classifications. The corrected financial graph, not the LLM.
+
+---
+
+### Phase 9 — Safe Self-Healing
+
+Retry RPC, ingestion, fallback data source, re-index missing ranges, rerun failed jobs, retry message delivery. Never silently rewrite accounting logic. Proposals show evidence + expected impact (how many past transactions affected).
+
+---
+
+### Phase 10 — Proof of Work
+
+Luca reports its own work: classified 147 transactions, $8,412 actual revenue vs $13,902 gross inflow, 3 unclassified, treasury below floor. Autonomy is credible when work leaves observable evidence.
+
+---
+
+### Phase 11 — Real Operators (3–5)
+
+Messy real wallets. Watch what Luca misunderstands, corrects, what annoys, what saves time, what they still use spreadsheets for. Those users become the next product spec.
+
+---
+
+### Phase 12 — Second Channel
+
+WhatsApp first, then iMessage. One adapter into the same Luca. Same books, same memory, same brain. Never build separate Lucas.

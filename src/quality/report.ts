@@ -5,6 +5,8 @@ import {
   getCounterpartyCorrections,
   getLabelPrecision,
   getUnknownDecomposition,
+  getWeeklyTrend,
+  getGoldSetSummary,
 } from './metrics.js';
 import { formatAddress } from '../telegram/format.js';
 
@@ -13,7 +15,7 @@ function pct(n: number) {
 }
 
 export async function formatQualityReport(userId: string): Promise<string> {
-  const [snapshot, methodRates, calibration, counterpartyClusters, labelPrecision, unknownDecomp] =
+  const [snapshot, methodRates, calibration, counterpartyClusters, labelPrecision, unknownDecomp, weeklyTrend, goldSummary] =
     await Promise.all([
       getHealthSnapshot(userId, 7),
       getMethodErrorRates(userId),
@@ -21,6 +23,8 @@ export async function formatQualityReport(userId: string): Promise<string> {
       getCounterpartyCorrections(userId, 2),
       getLabelPrecision(userId),
       getUnknownDecomposition(userId),
+      getWeeklyTrend(userId, 8),
+      getGoldSetSummary(userId),
     ]);
 
   const lines: string[] = [];
@@ -91,7 +95,37 @@ export async function formatQualityReport(userId: string): Promise<string> {
   }
   lines.push('');
 
-  // ── Section 6: What to do this week ─────────────────────────────────────
+  // ── Section 6: Weekly Trend ─────────────────────────────────────────────
+  if (weeklyTrend.length >= 2) {
+    lines.push('*📈 Weekly trend (correction rate)*');
+    const recent = weeklyTrend.slice(0, 6);
+    for (const w of recent) {
+      const weekLabel = new Date(w.week_start).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      const corrIcon = w.correction_rate > 0.1 ? '🔴' : w.correction_rate > 0.05 ? '🟡' : '🟢';
+      lines.push(
+        `${corrIcon} ${weekLabel}  corr ${pct(w.correction_rate)}  unk ${pct(w.unknown_rate)}  (${w.total_classified} total)`,
+      );
+    }
+    lines.push('');
+  }
+
+  // ── Section 7: Gold Set Pass Rate ────────────────────────────────────────
+  if (goldSummary.length > 0) {
+    const totalGold = goldSummary.reduce((s, r) => s + r.total, 0);
+    const totalCorrect = goldSummary.reduce((s, r) => s + r.correct, 0);
+    const overallPassRate = totalGold > 0 ? totalCorrect / totalGold : 1;
+    const passIcon = overallPassRate >= 0.95 ? '✅' : overallPassRate >= 0.85 ? '🟡' : '🔴';
+    lines.push(`*🏅 Gold set regression — ${passIcon} ${pct(overallPassRate)} pass (${totalCorrect}/${totalGold})*`);
+    const failing = goldSummary.filter((r) => r.pass_rate < 1);
+    if (failing.length > 0) {
+      for (const r of failing.slice(0, 5)) {
+        lines.push(`  ${r.pass_rate < 0.8 ? '🔴' : '🟡'} ${r.correct_label.padEnd(18)} ${pct(r.pass_rate)}  (${r.correct}/${r.total})`);
+      }
+    }
+    lines.push('');
+  }
+
+  // ── Section 8: What to do this week ─────────────────────────────────────
   const actions: string[] = [];
 
   if (counterpartyClusters.length > 0) {
