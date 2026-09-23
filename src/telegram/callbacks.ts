@@ -2,6 +2,7 @@ import type { Context } from 'telegraf';
 import { ClassificationLabel, CLASSIFICATION_LABELS } from '../types/index.js';
 import { applyCorrection, EventNotFoundError } from '../corrections/handler.js';
 import { resolveAlert } from '../alerts/counterparty.js';
+import { addGoldTransaction } from '../quality/goldset.js';
 import { query } from '../db.js';
 import { logger } from '../logger.js';
 import type { AuthedUser } from './auth.js';
@@ -28,6 +29,10 @@ export async function handleCallback(ctx: Context, user: AuthedUser): Promise<vo
       await handleAlertLabelShortCallback(ctx, user, data);
     } else if (data.startsWith('alert_label:')) {
       await handleAlertLabelCallback(ctx, user, data);
+    } else if (data.startsWith('gs:')) {
+      await handleGoldSetLabelCallback(ctx, user, data);
+    } else if (data.startsWith('gs_skip:')) {
+      await handleGoldSetSkipCallback(ctx, data);
     } else {
       await ctx.answerCbQuery('Unknown action');
     }
@@ -171,4 +176,30 @@ async function handleAlertLabelCallback(ctx: Context, user: AuthedUser, data: st
       throw err;
     }
   }
+}
+
+async function handleGoldSetLabelCallback(ctx: Context, user: AuthedUser, data: string): Promise<void> {
+  // gs:<eventId>:<label>
+  const parts = data.split(':');
+  if (parts.length !== 3) { await ctx.answerCbQuery('Bad callback data'); return; }
+  const [, eventId, labelValue] = parts;
+
+  if (!(CLASSIFICATION_LABELS as readonly string[]).includes(labelValue)) {
+    await ctx.answerCbQuery('Invalid label');
+    return;
+  }
+
+  await addGoldTransaction(user.userId, eventId, labelValue);
+  await ctx.answerCbQuery(`Gold set: ${labelValue} ✓`);
+  try {
+    await ctx.editMessageReplyMarkup(undefined);
+  } catch { /* already edited */ }
+}
+
+async function handleGoldSetSkipCallback(ctx: Context, _data: string): Promise<void> {
+  // gs_skip:<eventId>
+  await ctx.answerCbQuery('Skipped');
+  try {
+    await ctx.editMessageReplyMarkup(undefined);
+  } catch { /* already edited */ }
 }
