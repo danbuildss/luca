@@ -4,6 +4,7 @@ import {
   detectSpendSpike,
   detectTreasuryFloor,
   detectUnusualGas,
+  detectClassifierDegradation,
 } from './detectors.js';
 
 export async function runAlertDetectors(userId: string): Promise<number> {
@@ -12,10 +13,11 @@ export async function runAlertDetectors(userId: string): Promise<number> {
     detectSpendSpike(userId),
     detectTreasuryFloor(userId),
     detectUnusualGas(userId),
+    detectClassifierDegradation(userId),
   ]);
 
   let total = 0;
-  const names = ['large_movements', 'spend_spike', 'treasury_floor', 'unusual_gas'];
+  const names = ['large_movements', 'spend_spike', 'treasury_floor', 'unusual_gas', 'classifier_degradation'];
   for (let i = 0; i < results.length; i++) {
     const r = results[i];
     if (r.status === 'fulfilled') {

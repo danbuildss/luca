@@ -6,6 +6,7 @@ import { getUserByTelegramId } from '../../src/telegram/auth.js';
 import { handleSummary } from '../../src/telegram/commands/summary.js';
 import { handleReview } from '../../src/telegram/commands/review.js';
 import { handleBalance } from '../../src/telegram/commands/balance.js';
+import { handleQuality } from '../../src/telegram/commands/quality.js';
 import { handleCallback } from '../../src/telegram/callbacks.js';
 import { sendPendingAlerts } from '../../src/telegram/alerts.js';
 import { generateDailyBrief, generateWeeklyBrief } from '../../src/briefs/generate.js';
@@ -46,7 +47,8 @@ bot.command('start', async (ctx) => {
     `/summary — P&L for the last 30 days\n` +
     `/review  — Label unknown transactions\n` +
     `/balance — Current wallet balances\n` +
-    `/brief   — On-demand daily or weekly brief`,
+    `/brief   — On-demand daily or weekly brief\n` +
+    `/quality — Classification quality report`,
   );
 });
 
@@ -100,6 +102,12 @@ bot.command('brief', async (ctx) => {
     logger.error({ err, userId: user.userId }, '/brief command failed');
     await ctx.reply('Failed to generate brief — try again shortly.');
   }
+});
+
+bot.command('quality', async (ctx) => {
+  const user = await requireUser(ctx);
+  if (!user) { await ctx.reply("You're not registered."); return; }
+  await handleQuality(ctx, user);
 });
 
 // Power-user: /label <event_id> <label>
