@@ -26,7 +26,7 @@ async function getUserWallets(userId: string): Promise<WalletContext[]> {
      FROM wallets w
      LEFT JOIN wallet_roles wr ON wr.wallet_id = w.id
      WHERE w.user_id = $1 AND w.active = TRUE
-     GROUP BY w.address, w.label, w.chain
+     GROUP BY w.address, w.label, w.chain, w.created_at
      ORDER BY w.created_at`,
     [userId],
   );
