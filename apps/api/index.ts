@@ -1,3 +1,6 @@
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 import Fastify from 'fastify';
 import { config, requireProductionConfig } from '../../src/config.js';
 import { checkDbReady, closeDb, query } from '../../src/db.js';
@@ -7,6 +10,17 @@ import type { ClassificationLabel } from '../../src/types/index.js';
 import { applyCorrection, EventNotFoundError } from '../../src/corrections/handler.js';
 import { getEventsForReview } from '../../src/corrections/store.js';
 import { getBooksSummary, getBooksEvents, getPnlSummary } from '../../src/books/query.js';
+import {
+  getOpsOverview,
+  getOpsOperators,
+  getOpsErrors,
+  getOpsQuality,
+  getOpsSystem,
+  getOpsCost,
+} from '../../src/ops/db.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const OPS_HTML = readFileSync(join(__dirname, 'ops.html'), 'utf-8');
 
 if (config.NODE_ENV === 'production') {
   requireProductionConfig();
@@ -431,6 +445,56 @@ app.get('/admin/invites', async (req, reply) => {
      FROM beta_invites ORDER BY invited_at DESC`,
   );
   return reply.send({ invites: res.rows });
+});
+
+// ---------------------------------------------------------------------------
+// Ops console — admin-gated
+// ---------------------------------------------------------------------------
+function requireAdminKey(req: { headers: Record<string, string | string[] | undefined> }, reply: { status: (n: number) => { send: (b: unknown) => unknown } }): boolean {
+  const adminKey = config.LUCA_ADMIN_KEY;
+  if (!adminKey) { reply.status(503).send({ error: 'LUCA_ADMIN_KEY not configured' }); return false; }
+  const provided = req.headers['x-admin-key'];
+  if (!provided || provided !== adminKey) { reply.status(401).send({ error: 'x-admin-key required' }); return false; }
+  return true;
+}
+
+// Serve the ops HTML UI
+app.get('/ops', async (_req, reply) => {
+  return reply.header('content-type', 'text/html; charset=utf-8').send(OPS_HTML);
+});
+
+// JSON API routes prefixed /ops/api — all admin-gated
+app.get('/ops/api/overview', async (req, reply) => {
+  if (!requireAdminKey(req, reply)) return;
+  return reply.send(await getOpsOverview());
+});
+
+app.get('/ops/api/operators', async (req, reply) => {
+  if (!requireAdminKey(req, reply)) return;
+  const operators = await getOpsOperators();
+  return reply.send({ operators });
+});
+
+app.get('/ops/api/errors', async (req, reply) => {
+  if (!requireAdminKey(req, reply)) return;
+  return reply.send(await getOpsErrors());
+});
+
+app.get('/ops/api/quality', async (req, reply) => {
+  if (!requireAdminKey(req, reply)) return;
+  return reply.send(await getOpsQuality());
+});
+
+app.get('/ops/api/system', async (req, reply) => {
+  if (!requireAdminKey(req, reply)) return;
+  return reply.send(await getOpsSystem());
+});
+
+app.get('/ops/api/cost', async (req, reply) => {
+  if (!requireAdminKey(req, reply)) return;
+  const { days: daysStr } = req.query as { days?: string };
+  const days = Math.min(parseInt(daysStr ?? '30', 10) || 30, 90);
+  return reply.send(await getOpsCost(days));
 });
 
 // ---------------------------------------------------------------------------

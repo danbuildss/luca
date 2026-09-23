@@ -1,5 +1,6 @@
 import { pool, query } from '../db.js';
 import { logger } from '../logger.js';
+import { touchUserActivation } from '../ops/db.js';
 import {
   fetchAllTransfers,
   getCurrentBlock,
@@ -234,6 +235,11 @@ export async function syncWallet(job: WatchJobRow, apiKey: string | undefined): 
        WHERE id = $3`,
       [ingested, provider, syncRunId],
     );
+
+    // Set activated_at on first successful sync (idempotent — only sets if null)
+    if (isBackfill || ingested > 0) {
+      void touchUserActivation(user_id);
+    }
 
     logger.info({ wallet_id, ingested, failed, provider, currentBlock }, 'Wallet sync complete');
   } catch (err) {
