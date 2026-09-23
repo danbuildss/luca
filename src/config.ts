@@ -14,8 +14,9 @@ const schema = z.object({
   ALCHEMY_API_KEY: z.string().min(1, 'ALCHEMY_API_KEY is required').optional(),
   BASE_RPC_URL: z.string().url('BASE_RPC_URL must be a valid URL').optional(),
 
-  // LLM — OpenAI (gpt-4o-mini) used for transaction classification
+  // LLM — OpenAI (gpt-4o-mini) for classification, gpt-4o for agent
   OPENAI_API_KEY: z.string().optional(),
+  AGENT_MODEL: z.string().default('gpt-4o'),
 
   // Optional
   BASESCAN_API_KEY: z.string().optional(),

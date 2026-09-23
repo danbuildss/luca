@@ -10,6 +10,7 @@ import { handleCallback } from '../../src/telegram/callbacks.js';
 import { sendPendingAlerts } from '../../src/telegram/alerts.js';
 import { generateDailyBrief, generateWeeklyBrief } from '../../src/briefs/generate.js';
 import { saveBrief, markBriefSent } from '../../src/briefs/store.js';
+import { runAgent } from '../../src/agent/run.js';
 
 if (config.NODE_ENV === 'production') {
   requireProductionConfig();
@@ -132,6 +133,31 @@ bot.command('label', async (ctx) => {
     } else {
       throw err;
     }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Free-text messages — agent loop
+// ---------------------------------------------------------------------------
+bot.on('text', async (ctx) => {
+  const user = await requireUser(ctx);
+  if (!user) {
+    await ctx.reply("You're not registered with Luca yet. Contact the admin to get set up.");
+    return;
+  }
+
+  const userMessage = ctx.message.text.trim();
+  if (!userMessage) return;
+
+  // Typing indicator while agent works
+  await ctx.sendChatAction('typing');
+
+  try {
+    const reply = await runAgent({ userId: user.userId, userMessage });
+    await ctx.reply(reply, { parse_mode: 'Markdown' });
+  } catch (err) {
+    logger.error({ err, userId: user.userId }, 'Agent run failed');
+    await ctx.reply("Something went wrong — I'll look into it.");
   }
 });
 
