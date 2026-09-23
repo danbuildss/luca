@@ -17,6 +17,10 @@ const schema = z.object({
   // LLM — OpenAI (gpt-4o-mini) for classification, gpt-4o for agent
   OPENAI_API_KEY: z.string().optional(),
   AGENT_MODEL: z.string().default('gpt-4o'),
+  // Agent LLM override — use a different key/endpoint for the agent (e.g. Bankr LLM Gateway)
+  // If unset, OPENAI_API_KEY + standard OpenAI endpoint are used.
+  AGENT_LLM_KEY: z.string().optional(),
+  AGENT_BASE_URL: z.string().url().optional(),
 
   // Optional
   BASESCAN_API_KEY: z.string().optional(),
