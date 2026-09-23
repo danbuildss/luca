@@ -89,8 +89,8 @@ When asked outside its domain, Luca says: *"That isn't my job."*
 | 5 | Accuracy & trust | Books trusted without manual checking every result |
 | 6 | Perfect the brief | Understand financial position without opening a dashboard |
 | 7 | First 5 real operators | At least some users would be annoyed if Luca disappeared |
-| 8 | WhatsApp (second channel) | Channel switch doesn't change memory or financial understanding |
-| 9 | iMessage + other channels | Add a surface without touching the accounting engine |
+| 8 | iMessage (second channel) | Channel switch doesn't change memory or financial understanding |
+| 9 | Other channels (Slack, Signal, etc.) | Add a surface without touching the accounting engine |
 | 10 | Entity understanding | Books by entity: project P&L, personal vs business, agent P&L, runway |
 | 11 | Agent businesses | Which agents are profitable? What's overnight agent spend? |
 | 12 | Financial system of record | Other software asks Luca for financial truth (API/MCP) |
@@ -122,8 +122,7 @@ Brief is channel-independent. Arrives wherever the operator is.
 
 ### Channel architecture (Phase 8+)
 ```
-TelegramAdapter
-WhatsAppAdapter     →  Luca Agent  →  Luca Core
+TelegramAdapter     →  Luca Agent  →  Luca Core
 iMessageAdapter
 ```
 
