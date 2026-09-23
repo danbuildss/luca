@@ -2,55 +2,63 @@
 
 > Luca is the employee who keeps books on the wallets that work while you sleep.
 
-> **Repository status:** this repository currently contains the product specification,
-> Hermes profile material, prompts, and an initial PostgreSQL schema. The runnable
-> Luca Core, Telegram bot, API, worker, migrations, and automated tests described
-> below have not been implemented yet. See the
-> [current-state and build-gap analysis](docs/build-gap-analysis.md) for the audited
-> implementation plan.
-
-Luca is a private financial agent for on-chain operators and autonomous agents. It watches your wallets, classifies activity into books, remembers your corrections, and briefs you like an employee — not a dashboard.
+Luca is a private financial agent for on-chain operators. It watches your Base wallets, classifies every transaction into books, remembers your corrections, and briefs you like an employee — not a dashboard.
 
 ## What Luca Does
 
 - Attaches to 1–5 wallets on Base
-- Ingests and normalizes on-chain activity
-- Classifies every event: revenue, expenses, internal, gas, unknown
-- Remembers your corrections and learns from them
+- Ingests and normalizes on-chain activity every 60 seconds
+- Classifies every event: revenue, expenses, internal transfer, gas, unknown
+- Remembers your corrections and applies them to future transactions
 - Sends a daily brief via Telegram
-- Alerts when something material changes
-- Answers financial questions with evidence
-- Serves humans (Telegram) and agents (API/MCP)
+- Alerts when something material changes (balance drop, spending spike, new counterparty)
+- Answers financial questions with evidence via the Telegram bot
 
 ## What Luca Does Not Do (v1)
 
 - Sign transactions
 - Move funds
 - Trade
-- Depend on Zetta
+- Depend on Hermes or any external agent runtime
 - Maintain a public registry
 
 ## Stack
 
-- Agent: Hermes
-- Chain: Base (v1)
-- Interface: Telegram Bot
-- Database: Postgres
-- Runtime: Mac (dev) → VPS (production)
+- **Bot:** Telegraf (TypeScript)
+- **Agent reasoning:** OpenAI SDK → Bankr LLM gateway (configurable via `AGENT_BASE_URL`)
+- **Chain:** Base via Alchemy, Blockscout fallback
+- **Database:** Supabase (PostgreSQL)
+- **Runtime:** VPS (Ubuntu 24.04) — systemd services
 
-## Quick Start
+## Running Services
 
-The commands below describe the intended application workflow; they will not work
-until the Phase 1 implementation in the build-gap analysis is complete.
+| Service | Entry point | Role |
+|---------|-------------|------|
+| `luca-worker` | `apps/worker/index.ts` | 60s cycle: sync → classify → alert → heartbeat |
+| `luca-telegram` | `apps/telegram/index.ts` | Telegram bot, free-text agent, commands |
+| `luca-api` | `apps/api/index.ts` | Fastify API, localhost:3000 |
+
+## Environment Variables
+
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `DATABASE_URL` | ✓ | Supabase PostgreSQL connection string |
+| `TELEGRAM_BOT_TOKEN` | ✓ | Telegram bot token |
+| `ALCHEMY_API_KEY` | ✓ | Base RPC + transfer indexing |
+| `AGENT_LLM_KEY` | ✓ | LLM API key (Bankr or OpenAI) |
+| `AGENT_BASE_URL` | — | Bankr gateway base URL (omit for OpenAI direct) |
+| `AGENT_MODEL` | — | Model ID — default `gpt-4o` |
+
+## Setup
 
 ```bash
 git clone https://github.com/danbuildss/luca
 cd luca
 cp .env.example .env
 # fill in .env
-npm install
-npm run db:migrate
-npm run dev
+bun install
+bun run db:migrate
+bun run dev
 ```
 
 ## Project Structure
@@ -60,19 +68,16 @@ luca/
 ├── LUCA.md              # Product constitution
 ├── apps/
 │   ├── telegram/        # Telegram bot
-│   ├── api/             # REST API
-│   └── worker/          # Ingestion + classification worker
-├── core/
-│   ├── ingest/          # Chain data ingestion
-│   ├── normalize/       # Canonical event format
+│   ├── api/             # REST API (Fastify, localhost:3000)
+│   └── worker/          # Sync + classification worker
+├── src/
+│   ├── agent/           # Agentic loop + tools
+│   ├── alerts/          # Alert engine and detectors
+│   ├── heartbeat/       # Financial heartbeat snapshots
 │   ├── classify/        # Classification engine
-│   ├── ledger/          # Books and metrics
-│   ├── memory/          # Corrections and counterparties
-│   ├── alerts/          # Alert engine
-│   └── briefs/          # Brief generation
-├── prompts/             # Hermes prompt files
-├── db/                  # Schema and migrations
-└── docs/                # Architecture and deployment
+│   └── ingest/          # Chain ingestion
+├── migrations/          # PostgreSQL migrations (run in order)
+├── prompts/             # System prompt
+├── scripts/             # Ops and audit SQL scripts
+└── docs/                # Architecture
 ```
-
-## Powered by $LUCA
