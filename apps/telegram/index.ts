@@ -7,6 +7,7 @@ import { handleSummary } from '../../src/telegram/commands/summary.js';
 import { handleReview } from '../../src/telegram/commands/review.js';
 import { handleBalance } from '../../src/telegram/commands/balance.js';
 import { handleQuality } from '../../src/telegram/commands/quality.js';
+import { handleGoldSet } from '../../src/telegram/commands/goldset.js';
 import { handleCallback } from '../../src/telegram/callbacks.js';
 import { sendPendingAlerts } from '../../src/telegram/alerts.js';
 import { generateDailyBrief, generateWeeklyBrief } from '../../src/briefs/generate.js';
@@ -50,7 +51,8 @@ bot.command('start', async (ctx) => {
     `/review  — Label unknown transactions\n` +
     `/balance — Current wallet balances\n` +
     `/brief   — On-demand daily or weekly brief\n` +
-    `/quality — Classification quality report`,
+    `/quality — Classification quality report\n` +
+    `/goldset — Label transactions for regression testing`,
   );
 });
 
@@ -110,6 +112,12 @@ bot.command('quality', async (ctx) => {
   const user = await requireUser(ctx);
   if (!user) { await ctx.reply("You're not registered."); return; }
   await handleQuality(ctx, user);
+});
+
+bot.command('goldset', async (ctx) => {
+  const user = await requireUser(ctx);
+  if (!user) { await ctx.reply("You're not registered."); return; }
+  await handleGoldSet(ctx, user);
 });
 
 // Power-user: /label <event_id> <label>
