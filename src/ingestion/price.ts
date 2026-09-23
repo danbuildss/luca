@@ -5,6 +5,19 @@ import { logger } from '../logger.js';
 export const USDC_CONTRACT = '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913';
 export const BNKR_CONTRACT = '0x22af33fe49fd1fa80c7149773dde5890d3c76f3b';
 
+// Only these assets are tracked — everything else is skipped at ingestion
+const TRACKED_SYMBOLS = new Set(['USDC', 'ETH', 'BNKR']);
+const TRACKED_CONTRACTS = new Set([USDC_CONTRACT, BNKR_CONTRACT]);
+
+export function isTrackedAsset(
+  asset: string | null,
+  contractAddress: string | null,
+): boolean {
+  if (asset && TRACKED_SYMBOLS.has(asset.toUpperCase())) return true;
+  if (contractAddress && TRACKED_CONTRACTS.has(contractAddress.toLowerCase())) return true;
+  return false;
+}
+
 export type PriceResult = {
   usd_value: number | null;
   price_source: string | null;

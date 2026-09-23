@@ -14,7 +14,7 @@ import {
   normalizeNativeTx,
 } from './blockscout.js';
 import { snapshotBalances } from './snapshot.js';
-import { enrichUsdValue } from './price.js';
+import { enrichUsdValue, isTrackedAsset } from './price.js';
 import type { TxRow, EventRow } from './normalize.js';
 
 export type WatchJobRow = {
@@ -155,6 +155,12 @@ export async function syncWallet(job: WatchJobRow, apiKey: string | undefined): 
       // Inject wallet_id and user_id (normalizers used placeholders)
       const tx: TxRow = { ...pair.tx, wallet_id, };
       const event: EventRow = { ...pair.event, wallet_id, user_id };
+
+      // Skip tokens Luca doesn't track (airdrops, spam tokens, unknown ERC-20s)
+      const rawContract =
+        (pair.tx.raw_payload as { rawContract?: { address?: string | null } })?.rawContract;
+      const pairContractAddress = rawContract?.address ?? null;
+      if (!isTrackedAsset(pair.event.asset, pairContractAddress)) continue;
 
       try {
         // Enrich USD value for USDC (1:1), ETH, and BNKR (spot price at block time)
