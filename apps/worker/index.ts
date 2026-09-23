@@ -10,6 +10,7 @@ import { deliverPendingAlerts } from '../../src/alerts/deliver.js';
 import { startBriefScheduler } from '../../src/briefs/scheduler.js';
 import { pingWorkerHeartbeat } from '../../src/health/monitor.js';
 import { detectStaleWallets, detectDiskPressure } from '../../src/health/detectors.js';
+import { takeHeartbeatSnapshot } from '../../src/heartbeat/snapshot.js';
 
 if (config.NODE_ENV === 'production') {
   requireProductionConfig();
@@ -48,6 +49,7 @@ async function runCycle(): Promise<void> {
     const userIds = await getDistinctUserIds();
     for (const userId of userIds) {
       await detectUnknownCounterparties(userId);
+      await takeHeartbeatSnapshot(userId);
       await runAlertDetectors(userId);
       await detectStaleWallets(userId);
       await detectDiskPressure(userId);
