@@ -1,12 +1,14 @@
 import { query } from '../db.js';
 import { formatAddress } from '../telegram/format.js';
+import { getHighConfidenceErrorRate } from '../quality/metrics.js';
 
 type AlertType =
   | 'large_inflow'
   | 'large_outflow'
   | 'spend_spike'
   | 'treasury_floor'
-  | 'unusual_gas';
+  | 'unusual_gas'
+  | 'classifier_degradation';
 
 type NewAlert = {
   userId: string;
@@ -268,6 +270,37 @@ export async function detectUnusualGas(userId: string): Promise<number> {
     type: 'unusual_gas',
     message,
     evidence: { gas_24h: gas24h, daily_avg: dailyAvg, spike_ratio: spikeRatio },
+    dedupKey,
+  });
+  return inserted ? 1 : 0;
+}
+
+// ---------------------------------------------------------------------------
+// Detector: classifier_degradation
+// Fires when high-confidence error rate > 5% and at least 10 high-conf classifications exist
+// dedup_key: classifier_degradation:userId:YYYY-MM-DD
+// ---------------------------------------------------------------------------
+export async function detectClassifierDegradation(userId: string): Promise<number> {
+  const today = new Date().toISOString().slice(0, 10);
+  const dedupKey = `classifier_degradation:${userId}:${today}`;
+
+  const { rate, count, total_high_confidence } = await getHighConfidenceErrorRate(userId);
+
+  // Need meaningful sample and error rate above threshold
+  if (total_high_confidence < 10 || rate < 0.05) return 0;
+
+  const message = [
+    `🔴 Classifier degradation`,
+    `${count} high-confidence classifications were corrected`,
+    `Error rate: ${(rate * 100).toFixed(1)}% of ${total_high_confidence} high-confidence labels`,
+    `Run /quality for the full breakdown`,
+  ].join('\n');
+
+  const inserted = await insertAlert({
+    userId,
+    type: 'classifier_degradation',
+    message,
+    evidence: { error_rate: rate, error_count: count, total_high_confidence },
     dedupKey,
   });
   return inserted ? 1 : 0;
