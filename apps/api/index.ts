@@ -446,11 +446,13 @@ const start = async () => {
   }
 };
 
-process.on('SIGTERM', async () => {
-  logger.info('SIGTERM received — shutting down');
-  await app.close();
-  await closeDb();
-  process.exit(0);
+process.on('SIGTERM', () => {
+  void (async () => {
+    logger.info('SIGTERM received — shutting down');
+    await app.close();
+    await closeDb();
+    process.exit(0);
+  })();
 });
 
 void start();
