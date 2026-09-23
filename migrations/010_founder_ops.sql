@@ -18,7 +18,7 @@ CREATE OR REPLACE VIEW ops_daily_summary AS
 SELECT
   u.id                                                           AS user_id,
   u.telegram_id::text,
-  u.username,
+  u.telegram_username AS username,
   u.role::text,
   u.created_at                                                   AS joined_at,
   u.activated_at,

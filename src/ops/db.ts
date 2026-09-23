@@ -64,7 +64,6 @@ export async function getOpsOverview(): Promise<{
           AND last_synced_at < NOW() - INTERVAL '4 hours') AS stale_wallets,
         (SELECT COUNT(*)::text FROM watch_jobs WHERE status = 'error') AS error_wallets
       FROM users u
-      WHERE u.role = 'operator'
     `),
 
     query<{ last_ping_at: Date; loop_count: string }>(
@@ -203,7 +202,7 @@ export async function getOpsOperatorDetail(userId: string): Promise<{
       created_at: Date; activated_at: Date | null; last_user_active_at: Date | null;
       materiality_usd: string; timezone: string; brief_time: string;
     }>(
-      `SELECT id, username, telegram_id::text, role::text, created_at, activated_at,
+      `SELECT id, telegram_username AS username, telegram_id::text, role::text, created_at, activated_at,
               last_user_active_at, materiality_usd::text, timezone, brief_time
        FROM users WHERE id = $1`,
       [userId],
@@ -332,7 +331,7 @@ export async function getOpsErrors(): Promise<{
 }> {
   const [syncErrors, stale, briefs] = await Promise.all([
     query<{ username: string | null; address: string; error_message: string; updated_at: Date }>(
-      `SELECT u.username, w.address, wj.error_message, wj.updated_at
+      `SELECT u.telegram_username AS username, w.address, wj.error_message, wj.updated_at
        FROM watch_jobs wj
        JOIN wallets w ON w.id = wj.wallet_id
        JOIN users u ON u.id = w.user_id
@@ -341,7 +340,7 @@ export async function getOpsErrors(): Promise<{
     ),
 
     query<{ username: string | null; address: string; hours_stale: string; last_synced_at: Date | null }>(
-      `SELECT u.username, w.address, wj.last_synced_at,
+      `SELECT u.telegram_username AS username, w.address, wj.last_synced_at,
               EXTRACT(EPOCH FROM (NOW() - COALESCE(wj.last_synced_at, NOW() - INTERVAL '48 hours'))) / 3600 AS hours_stale
        FROM watch_jobs wj
        JOIN wallets w ON w.id = wj.wallet_id
@@ -352,7 +351,7 @@ export async function getOpsErrors(): Promise<{
     ),
 
     query<{ username: string | null; type: string; created_at: Date }>(
-      `SELECT u.username, b.type, b.created_at
+      `SELECT u.telegram_username AS username, b.type, b.created_at
        FROM briefs b
        JOIN users u ON u.id = b.user_id
        WHERE b.telegram_message_id IS NULL
@@ -470,7 +469,7 @@ export async function getOpsSystem(): Promise<{
     }>(
       `SELECT sr.started_at, sr.status, sr.provider,
               sr.events_ingested::text, sr.error_message,
-              w.address AS wallet_address, u.username
+              w.address AS wallet_address, u.telegram_username AS username
        FROM sync_runs sr
        JOIN wallets w ON w.id = sr.wallet_id
        JOIN users u ON u.id = w.user_id
