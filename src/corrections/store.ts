@@ -1,5 +1,6 @@
 import { query } from '../db.js';
 import type { ClassificationLabel } from '../types/index.js';
+import type { FailureReason } from './handler.js';
 
 export type EventWithClassification = {
   id: string;
@@ -61,6 +62,18 @@ export type ReviewEvent = {
   label: string | null;
   confidence: number | null;
 };
+
+export async function setFailureReason(
+  correctionId: string,
+  userId: string,
+  failureReason: FailureReason,
+): Promise<void> {
+  await query(
+    `UPDATE corrections SET failure_reason = $1
+     WHERE id = $2 AND user_id = $3`,
+    [failureReason, correctionId, userId],
+  );
+}
 
 export async function getEventsForReview(params: {
   userId: string;

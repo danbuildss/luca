@@ -49,6 +49,12 @@ export type QualityHealthSnapshot = {
   high_confidence_errors: number;   // confidence > 0.8 at time of correction
 };
 
+export type FailureReasonBreakdown = {
+  failure_reason: string;
+  count: number;
+  pct: number;
+};
+
 // ---------------------------------------------------------------------------
 // Health snapshot — 7-day window
 // ---------------------------------------------------------------------------
@@ -438,6 +444,25 @@ export async function getGoldSetResults(userId: string): Promise<GoldSetResult[]
   return res.rows.map((r) => ({
     ...r,
     current_confidence: r.current_confidence ? parseFloat(r.current_confidence) : null,
+  }));
+}
+
+export async function getFailureReasonBreakdown(userId: string): Promise<FailureReasonBreakdown[]> {
+  const res = await query<{ failure_reason: string; count: string }>(
+    `SELECT failure_reason::text, COUNT(*)::text AS count
+     FROM corrections
+     WHERE user_id = $1
+       AND failure_reason IS NOT NULL
+     GROUP BY failure_reason
+     ORDER BY COUNT(*) DESC`,
+    [userId],
+  );
+
+  const total = res.rows.reduce((s, r) => s + parseInt(r.count), 0);
+  return res.rows.map((r) => ({
+    failure_reason: r.failure_reason,
+    count: parseInt(r.count),
+    pct: total > 0 ? parseInt(r.count) / total : 0,
   }));
 }
 

@@ -1,11 +1,30 @@
 import type { Context } from 'telegraf';
+import { Markup } from 'telegraf';
 import { ClassificationLabel, CLASSIFICATION_LABELS } from '../types/index.js';
 import { applyCorrection, EventNotFoundError } from '../corrections/handler.js';
 import { resolveAlert } from '../alerts/counterparty.js';
 import { addGoldTransaction } from '../quality/goldset.js';
+import { setFailureReason } from '../corrections/store.js';
+import type { FailureReason } from '../corrections/handler.js';
 import { query } from '../db.js';
 import { logger } from '../logger.js';
 import type { AuthedUser } from './auth.js';
+
+const FAILURE_REASON_KEYBOARD = (correctionId: string) =>
+  Markup.inlineKeyboard([
+    [
+      Markup.button.callback('Bad rule', `fr:${correctionId}:bad_rule`),
+      Markup.button.callback('Missing counterparty', `fr:${correctionId}:missing_counterparty`),
+    ],
+    [
+      Markup.button.callback('Bad model', `fr:${correctionId}:bad_model_inference`),
+      Markup.button.callback('Missing protocol', `fr:${correctionId}:missing_protocol`),
+    ],
+    [
+      Markup.button.callback('Bad data', `fr:${correctionId}:bad_data`),
+      Markup.button.callback('Skip', `fr_skip:${correctionId}`),
+    ],
+  ]);
 
 // Callback data formats:
 //   label:<eventId>:<label>            — label a review event
@@ -33,6 +52,11 @@ export async function handleCallback(ctx: Context, user: AuthedUser): Promise<vo
       await handleGoldSetLabelCallback(ctx, user, data);
     } else if (data.startsWith('gs_skip:')) {
       await handleGoldSetSkipCallback(ctx, data);
+    } else if (data.startsWith('fr:')) {
+      await handleFailureReasonCallback(ctx, user, data);
+    } else if (data.startsWith('fr_skip:')) {
+      await ctx.answerCbQuery('Ok');
+      try { await ctx.editMessageReplyMarkup(undefined); } catch { /* already edited */ }
     } else {
       await ctx.answerCbQuery('Unknown action');
     }
@@ -54,7 +78,7 @@ async function handleLabelCallback(ctx: Context, user: AuthedUser, data: string)
   }
 
   try {
-    await applyCorrection({
+    const result = await applyCorrection({
       userId: user.userId,
       eventId,
       newLabel: labelValue as ClassificationLabel,
@@ -66,6 +90,12 @@ async function handleLabelCallback(ctx: Context, user: AuthedUser, data: string)
         ? `${(ctx.callbackQuery!.message as { text: string }).text}\n\n✅ Labeled: ${labelValue}`
         : `✅ Labeled: ${labelValue}`,
     );
+    if (result.wasCorrection) {
+      await ctx.reply(
+        '🔬 Why was it wrong?',
+        FAILURE_REASON_KEYBOARD(result.correctionId),
+      );
+    }
   } catch (err) {
     if (err instanceof EventNotFoundError) {
       await ctx.answerCbQuery('Event not found');
@@ -126,7 +156,7 @@ async function handleAlertLabelShortCallback(ctx: Context, user: AuthedUser, dat
   }
 
   try {
-    await Promise.all([
+    const [result] = await Promise.all([
       applyCorrection({
         userId: user.userId,
         eventId,
@@ -137,6 +167,9 @@ async function handleAlertLabelShortCallback(ctx: Context, user: AuthedUser, dat
     ]);
     await ctx.answerCbQuery(`Labeled as ${labelValue} ✓ — future transfers auto-classify`);
     await ctx.editMessageReplyMarkup(undefined);
+    if (result.wasCorrection) {
+      await ctx.reply('🔬 Why was it wrong?', FAILURE_REASON_KEYBOARD(result.correctionId));
+    }
   } catch (err) {
     if (err instanceof EventNotFoundError) {
       await ctx.answerCbQuery('Event not found');
@@ -158,7 +191,7 @@ async function handleAlertLabelCallback(ctx: Context, user: AuthedUser, data: st
   }
 
   try {
-    await Promise.all([
+    const [result] = await Promise.all([
       applyCorrection({
         userId: user.userId,
         eventId,
@@ -169,6 +202,9 @@ async function handleAlertLabelCallback(ctx: Context, user: AuthedUser, data: st
     ]);
     await ctx.answerCbQuery(`Labeled as ${labelValue} ✓ — future transfers auto-classify`);
     await ctx.editMessageReplyMarkup(undefined);
+    if (result.wasCorrection) {
+      await ctx.reply('🔬 Why was it wrong?', FAILURE_REASON_KEYBOARD(result.correctionId));
+    }
   } catch (err) {
     if (err instanceof EventNotFoundError) {
       await ctx.answerCbQuery('Event not found');
@@ -202,4 +238,28 @@ async function handleGoldSetSkipCallback(ctx: Context, _data: string): Promise<v
   try {
     await ctx.editMessageReplyMarkup(undefined);
   } catch { /* already edited */ }
+}
+
+const VALID_FAILURE_REASONS = new Set<FailureReason>([
+  'bad_rule',
+  'missing_counterparty',
+  'bad_model_inference',
+  'missing_protocol',
+  'bad_data',
+]);
+
+async function handleFailureReasonCallback(ctx: Context, user: AuthedUser, data: string): Promise<void> {
+  // fr:<correctionId>:<reason>
+  const parts = data.split(':');
+  if (parts.length !== 3) { await ctx.answerCbQuery('Bad callback data'); return; }
+  const [, correctionId, reason] = parts;
+
+  if (!VALID_FAILURE_REASONS.has(reason as FailureReason)) {
+    await ctx.answerCbQuery('Invalid reason');
+    return;
+  }
+
+  await setFailureReason(correctionId, user.userId, reason as FailureReason);
+  await ctx.answerCbQuery('Tagged ✓');
+  try { await ctx.editMessageReplyMarkup(undefined); } catch { /* already edited */ }
 }
