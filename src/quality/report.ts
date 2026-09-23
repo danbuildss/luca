@@ -7,6 +7,7 @@ import {
   getUnknownDecomposition,
   getWeeklyTrend,
   getGoldSetSummary,
+  getFailureReasonBreakdown,
 } from './metrics.js';
 import { formatAddress } from '../telegram/format.js';
 
@@ -15,7 +16,7 @@ function pct(n: number) {
 }
 
 export async function formatQualityReport(userId: string): Promise<string> {
-  const [snapshot, methodRates, calibration, counterpartyClusters, labelPrecision, unknownDecomp, weeklyTrend, goldSummary] =
+  const [snapshot, methodRates, calibration, counterpartyClusters, labelPrecision, unknownDecomp, weeklyTrend, goldSummary, failureReasons] =
     await Promise.all([
       getHealthSnapshot(userId, 7),
       getMethodErrorRates(userId),
@@ -25,6 +26,7 @@ export async function formatQualityReport(userId: string): Promise<string> {
       getUnknownDecomposition(userId),
       getWeeklyTrend(userId, 8),
       getGoldSetSummary(userId),
+      getFailureReasonBreakdown(userId),
     ]);
 
   const lines: string[] = [];
@@ -125,7 +127,24 @@ export async function formatQualityReport(userId: string): Promise<string> {
     lines.push('');
   }
 
-  // ── Section 8: What to do this week ─────────────────────────────────────
+  // ── Section 8: Failure Root Causes ──────────────────────────────────────
+  if (failureReasons.length > 0) {
+    const REASON_LABEL: Record<string, string> = {
+      bad_rule: 'Bad rule',
+      missing_counterparty: 'Missing counterparty',
+      bad_model_inference: 'Bad model inference',
+      missing_protocol: 'Missing protocol',
+      bad_data: 'Bad data',
+    };
+    lines.push('*🔬 Why errors happen*');
+    for (const r of failureReasons) {
+      const label = REASON_LABEL[r.failure_reason] ?? r.failure_reason;
+      lines.push(`  ${label.padEnd(24)} ${r.count}  (${(r.pct * 100).toFixed(0)}%)`);
+    }
+    lines.push('');
+  }
+
+  // ── Section 9: What to do this week ─────────────────────────────────────
   const actions: string[] = [];
 
   if (counterpartyClusters.length > 0) {
