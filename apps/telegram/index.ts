@@ -238,8 +238,6 @@ function scheduleHealthPoll() {
         for (const userId of userIds) {
           await detectWorkerStale(userId);
         }
-        // Worker stale alerts land in `alerts` table → delivered by deliverPendingAlerts in worker
-        // But if the worker is down, we need to deliver them here instead.
         await sendPendingAlerts(bot);
       } catch (err: unknown) {
         logger.error({ err }, 'Health poll error');
@@ -262,16 +260,20 @@ async function start() {
     { command: 'goldset',  description: 'Label transactions for the test set' },
   ];
 
-  // Delete commands for every scope that old bots may have set them on
-  for (const scope of [
+  // Set commands for every scope so stale commands from old bots are overwritten
+  const scopes = [
     { type: 'default' as const },
     { type: 'all_private_chats' as const },
     { type: 'all_group_chats' as const },
-  ]) {
-    try { await bot.telegram.deleteMyCommands({ scope }); } catch { /* scope may not exist */ }
+  ];
+  for (const scope of scopes) {
+    try {
+      await bot.telegram.setMyCommands(commands, { scope });
+      logger.info({ scope: scope.type }, 'Commands registered');
+    } catch (err) {
+      logger.warn({ err, scope: scope.type }, 'Failed to register commands for scope');
+    }
   }
-
-  await bot.telegram.setMyCommands(commands);
 
   scheduleAlertPoll();
   scheduleHealthPoll();
