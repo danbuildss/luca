@@ -4,7 +4,7 @@ import { dirname, join } from 'path';
 import { query } from '../db.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const BASE_PROMPT = readFileSync(join(__dirname, '../../prompts/system.md'), 'utf8');
+const BASE_PROMPT = readFileSync(join(__dirname, '../../../prompts/system.md'), 'utf8');
 
 type WalletContext = {
   address: string;
