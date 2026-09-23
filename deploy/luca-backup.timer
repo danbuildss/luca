@@ -1,0 +1,11 @@
+[Unit]
+Description=Luca daily Postgres backup timer
+
+[Timer]
+# Runs at 02:00 UTC every day
+OnCalendar=*-*-* 02:00:00
+AccuracySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

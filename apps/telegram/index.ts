@@ -12,6 +12,8 @@ import { sendPendingAlerts } from '../../src/telegram/alerts.js';
 import { generateDailyBrief, generateWeeklyBrief } from '../../src/briefs/generate.js';
 import { saveBrief, markBriefSent } from '../../src/briefs/store.js';
 import { runAgent } from '../../src/agent/run.js';
+import { detectWorkerStale } from '../../src/health/detectors.js';
+import { getDistinctUserIds } from '../../src/classification/store.js';
 
 if (config.NODE_ENV === 'production') {
   requireProductionConfig();
@@ -216,10 +218,35 @@ function scheduleAlertPoll() {
 }
 
 // ---------------------------------------------------------------------------
+// Health polling — checks worker heartbeat every 5 min
+// ---------------------------------------------------------------------------
+let healthTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleHealthPoll() {
+  healthTimer = setTimeout(() => {
+    void (async () => {
+      try {
+        const userIds = await getDistinctUserIds();
+        for (const userId of userIds) {
+          await detectWorkerStale(userId);
+        }
+        // Worker stale alerts land in `alerts` table → delivered by deliverPendingAlerts in worker
+        // But if the worker is down, we need to deliver them here instead.
+        await sendPendingAlerts(bot);
+      } catch (err: unknown) {
+        logger.error({ err }, 'Health poll error');
+      }
+      scheduleHealthPoll();
+    })();
+  }, 5 * 60_000);
+}
+
+// ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
 async function start() {
   scheduleAlertPoll();
+  scheduleHealthPoll();
 
   if (config.NODE_ENV === 'production') {
     // Webhook mode in production — set up externally via setWebhook
@@ -234,6 +261,7 @@ process.on('SIGTERM', () => {
   void (async () => {
     logger.info('SIGTERM received — bot shutting down');
     if (alertTimer) clearTimeout(alertTimer);
+    if (healthTimer) clearTimeout(healthTimer);
     bot.stop('SIGTERM');
     await closeDb();
     process.exit(0);
@@ -243,6 +271,7 @@ process.on('SIGTERM', () => {
 process.on('SIGINT', () => {
   void (async () => {
     if (alertTimer) clearTimeout(alertTimer);
+    if (healthTimer) clearTimeout(healthTimer);
     bot.stop('SIGINT');
     await closeDb();
     process.exit(0);
