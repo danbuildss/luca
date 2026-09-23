@@ -31,7 +31,11 @@ export async function getActiveWatchJobs(): Promise<WatchJobRow[]> {
             w.address AS wallet_address
      FROM watch_jobs wj
      JOIN wallets w ON w.id = wj.wallet_id
-     WHERE wj.status = 'active' AND w.chain = 'base' AND w.active = TRUE`,
+     WHERE (
+       wj.status = 'active'
+       OR (wj.status = 'error' AND wj.updated_at < NOW() - INTERVAL '5 minutes')
+     )
+       AND w.chain = 'base' AND w.active = TRUE`,
   );
   return res.rows;
 }
