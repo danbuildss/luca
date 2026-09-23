@@ -14,6 +14,7 @@ import {
   normalizeNativeTx,
 } from './blockscout.js';
 import { snapshotBalances } from './snapshot.js';
+import { enrichUsdValue, isTrackedAsset } from './price.js';
 import type { TxRow, EventRow } from './normalize.js';
 
 export type WatchJobRow = {
@@ -155,7 +156,26 @@ export async function syncWallet(job: WatchJobRow, apiKey: string | undefined): 
       const tx: TxRow = { ...pair.tx, wallet_id, };
       const event: EventRow = { ...pair.event, wallet_id, user_id };
 
+      // Skip tokens Luca doesn't track (airdrops, spam tokens, unknown ERC-20s)
+      const rawContract =
+        (pair.tx.raw_payload as { rawContract?: { address?: string | null } })?.rawContract;
+      const pairContractAddress = rawContract?.address ?? null;
+      if (!isTrackedAsset(pair.event.asset, pairContractAddress)) continue;
+
       try {
+        // Enrich USD value for USDC (1:1), ETH, and BNKR (spot price at block time)
+        const contractAddress =
+          (pair.tx.raw_payload as { rawContract?: { address?: string | null } })
+            ?.rawContract?.address ?? null;
+        const priceResult = await enrichUsdValue(
+          event.asset,
+          contractAddress,
+          event.amount,
+          event.block_time,
+        );
+        const enrichedEvent: EventRow = { ...event, ...priceResult };
+        const enrichedTx: TxRow = { ...tx, usd_value: priceResult.usd_value };
+
         const txSql = `
           INSERT INTO transactions
             (wallet_id, chain, hash, block_number, block_time, from_address, to_address,
@@ -165,13 +185,14 @@ export async function syncWallet(job: WatchJobRow, apiKey: string | undefined): 
           RETURNING id`;
 
         const txParams = [
-          tx.wallet_id, tx.chain, tx.hash, tx.block_number, tx.block_time,
-          tx.from_address, tx.to_address, tx.asset, tx.amount, tx.usd_value,
-          tx.gas_used, tx.gas_price, tx.gas_usd, tx.direction, tx.tx_type,
-          JSON.stringify(tx.raw_payload),
+          enrichedTx.wallet_id, enrichedTx.chain, enrichedTx.hash, enrichedTx.block_number,
+          enrichedTx.block_time, enrichedTx.from_address, enrichedTx.to_address,
+          enrichedTx.asset, enrichedTx.amount, enrichedTx.usd_value,
+          enrichedTx.gas_used, enrichedTx.gas_price, enrichedTx.gas_usd,
+          enrichedTx.direction, enrichedTx.tx_type, JSON.stringify(enrichedTx.raw_payload),
         ];
 
-        const txId = await insertOrGetTxId(wallet_id, tx.hash, tx.chain, txSql, txParams);
+        const txId = await insertOrGetTxId(wallet_id, enrichedTx.hash, enrichedTx.chain, txSql, txParams);
 
         await query(
           `INSERT INTO normalized_events
@@ -180,10 +201,11 @@ export async function syncWallet(job: WatchJobRow, apiKey: string | undefined): 
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
            ON CONFLICT (chain, hash, wallet_id, COALESCE(log_index, -1)) DO NOTHING`,
           [
-            txId, event.wallet_id, event.user_id, event.chain, event.hash,
-            event.log_index, event.block_time, event.from_address, event.to_address,
-            event.asset, event.amount, event.usd_value, event.price_source,
-            event.price_at, event.direction,
+            txId, enrichedEvent.wallet_id, enrichedEvent.user_id, enrichedEvent.chain,
+            enrichedEvent.hash, enrichedEvent.log_index, enrichedEvent.block_time,
+            enrichedEvent.from_address, enrichedEvent.to_address, enrichedEvent.asset,
+            enrichedEvent.amount, enrichedEvent.usd_value, enrichedEvent.price_source,
+            enrichedEvent.price_at, enrichedEvent.direction,
           ],
         );
 
