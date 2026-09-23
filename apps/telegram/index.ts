@@ -253,11 +253,19 @@ function scheduleHealthPoll() {
 // Boot
 // ---------------------------------------------------------------------------
 async function start() {
+  await bot.telegram.setMyCommands([
+    { command: 'summary',  description: 'P&L for the last 30 days' },
+    { command: 'balance',  description: 'Current wallet balances' },
+    { command: 'brief',    description: 'On-demand financial brief' },
+    { command: 'review',   description: 'Label unknown transactions' },
+    { command: 'quality',  description: 'Classification quality report' },
+    { command: 'goldset',  description: 'Label transactions for the test set' },
+  ]);
+
   scheduleAlertPoll();
   scheduleHealthPoll();
 
   if (config.NODE_ENV === 'production') {
-    // Webhook mode in production — set up externally via setWebhook
     logger.info('Bot starting in polling mode (switch to webhook in production)');
   }
 

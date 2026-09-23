@@ -243,7 +243,7 @@ export async function executeTool(
            bs.asset, bs.balance::text AS balance, bs.snapshot_at
          FROM balance_snapshots bs
          JOIN wallets w ON w.id = bs.wallet_id
-         WHERE bs.user_id = $1
+         WHERE bs.user_id = $1 AND w.active = true
          ORDER BY bs.wallet_id, bs.asset, bs.snapshot_at DESC`,
         [userId],
       );
@@ -290,7 +290,7 @@ export async function executeTool(
                 COALESCE(string_agg(wr.role, ', ' ORDER BY wr.role), '') AS roles
          FROM wallets w
          LEFT JOIN wallet_roles wr ON wr.wallet_id = w.id
-         WHERE w.user_id = $1
+         WHERE w.user_id = $1 AND w.active = true
          GROUP BY w.id, w.address, w.label, w.chain, w.active
          ORDER BY w.created_at`,
         [userId],
@@ -314,7 +314,7 @@ export async function executeTool(
            bs.asset, bs.balance::text AS balance, bs.snapshot_at
          FROM balance_snapshots bs
          JOIN wallets w ON w.id = bs.wallet_id
-         WHERE bs.user_id = $1 AND w.address = $2
+         WHERE bs.user_id = $1 AND w.address = $2 AND w.active = true
          ORDER BY bs.asset, bs.snapshot_at DESC`,
         [userId, address],
       );
@@ -376,7 +376,7 @@ export async function executeTool(
            bs.asset, bs.balance::text AS total
          FROM balance_snapshots bs
          JOIN wallets w ON w.id = bs.wallet_id
-         WHERE bs.user_id = $1 AND bs.asset = 'USDC'
+         WHERE bs.user_id = $1 AND bs.asset = 'USDC' AND w.active = true
          ORDER BY bs.asset, bs.snapshot_at DESC
          LIMIT 1`,
         [userId],
