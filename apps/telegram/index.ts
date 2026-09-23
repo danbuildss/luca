@@ -8,6 +8,8 @@ import { handleReview } from '../../src/telegram/commands/review.js';
 import { handleBalance } from '../../src/telegram/commands/balance.js';
 import { handleQuality } from '../../src/telegram/commands/quality.js';
 import { handleGoldSet } from '../../src/telegram/commands/goldset.js';
+import { handleOps } from '../../src/telegram/commands/ops.js';
+import { touchUserActivity } from '../../src/ops/db.js';
 import { handleCallback } from '../../src/telegram/callbacks.js';
 import { sendPendingAlerts } from '../../src/telegram/alerts.js';
 import { generateDailyBrief, generateWeeklyBrief } from '../../src/briefs/generate.js';
@@ -52,13 +54,15 @@ bot.command('start', async (ctx) => {
     `/balance — Current wallet balances\n` +
     `/brief   — On-demand daily or weekly brief\n` +
     `/quality — Classification quality report\n` +
-    `/goldset — Label transactions for regression testing`,
+    `/goldset — Label transactions for regression testing\n` +
+    `/ops     — Founder ops console (admin only)`,
   );
 });
 
 bot.command('summary', async (ctx) => {
   const user = await requireUser(ctx);
   if (!user) { await ctx.reply("You're not registered."); return; }
+  void touchUserActivity(user.userId);
   const args = ctx.message.text.split(' ').slice(1);
   await handleSummary(ctx, user, args);
 });
@@ -66,12 +70,14 @@ bot.command('summary', async (ctx) => {
 bot.command('review', async (ctx) => {
   const user = await requireUser(ctx);
   if (!user) { await ctx.reply("You're not registered."); return; }
+  void touchUserActivity(user.userId);
   await handleReview(ctx, user);
 });
 
 bot.command('balance', async (ctx) => {
   const user = await requireUser(ctx);
   if (!user) { await ctx.reply("You're not registered."); return; }
+  void touchUserActivity(user.userId);
   await handleBalance(ctx, user);
 });
 
@@ -83,6 +89,7 @@ bot.command('brief', async (ctx) => {
   const args = ctx.message.text.split(' ').slice(1);
   const type = args[0] === 'weekly' ? 'weekly' : 'daily';
 
+  void touchUserActivity(user.userId);
   await ctx.reply(`Generating ${type} brief…`);
   try {
     const now = new Date();
@@ -111,13 +118,22 @@ bot.command('brief', async (ctx) => {
 bot.command('quality', async (ctx) => {
   const user = await requireUser(ctx);
   if (!user) { await ctx.reply("You're not registered."); return; }
+  void touchUserActivity(user.userId);
   await handleQuality(ctx, user);
 });
 
 bot.command('goldset', async (ctx) => {
   const user = await requireUser(ctx);
   if (!user) { await ctx.reply("You're not registered."); return; }
+  void touchUserActivity(user.userId);
   await handleGoldSet(ctx, user);
+});
+
+bot.command('ops', async (ctx) => {
+  const user = await requireUser(ctx);
+  if (!user) { await ctx.reply("You're not registered."); return; }
+  const args = ctx.message.text.split(' ').slice(1);
+  await handleOps(ctx, user, args);
 });
 
 // Power-user: /label <event_id> <label>
@@ -125,6 +141,7 @@ bot.command('label', async (ctx) => {
   const user = await requireUser(ctx);
   if (!user) { await ctx.reply("You're not registered."); return; }
 
+  void touchUserActivity(user.userId);
   const parts = ctx.message.text.split(' ');
   if (parts.length < 3) {
     await ctx.reply('Usage: /label <event_id> <label>');
@@ -164,6 +181,7 @@ bot.on('text', async (ctx) => {
     return;
   }
 
+  void touchUserActivity(user.userId);
   const userMessage = ctx.message.text.trim();
   if (!userMessage) return;
 
