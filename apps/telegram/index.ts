@@ -47,16 +47,19 @@ bot.command('start', async (ctx) => {
     await ctx.reply("You're not registered with Luca yet. Contact the admin to get set up.");
     return;
   }
-  await ctx.reply(
-    `👋 Hi! I'm Luca, your on-chain financial agent.\n\n` +
-    `/summary — P&L for the last 30 days\n` +
-    `/review  — Label unknown transactions\n` +
-    `/balance — Current wallet balances\n` +
-    `/brief   — On-demand daily or weekly brief\n` +
-    `/quality — Classification quality report\n` +
-    `/goldset — Label transactions for regression testing\n` +
-    `/ops     — Founder ops console (admin only)`,
-  );
+  const helpLines = [
+    `👋 Hi! I'm Luca, your on-chain financial agent.\n`,
+    `/summary — P&L for the last 30 days`,
+    `/review  — Label unknown transactions`,
+    `/balance — Current wallet balances`,
+    `/brief   — On-demand daily or weekly brief`,
+    `/quality — Classification quality report`,
+    `/goldset — Label transactions for regression testing`,
+  ];
+  if (user.role === 'admin') {
+    helpLines.push(`/ops     — Founder ops console`);
+  }
+  await ctx.reply(helpLines.join('\n'));
 });
 
 bot.command('summary', async (ctx) => {
