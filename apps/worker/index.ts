@@ -8,6 +8,8 @@ import { detectUnknownCounterparties } from '../../src/alerts/counterparty.js';
 import { runAlertDetectors } from '../../src/alerts/engine.js';
 import { deliverPendingAlerts } from '../../src/alerts/deliver.js';
 import { startBriefScheduler } from '../../src/briefs/scheduler.js';
+import { pingWorkerHeartbeat } from '../../src/health/monitor.js';
+import { detectStaleWallets, detectDiskPressure } from '../../src/health/detectors.js';
 
 if (config.NODE_ENV === 'production') {
   requireProductionConfig();
@@ -24,6 +26,8 @@ let shuttingDown = false;
 let currentCycle: Promise<void> | null = null;
 
 async function runCycle(): Promise<void> {
+  await pingWorkerHeartbeat().catch(() => { /* non-fatal */ });
+
   const jobs = await getActiveWatchJobs();
   logger.info({ count: jobs.length }, 'Sync cycle started');
 
@@ -45,6 +49,8 @@ async function runCycle(): Promise<void> {
     for (const userId of userIds) {
       await detectUnknownCounterparties(userId);
       await runAlertDetectors(userId);
+      await detectStaleWallets(userId);
+      await detectDiskPressure(userId);
       await deliverPendingAlerts(userId);
     }
   }
