@@ -57,7 +57,7 @@ export async function getBooksEvents(params: {
      FROM classifications c
      JOIN normalized_events ne ON ne.id = c.event_id
      WHERE ne.user_id = $1
-       AND c.label = $2
+       AND c.label = $2::classification_label
        AND c.superseded_at IS NULL
        AND ne.block_time >= NOW() - INTERVAL '1 day' * $3
      ORDER BY ne.block_time DESC
