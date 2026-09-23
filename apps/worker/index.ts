@@ -53,7 +53,7 @@ async function runCycle(): Promise<void> {
 async function poll(): Promise<void> {
   if (shuttingDown) return;
 
-  currentCycle = runCycle().catch((err) => {
+  currentCycle = runCycle().catch((err: unknown) => {
     logger.error({ err }, 'Unexpected error in sync cycle');
   });
   await currentCycle;
@@ -63,12 +63,14 @@ async function poll(): Promise<void> {
   }
 }
 
-process.on('SIGTERM', async () => {
-  logger.info('SIGTERM received — worker shutting down');
-  shuttingDown = true;
-  if (currentCycle) await currentCycle;
-  await closeDb();
-  process.exit(0);
+process.on('SIGTERM', () => {
+  void (async () => {
+    logger.info('SIGTERM received — worker shutting down');
+    shuttingDown = true;
+    if (currentCycle) await currentCycle;
+    await closeDb();
+    process.exit(0);
+  })();
 });
 
 logger.info({ pollIntervalMs: POLL_INTERVAL_MS }, 'Luca worker starting');

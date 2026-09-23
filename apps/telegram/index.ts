@@ -169,13 +169,15 @@ bot.catch((err, ctx) => {
 let alertTimer: ReturnType<typeof setTimeout> | null = null;
 
 function scheduleAlertPoll() {
-  alertTimer = setTimeout(async () => {
-    try {
-      await sendPendingAlerts(bot);
-    } catch (err) {
-      logger.error({ err }, 'Alert polling error');
-    }
-    scheduleAlertPoll();
+  alertTimer = setTimeout(() => {
+    void (async () => {
+      try {
+        await sendPendingAlerts(bot);
+      } catch (err: unknown) {
+        logger.error({ err }, 'Alert polling error');
+      }
+      scheduleAlertPoll();
+    })();
   }, 30_000);
 }
 
@@ -194,19 +196,23 @@ async function start() {
   logger.info('Luca Telegram bot started');
 }
 
-process.on('SIGTERM', async () => {
-  logger.info('SIGTERM received — bot shutting down');
-  if (alertTimer) clearTimeout(alertTimer);
-  bot.stop('SIGTERM');
-  await closeDb();
-  process.exit(0);
+process.on('SIGTERM', () => {
+  void (async () => {
+    logger.info('SIGTERM received — bot shutting down');
+    if (alertTimer) clearTimeout(alertTimer);
+    bot.stop('SIGTERM');
+    await closeDb();
+    process.exit(0);
+  })();
 });
 
-process.on('SIGINT', async () => {
-  if (alertTimer) clearTimeout(alertTimer);
-  bot.stop('SIGINT');
-  await closeDb();
-  process.exit(0);
+process.on('SIGINT', () => {
+  void (async () => {
+    if (alertTimer) clearTimeout(alertTimer);
+    bot.stop('SIGINT');
+    await closeDb();
+    process.exit(0);
+  })();
 });
 
 await start();

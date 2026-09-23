@@ -36,9 +36,9 @@ describe('detectSpendSpike', () => {
     expect(count).toBe(1);
 
     // Verify INSERT was called with correct dedup key prefix
-    const insertCall = mockQuery.mock.calls[1];
+    const insertCall = mockQuery.mock.calls[1] as unknown[];
     expect(insertCall[0]).toContain('ON CONFLICT (dedup_key) DO NOTHING');
-    const dedupKey = insertCall[1][4] as string;
+    const dedupKey = (insertCall[1] as unknown[])[4] as string;
     expect(dedupKey).toMatch(/^spend_spike:user-1:/);
   });
 
@@ -90,7 +90,7 @@ describe('detectTreasuryFloor', () => {
     const count = await detectTreasuryFloor('user-1');
     expect(count).toBe(1);
 
-    const dedupKey = mockQuery.mock.calls[1][1][4] as string;
+    const dedupKey = ((mockQuery.mock.calls[1] as unknown[])[1] as unknown[])[4] as string;
     expect(dedupKey).toMatch(/^treasury_floor:w-1:/);
   });
 

@@ -65,6 +65,7 @@ export function startBriefScheduler(): void {
   const telegram = new Telegram(config.TELEGRAM_BOT_TOKEN);
 
   // Runs every minute; each user's brief fires when their local time matches brief_time
+  // eslint-disable-next-line @typescript-eslint/no-misused-promises
   cron.schedule('* * * * *', async () => {
     try {
       const users = await getAllBriefUsers();

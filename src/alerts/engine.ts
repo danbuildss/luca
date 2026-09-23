@@ -21,7 +21,7 @@ export async function runAlertDetectors(userId: string): Promise<number> {
     if (r.status === 'fulfilled') {
       total += r.value;
     } else {
-      logger.error({ err: r.reason, detector: names[i], userId }, 'Alert detector failed');
+      logger.error({ err: r.reason as unknown, detector: names[i], userId }, 'Alert detector failed');
     }
   }
 
