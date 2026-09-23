@@ -253,11 +253,30 @@ function scheduleHealthPoll() {
 // Boot
 // ---------------------------------------------------------------------------
 async function start() {
+  const commands = [
+    { command: 'summary',  description: 'P&L for the last 30 days' },
+    { command: 'balance',  description: 'Current wallet balances' },
+    { command: 'brief',    description: 'On-demand financial brief' },
+    { command: 'review',   description: 'Label unknown transactions' },
+    { command: 'quality',  description: 'Classification quality report' },
+    { command: 'goldset',  description: 'Label transactions for the test set' },
+  ];
+
+  // Delete commands for every scope that old bots may have set them on
+  for (const scope of [
+    { type: 'default' as const },
+    { type: 'all_private_chats' as const },
+    { type: 'all_group_chats' as const },
+  ]) {
+    try { await bot.telegram.deleteMyCommands({ scope }); } catch { /* scope may not exist */ }
+  }
+
+  await bot.telegram.setMyCommands(commands);
+
   scheduleAlertPoll();
   scheduleHealthPoll();
 
   if (config.NODE_ENV === 'production') {
-    // Webhook mode in production — set up externally via setWebhook
     logger.info('Bot starting in polling mode (switch to webhook in production)');
   }
 
