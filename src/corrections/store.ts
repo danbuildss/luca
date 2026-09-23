@@ -88,7 +88,7 @@ export async function getEventsForReview(params: {
      FROM normalized_events ne
      LEFT JOIN classifications c ON c.event_id = ne.id AND c.superseded_at IS NULL
      WHERE ne.user_id = $1
-       AND ($2::text IS NULL OR c.label = $2)
+       AND ($2::text IS NULL OR c.label = $2::classification_label)
      ORDER BY ne.block_time DESC
      LIMIT $3`,
     [userId, label, limit],
