@@ -23,6 +23,8 @@ export async function applyCorrection(params: ApplyCorrectionParams): Promise<vo
 
   const counterparty = event.direction === 'in' ? event.from_address : event.to_address;
   const oldLabel = event.current_label ?? null;
+  const oldClassificationId = event.current_classification_id ?? null;
+  const oldConfidence = event.current_confidence ?? null;
   const evidence = `User correction: ${params.reason ?? 'manual label'}`;
 
   const client = await pool.connect();
@@ -41,10 +43,16 @@ export async function applyCorrection(params: ApplyCorrectionParams): Promise<vo
       [params.eventId, params.userId, params.newLabel, evidence],
     );
 
+    const createdRule = counterparty !== null && counterparty !== undefined;
     await client.query(
-      `INSERT INTO corrections (user_id, type, event_id, counterparty_address, old_label, new_label, reason)
-       VALUES ($1, 'tx', $2, $3, $4, $5, $6)`,
-      [params.userId, params.eventId, counterparty, oldLabel, params.newLabel, params.reason ?? null],
+      `INSERT INTO corrections
+         (user_id, type, event_id, counterparty_address, old_label, new_label, reason,
+          classification_id, old_confidence, created_rule)
+       VALUES ($1, 'tx', $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
+        params.userId, params.eventId, counterparty, oldLabel, params.newLabel,
+        params.reason ?? null, oldClassificationId, oldConfidence, createdRule,
+      ],
     );
 
     await client.query('COMMIT');

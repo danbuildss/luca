@@ -337,15 +337,10 @@ export async function getHighConfidenceErrorRate(userId: string): Promise<{
     error_count: string;
   }>(
     `SELECT
-       COUNT(DISTINCT c.id)::text AS total_high_conf,
-       COUNT(DISTINCT cr.id)::text AS error_count
-     FROM classifications c
-     LEFT JOIN corrections cr ON cr.event_id = c.event_id
-       AND cr.user_id = $1
-       AND cr.old_label IS NOT NULL
-     WHERE c.user_id = $1
-       AND c.confidence > 0.8
-       AND c.superseded_at IS NULL`,
+       SUM(total_high_conf)::text AS total_high_conf,
+       SUM(error_count)::text AS error_count
+     FROM quality_method_error_rates
+     WHERE user_id = $1`,
     [userId],
   );
 
@@ -357,4 +352,115 @@ export async function getHighConfidenceErrorRate(userId: string): Promise<{
     count: errors,
     total_high_confidence: total,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Weekly trend — correction rate and unknown rate week over week
+// ---------------------------------------------------------------------------
+
+export type WeeklyTrend = {
+  week_start: Date;
+  total_classified: number;
+  unknown_count: number;
+  correction_count: number;
+  unknown_rate: number;
+  correction_rate: number;
+};
+
+export async function getWeeklyTrend(userId: string, weeks = 8): Promise<WeeklyTrend[]> {
+  const res = await query<{
+    week_start: Date;
+    total_classified: string;
+    unknown_count: string;
+    correction_count: string;
+    unknown_rate: string;
+    correction_rate: string;
+  }>(
+    `SELECT week_start, total_classified, unknown_count, correction_count,
+            unknown_rate, correction_rate
+     FROM quality_weekly_trend
+     WHERE user_id = $1
+       AND week_start >= NOW() - ($2 || ' weeks')::INTERVAL
+     ORDER BY week_start DESC`,
+    [userId, weeks.toString()],
+  );
+
+  return res.rows.map((r) => ({
+    week_start: r.week_start,
+    total_classified: parseInt(r.total_classified),
+    unknown_count: parseInt(r.unknown_count),
+    correction_count: parseInt(r.correction_count),
+    unknown_rate: parseFloat(r.unknown_rate ?? '0'),
+    correction_rate: parseFloat(r.correction_rate ?? '0'),
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Gold set — regression test pass rate
+// ---------------------------------------------------------------------------
+
+export type GoldSetResult = {
+  event_id: string;
+  correct_label: string;
+  current_label: string | null;
+  current_confidence: number | null;
+  current_method: string | null;
+  is_correct: boolean;
+  notes: string | null;
+};
+
+export type GoldSetSummary = {
+  correct_label: string;
+  total: number;
+  correct: number;
+  wrong: number;
+  pass_rate: number;
+};
+
+export async function getGoldSetResults(userId: string): Promise<GoldSetResult[]> {
+  const res = await query<{
+    event_id: string;
+    correct_label: string;
+    current_label: string | null;
+    current_confidence: string | null;
+    current_method: string | null;
+    is_correct: boolean;
+    notes: string | null;
+  }>(
+    `SELECT event_id, correct_label, current_label, current_confidence,
+            current_method, is_correct, notes
+     FROM gold_set_results
+     WHERE user_id = $1
+     ORDER BY is_correct ASC, correct_label`,
+    [userId],
+  );
+
+  return res.rows.map((r) => ({
+    ...r,
+    current_confidence: r.current_confidence ? parseFloat(r.current_confidence) : null,
+  }));
+}
+
+export async function getGoldSetSummary(userId: string): Promise<GoldSetSummary[]> {
+  const res = await query<{
+    correct_label: string;
+    total: string;
+    correct: string;
+    wrong: string;
+    pass_rate: string;
+  }>(
+    `SELECT correct_label, total, correct, wrong, pass_rate
+     FROM gold_set_summary
+     WHERE user_id = $1
+     ORDER BY pass_rate ASC`,
+    [userId],
+  );
+
+  return res.rows.map((r) => ({
+    correct_label: r.correct_label,
+    total: parseInt(r.total),
+    correct: parseInt(r.correct),
+    wrong: parseInt(r.wrong),
+    pass_rate: parseFloat(r.pass_rate ?? '0'),
+  }));
 }

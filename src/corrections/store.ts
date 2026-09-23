@@ -9,6 +9,8 @@ export type EventWithClassification = {
   asset: string | null;
   amount: number | null;
   current_label: ClassificationLabel | null;
+  current_classification_id: string | null;
+  current_confidence: number | null;
 };
 
 export async function getEventWithClassification(
@@ -17,7 +19,9 @@ export async function getEventWithClassification(
 ): Promise<EventWithClassification | null> {
   const res = await query<EventWithClassification>(
     `SELECT ne.id, ne.direction, ne.from_address, ne.to_address, ne.asset, ne.amount,
-            c.label AS current_label
+            c.label AS current_label,
+            c.id    AS current_classification_id,
+            c.confidence AS current_confidence
      FROM normalized_events ne
      LEFT JOIN classifications c ON c.event_id = ne.id AND c.superseded_at IS NULL
      WHERE ne.id = $1 AND ne.user_id = $2`,
