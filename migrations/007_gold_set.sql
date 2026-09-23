@@ -25,7 +25,7 @@ SELECT
   c.label         AS current_label,
   c.confidence    AS current_confidence,
   c.method        AS current_method,
-  CASE WHEN c.label = gt.correct_label THEN true ELSE false END AS is_correct,
+  CASE WHEN c.label::text = gt.correct_label THEN true ELSE false END AS is_correct,
   gt.notes,
   gt.added_at
 FROM gold_transactions gt
