@@ -57,6 +57,7 @@ export async function getStaleWallets(userId: string, thresholdHours = 4): Promi
      FROM wallets w
      JOIN watch_jobs wj ON wj.wallet_id = w.id
      WHERE w.user_id = $1
+       AND w.active = TRUE
        AND wj.status = 'active'
        AND EXTRACT(EPOCH FROM (NOW() - COALESCE(wj.last_synced_at, NOW() - INTERVAL '24 hours'))) / 3600 >= $2`,
     [userId, thresholdHours],
