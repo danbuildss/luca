@@ -1,5 +1,5 @@
 import axios from 'axios';
-import pRetry from 'p-retry';
+import pRetry, { AbortError } from 'p-retry';
 import { logger } from '../logger.js';
 
 export type AlchemyTransfer = {
@@ -19,7 +19,20 @@ export type AlchemyTransfer = {
   };
 };
 
-type JsonRpcResult<T> = { id: number; jsonrpc: '2.0'; result: T };
+type JsonRpcResult<T> = {
+  id: number;
+  jsonrpc: '2.0';
+  result?: T;
+  error?: { code: number; message: string };
+};
+
+// A JSON-RPC error (bad params, range too large…) is deterministic: fail fast instead of
+// retrying, and never hand `undefined` back as if it were a result.
+export class RpcError extends Error {
+  constructor(readonly method: string, readonly code: number, message: string) {
+    super(`${method}: ${message}`);
+  }
+}
 type TransfersResult = { transfers: AlchemyTransfer[]; pageKey?: string };
 
 function rpcUrl(apiKey: string): string {
@@ -35,7 +48,10 @@ async function rpc<T>(apiKey: string, method: string, params: unknown[]): Promis
         method,
         params,
       });
-      return res.data.result;
+      if (res.data.error) {
+        throw new AbortError(new RpcError(method, res.data.error.code, res.data.error.message));
+      }
+      return res.data.result as T;
     },
     {
       retries: 3,
@@ -129,3 +145,158 @@ export function backfillFromBlock(currentBlock: number): string {
 export function blockToHex(block: number): string {
   return '0x' + block.toString(16);
 }
+
+// ---------------------------------------------------------------------------
+// Receipts, logs, blocks and balances at a block (archive reads)
+// ---------------------------------------------------------------------------
+
+function big(hex: string | null | undefined): bigint {
+  return hex ? BigInt(hex) : 0n;
+}
+
+type RpcReceipt = {
+  transactionHash: string;
+  blockNumber: string;
+  blockHash: string | null;
+  status: string | null;
+  from: string;
+  to: string | null;
+  gasUsed: string;
+  effectiveGasPrice?: string | null;
+  // OP Stack (Base) fields
+  l1Fee?: string | null;
+  operatorFeeScalar?: string | null;
+  operatorFeeConstant?: string | null;
+};
+
+export type TxReceipt = {
+  hash: string;
+  blockNumber: number;
+  blockHash: string | null;
+  status: 'success' | 'failed';
+  from: string;
+  to: string | null;
+  gasUsed: bigint;
+  effectiveGasPrice: bigint;
+  l1Fee: bigint;
+  operatorFee: bigint;
+  // Everything the sender paid in ETH for this transaction
+  fee: bigint;
+  raw: Record<string, unknown>;
+};
+
+// Base fee = L2 execution (gasUsed × effectiveGasPrice) + L1 data fee
+// + operator fee (OP Isthmus: gasUsed × scalar / 1e6 + constant; zero when absent).
+export function parseReceipt(r: RpcReceipt): TxReceipt {
+  const gasUsed = big(r.gasUsed);
+  const effectiveGasPrice = big(r.effectiveGasPrice);
+  const l1Fee = big(r.l1Fee);
+  const operatorFee = r.operatorFeeScalar != null || r.operatorFeeConstant != null
+    ? (gasUsed * big(r.operatorFeeScalar)) / 1_000_000n + big(r.operatorFeeConstant)
+    : 0n;
+  return {
+    hash: r.transactionHash,
+    blockNumber: parseInt(r.blockNumber, 16),
+    blockHash: r.blockHash,
+    status: r.status === '0x1' ? 'success' : 'failed',
+    from: r.from,
+    to: r.to,
+    gasUsed,
+    effectiveGasPrice,
+    l1Fee,
+    operatorFee,
+    fee: gasUsed * effectiveGasPrice + l1Fee + operatorFee,
+    raw: r as unknown as Record<string, unknown>,
+  };
+}
+
+export async function getTransactionReceipt(apiKey: string, hash: string): Promise<TxReceipt | null> {
+  const r = await rpc<RpcReceipt | null>(apiKey, 'eth_getTransactionReceipt', [hash]);
+  return r ? parseReceipt(r) : null;
+}
+
+export type RpcLog = {
+  address: string;
+  topics: string[];
+  data: string;
+  blockNumber: string;
+  blockHash: string;
+  transactionHash: string;
+  logIndex: string;
+  removed?: boolean;
+};
+
+export const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+
+export function addressTopic(address: string): string {
+  return '0x' + address.toLowerCase().replace(/^0x/, '').padStart(64, '0');
+}
+
+// eth_getLogs over [fromBlock, toBlock] in chunks; a chunk the provider rejects is halved.
+export async function getLogsChunked(
+  apiKey: string,
+  filter: { address: string[]; topics: Array<string | null> },
+  fromBlock: number,
+  toBlock: number,
+  chunk = 2_000,
+): Promise<RpcLog[]> {
+  const out: RpcLog[] = [];
+  let start = fromBlock;
+  let size = chunk;
+  while (start <= toBlock) {
+    const end = Math.min(toBlock, start + size - 1);
+    try {
+      const logs = await rpc<RpcLog[]>(apiKey, 'eth_getLogs', [{
+        address: filter.address,
+        topics: filter.topics,
+        fromBlock: blockToHex(start),
+        toBlock: blockToHex(end),
+      }]);
+      out.push(...logs.filter((l) => !l.removed));
+      start = end + 1;
+      size = chunk;
+    } catch (err) {
+      if (!(err instanceof RpcError) || size <= 1) throw err;
+      size = Math.max(1, Math.floor(size / 2));
+    }
+  }
+  return out;
+}
+
+export type BlockInfo = {
+  number: number;
+  timestamp: number; // unix seconds
+  transactions: Array<{ hash: string; from: string; to: string | null }>;
+};
+
+export async function getBlock(apiKey: string, blockNumber: number, withTransactions = false): Promise<BlockInfo | null> {
+  const b = await rpc<{
+    number: string;
+    timestamp: string;
+    transactions: Array<string | { hash: string; from: string; to: string | null }>;
+  } | null>(apiKey, 'eth_getBlockByNumber', [blockToHex(blockNumber), withTransactions]);
+  if (!b) return null;
+  return {
+    number: parseInt(b.number, 16),
+    timestamp: parseInt(b.timestamp, 16),
+    transactions: withTransactions
+      ? (b.transactions as Array<{ hash: string; from: string; to: string | null }>)
+      : [],
+  };
+}
+
+export async function getEthBalanceAt(apiKey: string, walletAddress: string, blockNumber: number): Promise<bigint> {
+  return big(await rpc<string>(apiKey, 'eth_getBalance', [walletAddress, blockToHex(blockNumber)]));
+}
+
+export async function getErc20BalanceAt(
+  apiKey: string,
+  walletAddress: string,
+  contract: string,
+  blockNumber: number,
+): Promise<bigint> {
+  const data = '0x70a08231' + walletAddress.slice(2).toLowerCase().padStart(64, '0');
+  const hex = await rpc<string>(apiKey, 'eth_call', [{ to: contract, data }, blockToHex(blockNumber)]);
+  return hex === '0x' ? 0n : big(hex);
+}
+

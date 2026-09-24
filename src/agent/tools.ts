@@ -3,6 +3,7 @@ import { query } from '../db.js';
 import { getPnlSummary, getBooksSummary, getBooksEvents } from '../books/query.js';
 import { getValuedBalances } from '../books/balances.js';
 import { getOverview } from '../books/overview.js';
+import { getLedgerStatus } from '../ledger/status.js';
 import { getEventsForReview, getEventWithClassification, resolveEventRef } from '../corrections/store.js';
 import { applyCorrection } from '../corrections/handler.js';
 import { ClassificationLabel, CLASSIFICATION_LABELS, WALLET_ROLES, SUPPORTED_CHAINS } from '../types/index.js';
@@ -283,8 +284,9 @@ export async function executeTool(
 ): Promise<ToolResult> {
   switch (toolName) {
     case 'get_cash_position': {
-      const valued = await getValuedBalances(userId);
+      const [valued, ledger] = await Promise.all([getValuedBalances(userId), getLedgerStatus(userId)]);
       return {
+        ledger,
         balances: valued.balances.map((b) => ({
           address: b.wallet_address,
           label: b.wallet_label,
@@ -306,11 +308,12 @@ export async function executeTool(
 
     case 'get_books_summary': {
       const periodDays = (args.period_days as number | undefined) ?? 30;
-      const [pnl, breakdown] = await Promise.all([
+      const [pnl, breakdown, ledger] = await Promise.all([
         getPnlSummary(userId, periodDays),
         getBooksSummary(userId, periodDays),
+        getLedgerStatus(userId),
       ]);
-      return { pnl, breakdown };
+      return { pnl, breakdown, ledger };
     }
 
     case 'get_recent_activity': {

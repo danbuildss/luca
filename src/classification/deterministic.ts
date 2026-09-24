@@ -13,6 +13,16 @@ export function classifyDeterministic(
 ): ClassificationResult | null {
   const wallets = new Set(userWalletAddresses.map((a) => a.toLowerCase()));
 
+  // 0. Network fee recorded from the transaction receipt
+  if (event.source_key === 'gas') {
+    return {
+      label: ClassificationLabel.GAS,
+      confidence: 1.0,
+      method: 'deterministic',
+      evidence: 'Network fee from the transaction receipt',
+    };
+  }
+
   // 1. Internal transfer: both sides are user-owned wallets
   if (
     event.from_address &&

@@ -29,8 +29,17 @@ vi.mock('../../src/ingestion/alchemy.js', async (importOriginal) => {
     }),
     getEthBalance: vi.fn(() => Promise.resolve(1)),
     getErc20Balance: vi.fn(() => Promise.resolve(0)),
+    // Cross-check and gas sources report nothing extra in these tests
+    getLogsChunked: vi.fn(() => Promise.resolve([])),
+    getTransactionReceipt: vi.fn(() => Promise.resolve(null)),
+    getBlock: vi.fn(() => Promise.resolve(null)),
   };
 });
+
+vi.mock('../../src/ingestion/blockscout.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/ingestion/blockscout.js')>()),
+  fetchSentTransactions: vi.fn(() => Promise.resolve([])),
+}));
 
 vi.mock('../../src/ingestion/price.js', () => ({
   enrichUsdValue: vi.fn((identity: { tokenAddress: string | null }, amount: number | null) =>

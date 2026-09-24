@@ -23,7 +23,7 @@ export async function getUnclassifiedEvents(
   limit = 200,
 ): Promise<UnclassifiedEvent[]> {
   const res = await query<UnclassifiedEvent>(
-    `SELECT ne.id, ne.user_id, ne.wallet_id, ne.hash, ne.log_index, ne.block_time,
+    `SELECT ne.id, ne.user_id, ne.wallet_id, ne.hash, ne.log_index, ne.source_key, ne.block_time,
             ne.from_address, ne.to_address, ne.asset, ne.amount, ne.direction,
             c.id AS active_classification_id
      FROM normalized_events ne
