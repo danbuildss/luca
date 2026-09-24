@@ -3,6 +3,7 @@ import {
   normalizeTokenTransfer,
   normalizeNativeTx,
   isIngestibleNativeTx,
+  minedBlock,
   type BlockscoutTokenTransfer,
   type BlockscoutTx,
 } from '../../src/ingestion/blockscout.js';
@@ -33,7 +34,7 @@ function makeTokenTransfer(overrides: Partial<BlockscoutTokenTransfer> = {}): Bl
 function makeNativeTx(overrides: Partial<BlockscoutTx> = {}): BlockscoutTx {
   return {
     hash: '0xcafebabe',
-    block: 12345678,
+    block_number: 12345678,
     timestamp: '2024-01-15T10:30:00.000000Z',
     from: { hash: WALLET },
     to: { hash: OTHER },
@@ -185,6 +186,25 @@ describe('isIngestibleNativeTx', () => {
   });
 
   it('skips txs before the start block', () => {
-    expect(keep(makeNativeTx({ block: 11_999_999 }))).toBe(false);
+    expect(keep(makeNativeTx({ block_number: 11_999_999 }))).toBe(false);
+  });
+});
+
+describe('minedBlock', () => {
+  it('reads block_number, the API v2 field', () => {
+    expect(minedBlock(makeNativeTx({ block_number: 50531497 }))).toBe(50531497);
+  });
+
+  it('still reads block from older Blockscout versions', () => {
+    expect(minedBlock(makeNativeTx({ block_number: undefined, block: 42 }))).toBe(42);
+  });
+
+  it('fails loudly when a mined transaction has no block, instead of dropping it', () => {
+    expect(() => minedBlock(makeNativeTx({ block_number: undefined }))).toThrow(/no block number/);
+  });
+
+  it('pending transactions are skipped before their block is read', () => {
+    const keep = isIngestibleNativeTx(0);
+    expect(keep(makeNativeTx({ block_number: null, status: null }))).toBe(false);
   });
 });

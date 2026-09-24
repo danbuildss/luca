@@ -318,7 +318,9 @@ export async function ingestRange(
     try {
       const logs = await fetchSupportedTokenLogs(apiKey, w.wallet_address, fromBlock, toBlock);
       const seen = new Set(pairs.map((p) => `${p.event.hash.toLowerCase()}|${p.event.source_key}`));
-      const missing = logs.filter((l) => !seen.has(`${l.hash.toLowerCase()}|log:${l.logIndex}`));
+      // Zero-value transfers move nothing (usually address-poisoning spam), so they are not gaps.
+      const missing = logs.filter((l) =>
+        l.raw > 0n && !seen.has(`${l.hash.toLowerCase()}|log:${l.logIndex}`));
       const times = await blockTimes(apiKey, missing.map((l) => l.blockNumber));
       for (const l of missing) {
         const time = times.get(l.blockNumber);
@@ -358,6 +360,9 @@ export async function ingestRange(
     // Inject wallet_id and user_id (normalizers used placeholders)
     const tx: TxRow = { ...item.tx, wallet_id: w.wallet_id };
     const event: EventRow = { ...item.event, wallet_id: w.wallet_id, user_id: w.user_id };
+    // A transfer of zero moves no money: kept as evidence, never in the books. Most are
+    // address-poisoning spam made to look like a payment from this wallet.
+    if (event.raw_amount === '0') event.supported = false;
     try {
       if (item.receipt) {
         await insertRawReceipt(w.wallet_id, item.receipt);

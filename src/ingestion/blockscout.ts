@@ -27,15 +27,25 @@ export type BlockscoutTokenTransfer = {
 
 export type BlockscoutTx = {
   hash: string;
-  block: number;
+  // API v2 calls it block_number; older Blockscout versions used block. Null while pending.
+  block_number?: number | null;
+  block?: number | null;
   timestamp: string;
   from: { hash: string };
   to: { hash: string } | null;
   value: string; // wei as string
   gas_used: string | null;
   gas_price: string | null;
-  status: string;
+  status: string | null;
 };
+
+// Block of a mined transaction. A mined transaction without one means the API changed
+// shape: fail loudly rather than silently drop every transaction (and its gas).
+export function minedBlock(t: BlockscoutTx): number {
+  const b = t.block_number ?? t.block;
+  if (typeof b !== 'number') throw new Error(`Blockscout transaction ${t.hash} has no block number`);
+  return b;
+}
 
 type PagedResponse<T> = {
   items: T[];
@@ -98,8 +108,8 @@ export async function fetchTokenTransfers(
 // (status 'error') and pending (status null) txs moved no ETH.
 export function isIngestibleNativeTx(fromBlockNumber: number): (t: BlockscoutTx) => boolean {
   return (t) =>
-    t.block >= fromBlockNumber &&
     t.status === 'ok' &&
+    minedBlock(t) >= fromBlockNumber &&
     Boolean(t.value) &&
     t.value !== '0';
 }
@@ -121,8 +131,8 @@ export async function fetchNativeTransactions(
     const relevant = page.items.filter(isIngestibleNativeTx(fromBlockNumber));
     all.push(...relevant);
 
-    const oldest = page.items.at(-1);
-    if (!oldest || oldest.block < fromBlockNumber) break;
+    const oldest = page.items.filter((t) => t.status !== null).at(-1);
+    if (!oldest || minedBlock(oldest) < fromBlockNumber) break;
 
     nextParams = page.next_page_params;
   } while (nextParams);
@@ -148,13 +158,14 @@ export async function fetchSentTransactions(
     });
 
     const page = await get<PagedResponse<BlockscoutTx>>(url);
-    all.push(...page.items.filter((t) =>
-      t.block >= fromBlock && t.block <= toBlock &&
-      t.status !== null &&
-      t.from.hash.toLowerCase() === wallet));
+    const mined = page.items.filter((t) => t.status !== null);
+    all.push(...mined.filter((t) => {
+      const block = minedBlock(t);
+      return block >= fromBlock && block <= toBlock && t.from.hash.toLowerCase() === wallet;
+    }));
 
-    const oldest = page.items.at(-1);
-    if (!oldest || oldest.block < fromBlock) break;
+    const oldest = mined.at(-1);
+    if (!oldest || minedBlock(oldest) < fromBlock) break;
 
     nextParams = page.next_page_params;
   } while (nextParams);
@@ -277,7 +288,7 @@ export function normalizeNativeTx(
     wallet_id: walletId,
     chain: 'base',
     hash: t.hash,
-    block_number: t.block,
+    block_number: minedBlock(t),
     block_time: blockTime,
     from_address: t.from.hash,
     to_address: t.to?.hash ?? null,
@@ -302,7 +313,7 @@ export function normalizeNativeTx(
     token_address: null,
     supported: true,
     raw_amount: toRawAmount(t.value),
-    block_number: t.block,
+    block_number: minedBlock(t),
     category: 'external',
     block_time: blockTime,
     from_address: t.from.hash,

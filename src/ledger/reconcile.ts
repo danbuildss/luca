@@ -12,7 +12,7 @@ import { formatAddress } from '../telegram/format.js';
 // chain moved without the ledger, re-read that block from every source, and check again.
 
 export const RECONCILE_INTERVAL_MINUTES = 60;
-const MAX_REPAIRS_PER_ASSET = 3;
+export const MAX_REPAIRS_PER_ASSET = 10;
 
 type Asset = { symbol: 'ETH' | 'USDC' | 'BNKR'; token: string | null };
 export const LEDGER_ASSETS: Asset[] = [
@@ -173,18 +173,23 @@ async function reconcileAsset(
     return { asset: asset.symbol, status: 'ok' };
   }
 
-  const repaired: number[] = [];
-  let lo = base.block;
-  let hi = toBlock;
-  for (let attempt = 0; attempt < MAX_REPAIRS_PER_ASSET; attempt++) {
-    // Invariant: the ledger matches the chain at lo and not at hi.
-    while (hi - lo > 1) {
-      const mid = Math.floor((lo + hi) / 2);
-      const onchainMid = await onchainBalance(apiKey, w.wallet_address, asset, mid);
-      if (onchainMid === await expectedAt(mid)) lo = mid;
-      else hi = mid;
+  // Narrows (from, to] to the first block where the ledger stops matching the chain:
+  // returns it as `bad` and the block just before it as `good`. The caller guarantees the
+  // ledger matches at `from` and not at `to`.
+  const firstMismatch = async (from: number, to: number): Promise<{ good: number; bad: number }> => {
+    let good = from;
+    let bad = to;
+    while (bad - good > 1) {
+      const mid = Math.floor((good + bad) / 2);
+      if (await onchainBalance(apiKey, w.wallet_address, asset, mid) === await expectedAt(mid)) good = mid;
+      else bad = mid;
     }
+    return { good, bad };
+  };
 
+  const repaired: number[] = [];
+  let { good: lo, bad: hi } = await firstMismatch(base.block, toBlock);
+  for (let attempt = 0; attempt < MAX_REPAIRS_PER_ASSET; attempt++) {
     const before = await expectedAt(toBlock);
     await repairBlock(w, apiKey, hi);
     repaired.push(hi);
@@ -199,12 +204,11 @@ async function reconcileAsset(
       logger.info({ wallet_id: w.wallet_id, asset: asset.symbol, repaired }, 'Ledger gap repaired');
       return { asset: asset.symbol, status: 'repaired' };
     }
-    // The re-read found nothing new at this block: no further progress possible now.
+    // The re-read found nothing new at this block: hi is the unexplained change.
     if (expected === before) break;
-    // Something was recovered but another gap remains later on; keep searching.
+    // Something was recovered. If this block now adds up, look for the next gap after it.
     if (await onchainBalance(apiKey, w.wallet_address, asset, hi) === await expectedAt(hi)) {
-      lo = hi;
-      hi = toBlock;
+      ({ good: lo, bad: hi } = await firstMismatch(hi, toBlock));
     }
   }
 
