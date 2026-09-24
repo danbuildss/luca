@@ -2,7 +2,8 @@ import { Telegraf } from 'telegraf';
 import { config, requireProductionConfig } from '../../src/config.js';
 import { closeDb } from '../../src/db.js';
 import { logger } from '../../src/logger.js';
-import { getUserByTelegramId } from '../../src/telegram/auth.js';
+import type { AuthedUser } from '../../src/telegram/auth.js';
+import { resolveTelegramUser, inviteUsername, revokeUsername } from '../../src/telegram/onboarding.js';
 import { handleSummary } from '../../src/telegram/commands/summary.js';
 import { handleReview } from '../../src/telegram/commands/review.js';
 import { handleBalance } from '../../src/telegram/commands/balance.js';
@@ -33,12 +34,32 @@ if (!config.TELEGRAM_BOT_TOKEN) {
 const bot = new Telegraf(config.TELEGRAM_BOT_TOKEN);
 
 // ---------------------------------------------------------------------------
-// Auth middleware — resolves telegram_id → user_id for every update
+// Auth — resolves the sender to a user, signing up invited beta testers on first
+// contact. Replies with the refusal itself, so callers just return on null.
 // ---------------------------------------------------------------------------
-async function requireUser(ctx: Parameters<typeof handleSummary>[0]) {
-  const telegramId = ctx.from?.id;
-  if (!telegramId) return null;
-  return getUserByTelegramId(telegramId);
+const NOT_INVITED_MSG =
+  "Luca is in private beta and you're not on the invite list yet. Message @danbuildss to request access.";
+const REVOKED_MSG =
+  'Your Luca beta access has been turned off. Message @danbuildss if you think this is a mistake.';
+const WELCOME_MSG = [
+  "👋 Welcome to Luca, you're in.",
+  '',
+  "Send me the Base wallet address you want me to watch (0x…) and I'll start keeping your books.",
+  'Type /start any time to see what I can do.',
+].join('\n');
+
+async function requireUser(ctx: Parameters<typeof handleSummary>[0]): Promise<AuthedUser | null> {
+  const from = ctx.from;
+  if (!from) return null;
+  const access = await resolveTelegramUser({ id: from.id, username: from.username });
+  if (access.status === 'ok') {
+    if (access.created) await ctx.reply(WELCOME_MSG);
+    return access.user;
+  }
+  const msg = access.status === 'revoked' ? REVOKED_MSG : NOT_INVITED_MSG;
+  if (ctx.callbackQuery) await ctx.answerCbQuery(msg);
+  else await ctx.reply(msg);
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -46,10 +67,7 @@ async function requireUser(ctx: Parameters<typeof handleSummary>[0]) {
 // ---------------------------------------------------------------------------
 bot.command('start', async (ctx) => {
   const user = await requireUser(ctx);
-  if (!user) {
-    await ctx.reply("You're not registered with Luca yet. Contact the admin to get set up.");
-    return;
-  }
+  if (!user) return;
   const helpLines = [
     `👋 Hi! I'm Luca, your on-chain financial agent.\n`,
     `/summary — P&L for the last 30 days`,
@@ -60,14 +78,18 @@ bot.command('start', async (ctx) => {
     `/goldset — Label transactions for regression testing`,
   ];
   if (user.role === 'admin') {
-    helpLines.push(`/ops     — Founder ops console`);
+    helpLines.push(
+      `/ops     — Founder ops console`,
+      `/invite @user — Invite a beta tester`,
+      `/revoke @user — Remove a tester's access`,
+    );
   }
   await ctx.reply(helpLines.join('\n'));
 });
 
 bot.command('summary', async (ctx) => {
   const user = await requireUser(ctx);
-  if (!user) { await ctx.reply("You're not registered."); return; }
+  if (!user) return;
   void touchUserActivity(user.userId);
   const args = ctx.message.text.split(' ').slice(1);
   await handleSummary(ctx, user, args);
@@ -75,14 +97,14 @@ bot.command('summary', async (ctx) => {
 
 bot.command('review', async (ctx) => {
   const user = await requireUser(ctx);
-  if (!user) { await ctx.reply("You're not registered."); return; }
+  if (!user) return;
   void touchUserActivity(user.userId);
   await handleReview(ctx, user);
 });
 
 bot.command('balance', async (ctx) => {
   const user = await requireUser(ctx);
-  if (!user) { await ctx.reply("You're not registered."); return; }
+  if (!user) return;
   void touchUserActivity(user.userId);
   await handleBalance(ctx, user);
 });
@@ -90,7 +112,7 @@ bot.command('balance', async (ctx) => {
 // On-demand brief: /brief [daily|weekly]
 bot.command('brief', async (ctx) => {
   const user = await requireUser(ctx);
-  if (!user) { await ctx.reply("You're not registered."); return; }
+  if (!user) return;
 
   const args = ctx.message.text.split(' ').slice(1);
   const type = args[0] === 'weekly' ? 'weekly' : 'daily';
@@ -123,21 +145,53 @@ bot.command('brief', async (ctx) => {
 
 bot.command('quality', async (ctx) => {
   const user = await requireUser(ctx);
-  if (!user) { await ctx.reply("You're not registered."); return; }
+  if (!user) return;
   void touchUserActivity(user.userId);
   await handleQuality(ctx, user);
 });
 
 bot.command('goldset', async (ctx) => {
   const user = await requireUser(ctx);
-  if (!user) { await ctx.reply("You're not registered."); return; }
+  if (!user) return;
   void touchUserActivity(user.userId);
   await handleGoldSet(ctx, user);
 });
 
+bot.command('invite', async (ctx) => {
+  const user = await requireUser(ctx);
+  if (!user) return;
+  if (user.role !== 'admin') { await ctx.reply('⛔ Admin only.'); return; }
+  const arg = ctx.message.text.split(/\s+/)[1];
+  const outcome = await inviteUsername(arg, `admin:${user.telegramId}`);
+  const name = `@${(arg ?? '').replace(/^@/, '')}`;
+  if (outcome === 'invalid') {
+    await ctx.reply('Usage: /invite @username');
+  } else if (outcome === 'reactivated') {
+    await ctx.reply(`✅ ${name}'s invite is active. They can message Luca now.`);
+  } else {
+    await ctx.reply(`✅ ${name} is invited. They can message Luca now.`);
+  }
+});
+
+bot.command('revoke', async (ctx) => {
+  const user = await requireUser(ctx);
+  if (!user) return;
+  if (user.role !== 'admin') { await ctx.reply('⛔ Admin only.'); return; }
+  const arg = ctx.message.text.split(/\s+/)[1];
+  const outcome = await revokeUsername(arg, `admin:${user.telegramId}`);
+  const name = `@${(arg ?? '').replace(/^@/, '')}`;
+  const replies = {
+    invalid: 'Usage: /revoke @username',
+    not_found: `No invite or user found for ${name}.`,
+    admin: "Admins can't be revoked.",
+    revoked: `⛔ ${name}'s access is revoked.`,
+  } as const;
+  await ctx.reply(replies[outcome]);
+});
+
 bot.command('ops', async (ctx) => {
   const user = await requireUser(ctx);
-  if (!user) { await ctx.reply("You're not registered."); return; }
+  if (!user) return;
   const args = ctx.message.text.split(' ').slice(1);
   await handleOps(ctx, user, args);
 });
@@ -145,7 +199,7 @@ bot.command('ops', async (ctx) => {
 // Power-user: /label <event_id> <label>
 bot.command('label', async (ctx) => {
   const user = await requireUser(ctx);
-  if (!user) { await ctx.reply("You're not registered."); return; }
+  if (!user) return;
 
   void touchUserActivity(user.userId);
   const parts = ctx.message.text.split(' ');
@@ -186,10 +240,7 @@ const agentLimiter = new UserRateLimiter({ maxPerWindow: 20, windowMs: 10 * 60_0
 
 bot.on('text', async (ctx) => {
   const user = await requireUser(ctx);
-  if (!user) {
-    await ctx.reply("You're not registered with Luca yet. Contact the admin to get set up.");
-    return;
-  }
+  if (!user) return;
 
   void touchUserActivity(user.userId);
   const userMessage = ctx.message.text.trim();
@@ -234,7 +285,7 @@ bot.on('text', async (ctx) => {
 // ---------------------------------------------------------------------------
 bot.on('callback_query', async (ctx) => {
   const user = await requireUser(ctx);
-  if (!user) { await ctx.answerCbQuery("You're not registered."); return; }
+  if (!user) return;
 
   // Handle alert_skip separately (no event to label)
   const data = (ctx.callbackQuery as { data?: string } | undefined)?.data ?? '';
