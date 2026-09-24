@@ -29,12 +29,14 @@ async function getUnsentAlerts(): Promise<UnsentAlert[]> {
        ne.id AS event_id
      FROM pending_counterparty_alerts pca
      JOIN users u ON u.id = pca.user_id
-     -- pick the most recent unknown event from this counterparty for display
-     LEFT JOIN LATERAL (
+     -- the most recent unknown supported event from this counterparty; alerts with none
+     -- (e.g. only spam tokens) are never sent
+     JOIN LATERAL (
        SELECT ne2.id, ne2.amount, ne2.asset
        FROM normalized_events ne2
        JOIN classifications c ON c.event_id = ne2.id AND c.superseded_at IS NULL
        WHERE ne2.user_id = pca.user_id
+         AND ne2.supported IS TRUE
          AND c.label = 'unknown'
          AND CASE WHEN ne2.direction = 'in' THEN ne2.from_address ELSE ne2.to_address END
              = pca.counterparty_address

@@ -1,4 +1,5 @@
 import { query } from '../db.js';
+import { usdValueSql } from '../ingestion/assets.js';
 import { formatAddress } from '../telegram/format.js';
 import { getHighConfidenceErrorRate } from '../quality/metrics.js';
 
@@ -35,6 +36,7 @@ async function insertAlert(alert: NewAlert): Promise<boolean> {
 // same type (optionally scoped to one evidence field, e.g. wallet_id) was created for
 // the user within the cooldown. dedup_key stays unique per insert so ON CONFLICT
 // keeps working for the table's other writers.
+const USD = usdValueSql('ne');
 const ALERT_COOLDOWN_HOURS = 24;
 
 async function insertAlertWithCooldown(
@@ -105,10 +107,11 @@ export async function detectLargeMovements(userId: string): Promise<number> {
      JOIN wallets w ON w.id = ne.wallet_id
      JOIN users u ON u.id = ne.user_id
      WHERE ne.user_id = $1
+       AND ne.supported IS TRUE
        AND c.superseded_at IS NULL
        AND c.label NOT IN ('gas', 'internal_transfer', 'x402_income', 'x402_spend')
        AND ne.block_time >= NOW() - INTERVAL '${LARGE_MOVEMENT_WINDOW}'
-       AND COALESCE(ne.usd_value, CASE WHEN ne.asset = 'USDC' THEN ne.amount ELSE NULL END)
+       AND ${USD}
            >= u.materiality_usd
        AND NOT EXISTS (
          SELECT 1 FROM alerts a
@@ -175,18 +178,19 @@ export async function detectSpendSpike(userId: string): Promise<number> {
   }>(
     `SELECT
        SUM(CASE WHEN ne.block_time >= NOW() - INTERVAL '1 day'
-                THEN COALESCE(ne.usd_value, CASE WHEN ne.asset = 'USDC' THEN ne.amount ELSE 0 END)
+                THEN ${USD}
                 ELSE 0 END)::text AS spend_24h,
        SUM(CASE WHEN ne.block_time < NOW() - INTERVAL '1 day'
-                THEN COALESCE(ne.usd_value, CASE WHEN ne.asset = 'USDC' THEN ne.amount ELSE 0 END)
+                THEN ${USD}
                 ELSE 0 END)::text AS spend_baseline,
        MAX(u.materiality_usd)::text AS materiality_usd,
        (SELECT MIN(e.block_time) <= NOW() - INTERVAL '7 days'
-          FROM normalized_events e WHERE e.user_id = $1) AS has_history
+          FROM normalized_events e WHERE e.user_id = $1 AND e.supported IS TRUE) AS has_history
      FROM classifications c
      JOIN normalized_events ne ON ne.id = c.event_id
      JOIN users u ON u.id = ne.user_id
      WHERE ne.user_id = $1
+       AND ne.supported IS TRUE
        AND c.superseded_at IS NULL
        AND c.label IN ('expense', 'x402_spend')
        AND ne.block_time >= NOW() - INTERVAL '7 days'`,
@@ -308,16 +312,17 @@ export async function detectUnusualGas(userId: string): Promise<number> {
   }>(
     `SELECT
        SUM(CASE WHEN ne.block_time >= NOW() - INTERVAL '1 day'
-                THEN COALESCE(ne.usd_value, CASE WHEN ne.asset = 'ETH' THEN ne.amount * 3000 ELSE 0 END)
+                THEN ${USD}
                 ELSE 0 END)::text AS gas_24h,
        SUM(CASE WHEN ne.block_time < NOW() - INTERVAL '1 day'
-                THEN COALESCE(ne.usd_value, CASE WHEN ne.asset = 'ETH' THEN ne.amount * 3000 ELSE 0 END)
+                THEN ${USD}
                 ELSE 0 END)::text AS gas_baseline,
        (SELECT MIN(e.block_time) <= NOW() - INTERVAL '7 days'
-          FROM normalized_events e WHERE e.user_id = $1) AS has_history
+          FROM normalized_events e WHERE e.user_id = $1 AND e.supported IS TRUE) AS has_history
      FROM classifications c
      JOIN normalized_events ne ON ne.id = c.event_id
      WHERE ne.user_id = $1
+       AND ne.supported IS TRUE
        AND c.superseded_at IS NULL
        AND c.label = 'gas'
        AND ne.block_time >= NOW() - INTERVAL '7 days'`,

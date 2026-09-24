@@ -281,6 +281,7 @@ export async function getUnknownDecomposition(userId: string): Promise<UnknownDe
        FROM corrections cr
        JOIN normalized_events ne ON ne.id = cr.event_id
        WHERE cr.user_id = $1
+         AND ne.supported IS TRUE
          AND cr.old_label = 'unknown'
          AND cr.new_label != 'unknown'`,
       [userId],
@@ -300,6 +301,7 @@ export async function getUnknownDecomposition(userId: string): Promise<UnknownDe
          FROM classifications c
          JOIN normalized_events ne ON ne.id = c.event_id
          WHERE c.user_id = $1
+           AND ne.supported IS TRUE
            AND c.label = 'unknown'
            AND c.superseded_at IS NULL
        ) sub

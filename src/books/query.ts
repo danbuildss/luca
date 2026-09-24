@@ -1,6 +1,7 @@
 import { query } from '../db.js';
 import type { ClassificationLabel } from '../types/index.js';
 import { BRIEF_CATEGORIES } from '../types/index.js';
+import { usdValueSql } from '../ingestion/assets.js';
 
 export type BooksSummaryRow = {
   label: string;
@@ -23,8 +24,7 @@ export type BooksEvent = {
   confidence: string;
 };
 
-// usd_value when available; for USDC treat amount as 1:1; otherwise null
-const USD_COALESCE = `COALESCE(ne.usd_value, CASE WHEN ne.asset = 'USDC' THEN ne.amount ELSE NULL END)`;
+const USD_COALESCE = usdValueSql('ne');
 
 export async function getBooksSummary(userId: string, periodDays: number): Promise<BooksSummaryRow[]> {
   const res = await query<BooksSummaryRow>(
@@ -35,6 +35,7 @@ export async function getBooksSummary(userId: string, periodDays: number): Promi
      FROM classifications c
      JOIN normalized_events ne ON ne.id = c.event_id
      WHERE ne.user_id = $1
+       AND ne.supported IS TRUE
        AND c.superseded_at IS NULL
        AND ne.block_time >= NOW() - INTERVAL '1 day' * $2
      GROUP BY c.label, ne.direction
@@ -57,6 +58,7 @@ export async function getBooksEvents(params: {
      FROM classifications c
      JOIN normalized_events ne ON ne.id = c.event_id
      WHERE ne.user_id = $1
+       AND ne.supported IS TRUE
        AND c.label = $2::classification_label
        AND c.superseded_at IS NULL
        AND ne.block_time >= NOW() - INTERVAL '1 day' * $3
@@ -74,6 +76,8 @@ export type PnlSummary = {
   gas_usdc: number;
   net_usdc: number;
   unknown_count: number;
+  // Supported transfers in the period not classified yet, so not in the totals above
+  pending_count: number;
 };
 
 // Direction-aware P&L totals. Money flowing against a category's natural
@@ -86,6 +90,7 @@ export async function getPnlSummary(userId: string, periodDays: number): Promise
     expenses_usdc: string | null;
     gas_usdc: string | null;
     unknown_count: number | null;
+    pending_count: number | null;
   }>(
     `SELECT
        SUM(CASE WHEN c.label::text = ANY($3::text[])
@@ -97,11 +102,12 @@ export async function getPnlSummary(userId: string, periodDays: number): Promise
        SUM(CASE WHEN c.label::text = ANY($5::text[])
                 THEN CASE WHEN ne.direction = 'in' THEN -${USD_COALESCE} ELSE ${USD_COALESCE} END
            END)::text AS gas_usdc,
-       (COUNT(*) FILTER (WHERE c.label::text = ANY($6::text[])))::int AS unknown_count
-     FROM classifications c
-     JOIN normalized_events ne ON ne.id = c.event_id
+       (COUNT(*) FILTER (WHERE c.label::text = ANY($6::text[])))::int AS unknown_count,
+       (COUNT(*) FILTER (WHERE c.id IS NULL))::int AS pending_count
+     FROM normalized_events ne
+     LEFT JOIN classifications c ON c.event_id = ne.id AND c.superseded_at IS NULL
      WHERE ne.user_id = $1
-       AND c.superseded_at IS NULL
+       AND ne.supported IS TRUE
        AND ne.block_time >= NOW() - INTERVAL '1 day' * $2`,
     [
       userId,
@@ -126,5 +132,6 @@ export async function getPnlSummary(userId: string, periodDays: number): Promise
     gas_usdc: gas,
     net_usdc: revenue - expenses - gas,
     unknown_count: row?.unknown_count ?? 0,
+    pending_count: row?.pending_count ?? 0,
   };
 }

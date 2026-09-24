@@ -1,5 +1,6 @@
 import { query } from '../db.js';
 import { getPnlSummary } from '../books/query.js';
+import { getValuedBalances } from '../books/balances.js';
 import { logger } from '../logger.js';
 
 export async function takeHeartbeatSnapshot(userId: string): Promise<void> {
@@ -12,27 +13,14 @@ export async function takeHeartbeatSnapshot(userId: string): Promise<void> {
   );
   if (existing.rows.length > 0) return;
 
-  // Sum most recent balances per wallet/asset across all active wallets
-  const balanceRes = await query<{ total_usdc: string | null }>(
-    `SELECT SUM(
-       CASE WHEN bs.asset = 'USDC' THEN bs.balance
-            WHEN bs.asset = 'ETH'  THEN bs.balance * COALESCE(
-              (SELECT usd_value / amount
-               FROM normalized_events
-               WHERE user_id = $1 AND asset = 'ETH' AND usd_value IS NOT NULL AND amount > 0
-               ORDER BY block_time DESC LIMIT 1), 0)
-            ELSE 0
-       END
-     )::text AS total_usdc
-     FROM balance_snapshots bs
-     JOIN wallets w ON w.id = bs.wallet_id AND w.user_id = $1
-     WHERE bs.snapshot_at = (
-       SELECT MAX(bs2.snapshot_at) FROM balance_snapshots bs2 WHERE bs2.wallet_id = bs.wallet_id AND bs2.asset = bs.asset
-     )`,
-    [userId],
-  );
-
-  const totalBalanceUsdc = parseFloat(balanceRes.rows[0]?.total_usdc ?? '0') || 0;
+  // A missing live price would understate the total and fire a false 'portfolio down'
+  // alert, so skip today's snapshot; the next worker cycle retries.
+  const valued = await getValuedBalances(userId);
+  if (valued.total_incomplete) {
+    logger.warn({ userId }, 'Heartbeat snapshot deferred — live price unavailable');
+    return;
+  }
+  const totalBalanceUsdc = valued.total_usd;
 
   const pnl = await getPnlSummary(userId, 7);
 

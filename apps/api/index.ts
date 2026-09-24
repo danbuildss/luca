@@ -304,7 +304,7 @@ app.get('/activity', async (req, reply) => {
        WHERE event_id = ne.id AND superseded_at IS NULL
        ORDER BY created_at DESC LIMIT 1
      ) c ON TRUE
-     WHERE ne.user_id = $1
+     WHERE ne.user_id = $1 AND ne.supported IS TRUE
      ORDER BY ne.block_time DESC
      LIMIT $2 OFFSET $3`,
     [userId, limit, offset],

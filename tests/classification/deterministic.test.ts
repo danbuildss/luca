@@ -114,7 +114,8 @@ describe('classifyDeterministic', () => {
   });
 
   describe('gas', () => {
-    it('classifies tiny outgoing ETH as gas', () => {
+    // Gas is paid by the transaction, not sent as a transfer: a small ETH transfer is a payment
+    it('does not label a small outgoing ETH payment as gas', () => {
       const event = makeEvent({
         asset: 'ETH',
         amount: 0.000042,
@@ -122,9 +123,7 @@ describe('classifyDeterministic', () => {
         from_address: WALLET_A,
         to_address: EXTERNAL,
       });
-      const result = classifyDeterministic(event, userWallets);
-      expect(result?.label).toBe('gas');
-      expect(result?.confidence).toBe(0.8);
+      expect(classifyDeterministic(event, userWallets)).toBeNull();
     });
 
     it('does not classify non-ETH tiny amounts as gas', () => {

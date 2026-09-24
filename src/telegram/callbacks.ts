@@ -142,6 +142,7 @@ async function getEventIdForAlert(alertId: string, userId: string): Promise<stri
        FROM normalized_events ne2
        JOIN classifications c ON c.event_id = ne2.id AND c.superseded_at IS NULL
        WHERE ne2.user_id = pca.user_id
+         AND ne2.supported IS TRUE
          AND c.label = 'unknown'
          AND CASE WHEN ne2.direction = 'in' THEN ne2.from_address ELSE ne2.to_address END
              = pca.counterparty_address

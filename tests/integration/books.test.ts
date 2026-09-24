@@ -63,7 +63,7 @@ describeDb('getPnlSummary (integration)', () => {
 
     const pnl = await getPnlSummary(user.id, 30);
     expect(pnl).toEqual({
-      period_days: 30, revenue_usdc: 0, expenses_usdc: 0, gas_usdc: 0, net_usdc: 0, unknown_count: 0,
+      period_days: 30, revenue_usdc: 0, expenses_usdc: 0, gas_usdc: 0, net_usdc: 0, unknown_count: 0, pending_count: 0,
     });
   });
 });

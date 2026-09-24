@@ -104,16 +104,18 @@ export async function getEthBalance(apiKey: string, walletAddress: string): Prom
   return Number(BigInt(hex)) / 1e18;
 }
 
-// USDC on Base mainnet
-export const USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
-
-export async function getUsdcBalance(apiKey: string, walletAddress: string): Promise<number> {
+export async function getErc20Balance(
+  apiKey: string,
+  walletAddress: string,
+  contract: string,
+  decimals: number,
+): Promise<number> {
   // ERC-20 balanceOf(address) selector: 0x70a08231
   const data = '0x70a08231' + walletAddress.slice(2).padStart(64, '0');
-  const hex = await rpc<string>(apiKey, 'eth_call', [{ to: USDC_BASE, data }, 'latest']);
+  const hex = await rpc<string>(apiKey, 'eth_call', [{ to: contract, data }, 'latest']);
   // Returns 0x0 if wallet has no balance or token not held
   if (hex === '0x' || hex === '0x0') return 0;
-  return Number(BigInt(hex)) / 1e6;
+  return Number(BigInt(hex)) / 10 ** decimals;
 }
 
 // Blocks per 30 days on Base (~2s block time)

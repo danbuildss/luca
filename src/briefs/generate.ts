@@ -1,6 +1,10 @@
 import { query } from '../db.js';
 import { getPnlSummary } from '../books/query.js';
 import { escapeLegacyMarkdown } from '../telegram/format.js';
+import { usdValueSql } from '../ingestion/assets.js';
+
+// Unpriced rows count as 0 so totals and ORDER BY never see NULL
+const USD_OR_ZERO = `COALESCE(${usdValueSql('ne')}, 0)`;
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -52,7 +56,7 @@ async function getTopCounterparties(userId: string, periodDays: number, limit = 
     `SELECT
        CASE WHEN ne.direction = 'in' THEN ne.from_address ELSE ne.to_address END AS address,
        cr.name,
-       SUM(COALESCE(ne.usd_value, CASE WHEN ne.asset = 'USDC' THEN ne.amount ELSE 0 END))::text AS total_usdc
+       SUM(${USD_OR_ZERO})::text AS total_usdc
      FROM classifications c
      JOIN normalized_events ne ON ne.id = c.event_id
      -- One rule per event: a same-direction rule wins over a legacy (NULL) one
@@ -65,11 +69,12 @@ async function getTopCounterparties(userId: string, periodDays: number, limit = 
        LIMIT 1
      ) cr ON TRUE
      WHERE ne.user_id = $1
+       AND ne.supported IS TRUE
        AND c.superseded_at IS NULL
        AND c.label IN ('revenue', 'expense', 'x402_income', 'x402_spend')
        AND ne.block_time >= NOW() - INTERVAL '1 day' * $2
      GROUP BY address, cr.name
-     ORDER BY SUM(COALESCE(ne.usd_value, CASE WHEN ne.asset = 'USDC' THEN ne.amount ELSE 0 END)) DESC
+     ORDER BY SUM(${USD_OR_ZERO}) DESC
      LIMIT $3`,
     [userId, periodDays, limit],
   );
@@ -82,6 +87,7 @@ async function getUnknownCount(userId: string, periodDays: number): Promise<numb
      FROM classifications c
      JOIN normalized_events ne ON ne.id = c.event_id
      WHERE ne.user_id = $1
+       AND ne.supported IS TRUE
        AND c.superseded_at IS NULL
        AND c.label = 'unknown'
        AND ne.block_time >= NOW() - INTERVAL '1 day' * $2`,

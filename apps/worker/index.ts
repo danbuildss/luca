@@ -2,6 +2,7 @@ import { config, requireProductionConfig } from '../../src/config.js';
 import { closeDb } from '../../src/db.js';
 import { logger } from '../../src/logger.js';
 import { getActiveWatchJobs, syncWallet } from '../../src/ingestion/ingest.js';
+import { repriceMissing } from '../../src/ingestion/reprice.js';
 import { classifyAllUsers } from '../../src/classification/engine.js';
 import { getDistinctUserIds } from '../../src/classification/store.js';
 import { detectUnknownCounterparties } from '../../src/alerts/counterparty.js';
@@ -42,6 +43,7 @@ async function runCycle(): Promise<void> {
   }
 
   if (!shuttingDown) {
+    await repriceMissing().catch((err: unknown) => logger.error({ err }, 'Re-pricing failed'));
     await classifyAllUsers();
   }
 

@@ -1,6 +1,7 @@
 import type { ChatCompletionTool } from 'openai/resources/chat/completions.js';
 import { query } from '../db.js';
 import { getPnlSummary, getBooksSummary, getBooksEvents } from '../books/query.js';
+import { getValuedBalances } from '../books/balances.js';
 import { getEventsForReview, getEventWithClassification } from '../corrections/store.js';
 import { applyCorrection } from '../corrections/handler.js';
 import { ClassificationLabel, CLASSIFICATION_LABELS, WALLET_ROLES, SUPPORTED_CHAINS } from '../types/index.js';
@@ -14,7 +15,7 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
     type: 'function',
     function: {
       name: 'get_cash_position',
-      description: 'Get the current USDC and token balances across all registered wallets. Use this to answer "how much do we have?" or "what is our cash position?"',
+      description: 'Get the current ETH, USDC and BNKR balances across all registered wallets, each valued in USD at live prices, plus the total. Use this to answer "how much do we have?" or "what is our cash position?"',
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
@@ -230,24 +231,20 @@ export async function executeTool(
 ): Promise<ToolResult> {
   switch (toolName) {
     case 'get_cash_position': {
-      const res = await query<{
-        address: string;
-        label: string | null;
-        chain: string;
-        asset: string;
-        balance: string;
-        snapshot_at: Date;
-      }>(
-        `SELECT DISTINCT ON (bs.wallet_id, bs.asset)
-           w.address, w.label, w.chain,
-           bs.asset, bs.balance::text AS balance, bs.snapshot_at
-         FROM balance_snapshots bs
-         JOIN wallets w ON w.id = bs.wallet_id
-         WHERE bs.user_id = $1 AND w.active = true
-         ORDER BY bs.wallet_id, bs.asset, bs.snapshot_at DESC`,
-        [userId],
-      );
-      return { balances: res.rows };
+      const valued = await getValuedBalances(userId);
+      return {
+        balances: valued.balances.map((b) => ({
+          address: b.wallet_address,
+          label: b.wallet_label,
+          asset: b.asset,
+          balance: b.balance,
+          usd_value: b.usd_value,
+          snapshot_at: b.snapshot_at,
+        })),
+        total_usd: valued.total_usd,
+        total_incomplete: valued.total_incomplete,
+        live_prices_usd: valued.prices,
+      };
     }
 
     case 'get_books_summary': {
@@ -385,9 +382,12 @@ export async function executeTool(
         [userId],
       );
       const cashRow = cashRes.rows[0];
+      const valued = await getValuedBalances(userId);
       return {
         period_days: periodDays,
         cash_usdc: cashRow && cashRow.wallet_count > 0 ? cashRow.total : null,
+        holdings_usd: valued.total_usd,
+        holdings_incomplete: valued.total_incomplete,
         pnl,
         unknown_count: unknowns.length,
         recent_alerts: alerts.rows,
