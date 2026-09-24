@@ -4,7 +4,7 @@ import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { buildSystemPrompt } from './system.js';
 import { loadConversationHistory, saveMessage } from './context.js';
-import { TOOL_DEFINITIONS, executeTool } from './tools.js';
+import { TOOL_DEFINITIONS, executeTool, prepareWriteAction } from './tools.js';
 import { assertUserScoped, isWriteTool } from './guardrails.js';
 import { pendingActions, type PendingAction } from './pending.js';
 
@@ -96,10 +96,15 @@ export async function runAgent(params: {
 
       let result: unknown;
       try {
-        if (isWriteTool(toolName)) {
+        const prepared = isWriteTool(toolName)
+          ? await prepareWriteAction(userId, toolName, toolArgs)
+          : null;
+        if (prepared && !prepared.ok) {
+          result = { error: prepared.error, candidates: prepared.candidates, executed: false };
+        } else if (prepared) {
           // Never execute state-changing tools directly — park them until the
           // user taps Confirm (handled in src/telegram/callbacks.ts).
-          const action = pendingActions.create(userId, toolName, toolArgs);
+          const action = pendingActions.create(userId, toolName, prepared.args);
           pending.push(action);
           result = {
             status: 'awaiting_user_confirmation',

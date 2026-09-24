@@ -2,7 +2,7 @@ import type { ChatCompletionTool } from 'openai/resources/chat/completions.js';
 import { query } from '../db.js';
 import { getPnlSummary, getBooksSummary, getBooksEvents } from '../books/query.js';
 import { getValuedBalances } from '../books/balances.js';
-import { getEventsForReview, getEventWithClassification } from '../corrections/store.js';
+import { getEventsForReview, getEventWithClassification, resolveEventRef } from '../corrections/store.js';
 import { applyCorrection } from '../corrections/handler.js';
 import { ClassificationLabel, CLASSIFICATION_LABELS, WALLET_ROLES, SUPPORTED_CHAINS } from '../types/index.js';
 
@@ -114,7 +114,7 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
         properties: {
           event_id: {
             type: 'string',
-            description: 'The event UUID to look up.',
+            description: 'The event id from another tool result, or the transaction hash (full or shortened).',
           },
         },
         required: ['event_id'],
@@ -131,7 +131,7 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
         properties: {
           event_id: {
             type: 'string',
-            description: 'The event UUID to reclassify.',
+            description: 'The event id from another tool result, or the transaction hash (full or shortened) the operator gave.',
           },
           new_label: {
             type: 'string',
@@ -217,6 +217,43 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
     },
   },
 ];
+
+// ---------------------------------------------------------------------------
+// Write-tool preparation — runs before an action is shown for confirmation, so the
+// user is never asked to confirm something that cannot succeed, and the confirmed
+// action targets exactly the transaction that was shown.
+// ---------------------------------------------------------------------------
+
+export type PreparedWrite =
+  | { ok: true; args: Record<string, unknown> }
+  | { ok: false; error: string; candidates?: unknown[] };
+
+export async function prepareWriteAction(
+  userId: string,
+  toolName: string,
+  args: Record<string, unknown>,
+): Promise<PreparedWrite> {
+  if (toolName !== 'apply_correction') return { ok: true, args };
+
+  if (!(CLASSIFICATION_LABELS as ReadonlyArray<string>).includes(String(args.new_label))) {
+    return { ok: false, error: `Invalid label: ${String(args.new_label)}` };
+  }
+  const ref = await resolveEventRef(userId, String(args.event_id ?? ''));
+  if (ref.status === 'not_found') {
+    return {
+      ok: false,
+      error: 'No matching transaction. Look it up with get_recent_activity and use its id, or ask the operator for the full transaction hash.',
+    };
+  }
+  if (ref.status === 'ambiguous') {
+    return {
+      ok: false,
+      error: 'More than one transfer matches. Ask the operator which one, then use its id.',
+      candidates: ref.candidates,
+    };
+  }
+  return { ok: true, args: { ...args, event_id: ref.event.id, tx_hash: ref.event.hash } };
+}
 
 // ---------------------------------------------------------------------------
 // Tool executor — all calls are scoped to userId; no cross-user access possible
@@ -325,14 +362,17 @@ export async function executeTool(
     }
 
     case 'get_transaction': {
-      const eventId = args.event_id as string;
-      const event = await getEventWithClassification(eventId, userId);
+      const ref = await resolveEventRef(userId, String(args.event_id ?? ''));
+      if (ref.status === 'not_found') return { error: 'Transaction not found' };
+      if (ref.status === 'ambiguous') {
+        return { error: 'More than one transfer matches; pick one by id', candidates: ref.candidates };
+      }
+      const event = await getEventWithClassification(ref.event.id, userId);
       if (!event) return { error: 'Transaction not found' };
-      return { event };
+      return { event: { ...event, hash: ref.event.hash } };
     }
 
     case 'apply_correction': {
-      const eventId = args.event_id as string;
       const newLabel = args.new_label as ClassificationLabel;
       const reason = args.reason as string | undefined;
       const counterpartyName = args.counterparty_name as string | undefined;
@@ -340,15 +380,17 @@ export async function executeTool(
       if (!(CLASSIFICATION_LABELS as ReadonlyArray<string>).includes(newLabel)) {
         return { error: `Invalid label: ${newLabel}` };
       }
+      const ref = await resolveEventRef(userId, String(args.event_id ?? ''));
+      if (ref.status !== 'found') return { error: 'Transaction not found' };
 
       await applyCorrection({
         userId,
-        eventId,
+        eventId: ref.event.id,
         newLabel,
         reason,
         counterpartyName,
       });
-      return { success: true, event_id: eventId, new_label: newLabel };
+      return { success: true, event_id: ref.event.id, new_label: newLabel };
     }
 
     case 'get_financial_brief': {
