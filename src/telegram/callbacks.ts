@@ -8,7 +8,20 @@ import { setFailureReason } from '../corrections/store.js';
 import type { FailureReason } from '../corrections/handler.js';
 import { query } from '../db.js';
 import { logger } from '../logger.js';
+import { executeTool } from '../agent/tools.js';
+import { saveMessage } from '../agent/context.js';
+import { pendingActions, describePendingAction } from '../agent/pending.js';
 import type { AuthedUser } from './auth.js';
+
+// Confirm / Cancel keyboard for a write action the agent proposed.
+export function agentConfirmKeyboard(actionId: string) {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('✅ Confirm', `agentok:${actionId}`),
+      Markup.button.callback('❌ Cancel', `agentno:${actionId}`),
+    ],
+  ]);
+}
 
 const FAILURE_REASON_KEYBOARD = (correctionId: string) =>
   Markup.inlineKeyboard([
@@ -31,6 +44,7 @@ const FAILURE_REASON_KEYBOARD = (correctionId: string) =>
 //   skip:<eventId>                     — skip a review event (no change)
 //   al:<alertId>:<label>               — label from a counterparty alert (eventId resolved server-side)
 //   alert_label:<alertId>:<eventId>:<label>  — legacy format (kept for already-sent messages)
+//   agentok:<actionId> / agentno:<actionId>  — confirm / cancel an agent write action
 
 export async function handleCallback(ctx: Context, user: AuthedUser): Promise<void> {
   const data = (ctx.callbackQuery as { data?: string } | undefined)?.data;
@@ -54,6 +68,10 @@ export async function handleCallback(ctx: Context, user: AuthedUser): Promise<vo
       await handleGoldSetSkipCallback(ctx, data);
     } else if (data.startsWith('fr:')) {
       await handleFailureReasonCallback(ctx, user, data);
+    } else if (data.startsWith('agentok:')) {
+      await handleAgentActionCallback(ctx, user, data, true);
+    } else if (data.startsWith('agentno:')) {
+      await handleAgentActionCallback(ctx, user, data, false);
     } else if (data.startsWith('fr_skip:')) {
       await ctx.answerCbQuery('Ok');
       try { await ctx.editMessageReplyMarkup(undefined); } catch { /* already edited */ }
@@ -262,4 +280,79 @@ async function handleFailureReasonCallback(ctx: Context, user: AuthedUser, data:
   await setFailureReason(correctionId, user.userId, reason as FailureReason);
   await ctx.answerCbQuery('Tagged ✓');
   try { await ctx.editMessageReplyMarkup(undefined); } catch { /* already edited */ }
+}
+
+async function recordAgentOutcome(userId: string, content: string): Promise<void> {
+  // Keep the agent's conversation history aware of what actually happened.
+  try {
+    await saveMessage({ userId, role: 'assistant', content });
+  } catch (err) {
+    logger.warn({ err, userId }, 'Failed to record agent action outcome');
+  }
+}
+
+async function handleAgentActionCallback(
+  ctx: Context,
+  user: AuthedUser,
+  data: string,
+  confirm: boolean,
+): Promise<void> {
+  // agentok:<actionId> | agentno:<actionId>
+  const actionId = data.split(':')[1] ?? '';
+  const taken = pendingActions.take(actionId, user.userId);
+
+  if (taken.status === 'forbidden') {
+    await ctx.answerCbQuery('This action belongs to someone else.');
+    return;
+  }
+  if (taken.status !== 'ok') {
+    await ctx.answerCbQuery(
+      taken.status === 'expired'
+        ? 'This request expired — ask me again.'
+        : 'Already handled or expired.',
+    );
+    try { await ctx.editMessageReplyMarkup(undefined); } catch { /* already edited */ }
+    return;
+  }
+
+  const { action } = taken;
+  const desc = describePendingAction(action.toolName, action.args);
+
+  if (!confirm) {
+    await ctx.answerCbQuery('Cancelled');
+    try { await ctx.editMessageText(`❌ Cancelled: ${desc}`); } catch { /* already edited */ }
+    await recordAgentOutcome(user.userId, `(Operator cancelled the proposed action: ${desc})`);
+    return;
+  }
+
+  await ctx.answerCbQuery('Working…');
+  try { await ctx.editMessageReplyMarkup(undefined); } catch { /* already edited */ }
+
+  let errorMsg: string | null = null;
+  try {
+    const result = await executeTool(action.userId, action.toolName, action.args);
+    if (result && !Array.isArray(result) && typeof result.error === 'string') {
+      errorMsg = result.error;
+    }
+  } catch (err) {
+    if (err instanceof EventNotFoundError) {
+      errorMsg = 'Transaction not found.';
+    } else {
+      logger.error({ err, userId: user.userId, toolName: action.toolName }, 'Confirmed agent action failed');
+      errorMsg = 'Something went wrong — try again shortly.';
+    }
+  }
+
+  const text = errorMsg
+    ? `⚠️ Couldn't complete: ${desc}\n${errorMsg}`
+    : `✅ Done: ${desc}`;
+  try {
+    await ctx.editMessageText(text);
+  } catch {
+    try { await ctx.reply(text); } catch (err) { logger.warn({ err }, 'Failed to report agent action result'); }
+  }
+  await recordAgentOutcome(
+    user.userId,
+    errorMsg ? `(Confirmed action failed: ${desc} — ${errorMsg})` : `(Operator confirmed and I completed: ${desc})`,
+  );
 }

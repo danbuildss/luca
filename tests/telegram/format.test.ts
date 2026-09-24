@@ -4,7 +4,50 @@ import {
   formatAmount,
   sanitizeName,
   escapeMarkdown,
+  escapeLegacyMarkdown,
+  chunkMessage,
+  sendMarkdownSafe,
 } from '../../src/telegram/format.js';
+
+describe('escapeLegacyMarkdown', () => {
+  it('escapes only _ * ` [', () => {
+    expect(escapeLegacyMarkdown('internal_transfer *x* `y` [z](u).')).toBe(
+      'internal\\_transfer \\*x\\* \\`y\\` \\[z](u).',
+    );
+  });
+});
+
+describe('chunkMessage', () => {
+  it('splits long text on newlines within the limit', () => {
+    const text = ['a'.repeat(6), 'b'.repeat(6), 'c'.repeat(6)].join('\n');
+    const chunks = chunkMessage(text, 10);
+    expect(chunks).toEqual(['aaaaaa', 'bbbbbb', 'cccccc']);
+  });
+});
+
+describe('sendMarkdownSafe', () => {
+  it('falls back to plain text when Telegram rejects the Markdown, keeping extra', async () => {
+    const calls: Array<{ text: string; extra: Record<string, unknown> }> = [];
+    // eslint-disable-next-line @typescript-eslint/require-await -- throwing inside async yields a rejected promise, like Telegram
+    const send = async (text: string, extra: Record<string, unknown>) => {
+      calls.push({ text, extra });
+      if (extra.parse_mode === 'Markdown') {
+        throw Object.assign(new Error('400'), { description: "Bad Request: can't parse entities" });
+      }
+      return { message_id: 1 };
+    };
+    const res = await sendMarkdownSafe(send, 'bad _markdown', { reply_markup: { k: 1 } });
+    expect(res).toEqual({ message_id: 1 });
+    expect(calls).toHaveLength(2);
+    expect(calls[1].extra).toEqual({ reply_markup: { k: 1 } });
+  });
+
+  it('sends a placeholder instead of an empty message', async () => {
+    const texts: string[] = [];
+    await sendMarkdownSafe((t) => { texts.push(t); return Promise.resolve(null); }, '   ');
+    expect(texts).toEqual(['…']);
+  });
+});
 
 describe('formatAddress', () => {
   it('truncates a full address to 0xABCD…wxyz form', () => {

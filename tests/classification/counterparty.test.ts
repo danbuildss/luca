@@ -96,3 +96,48 @@ describe('classifyByCounterparty', () => {
     expect(result?.evidence).toContain('user correction');
   });
 });
+
+describe('classifyByCounterparty — direction-aware rules', () => {
+  const CUSTOMER = '0x1111111111111111111111111111111111111111';
+
+  it('does not apply an incoming-only rule to an outgoing refund', () => {
+    const directional: CounterpartyRuleRow[] = [
+      { address: CUSTOMER, label: 'revenue', name: 'Customer', confidence: 1, direction: 'in' },
+    ];
+    const refund = makeEvent({ direction: 'out', from_address: USER_WALLET, to_address: CUSTOMER });
+    expect(classifyByCounterparty(refund, directional)).toBeNull();
+
+    const payment = makeEvent({ direction: 'in', from_address: CUSTOMER, to_address: USER_WALLET });
+    expect(classifyByCounterparty(payment, directional)?.label).toBe('revenue');
+  });
+
+  it('applies legacy (null-direction) rules in both directions', () => {
+    const legacy: CounterpartyRuleRow[] = [
+      { address: CUSTOMER, label: 'revenue', name: null, confidence: 1, direction: null },
+    ];
+    const inEvt = makeEvent({ direction: 'in', from_address: CUSTOMER });
+    const outEvt = makeEvent({ direction: 'out', from_address: USER_WALLET, to_address: CUSTOMER });
+    expect(classifyByCounterparty(inEvt, legacy)?.label).toBe('revenue');
+    expect(classifyByCounterparty(outEvt, legacy)?.label).toBe('revenue');
+  });
+
+  it('prefers a direction-specific rule over a legacy rule', () => {
+    const mixed: CounterpartyRuleRow[] = [
+      { address: CUSTOMER, label: 'revenue', name: null, confidence: 1, direction: null },
+      { address: CUSTOMER, label: 'refund', name: null, confidence: 1, direction: 'out' },
+    ];
+    const outEvt = makeEvent({ direction: 'out', from_address: USER_WALLET, to_address: CUSTOMER });
+    const inEvt = makeEvent({ direction: 'in', from_address: CUSTOMER });
+    expect(classifyByCounterparty(outEvt, mixed)?.label).toBe('refund');
+    expect(classifyByCounterparty(inEvt, mixed)?.label).toBe('revenue');
+  });
+
+  it('picks the matching rule when both directions have rules', () => {
+    const both: CounterpartyRuleRow[] = [
+      { address: CUSTOMER, label: 'refund', name: null, confidence: 1, direction: 'out' },
+      { address: CUSTOMER.toUpperCase(), label: 'revenue', name: null, confidence: 1, direction: 'in' },
+    ];
+    const inEvt = makeEvent({ direction: 'in', from_address: CUSTOMER });
+    expect(classifyByCounterparty(inEvt, both)?.label).toBe('revenue');
+  });
+});

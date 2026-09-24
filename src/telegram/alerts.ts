@@ -1,8 +1,8 @@
-import type { Telegraf, Context } from 'telegraf';
+import type { Telegraf, Context, Telegram } from 'telegraf';
 import { Markup } from 'telegraf';
 import { query } from '../db.js';
 import { logger } from '../logger.js';
-import { formatAddress, formatAmount } from './format.js';
+import { formatAddress, formatAmount, escapeLegacyMarkdown, sendMarkdownSafe } from './format.js';
 
 type UnsentAlert = {
   id: string;
@@ -84,8 +84,11 @@ export async function sendPendingAlerts(bot: Telegraf<Context>): Promise<void> {
     try {
       const chatId = Number(alert.telegram_id);
       // Sanitize before embedding — NOTES.md security rule
-      const addrShort = formatAddress(alert.counterparty_address);
-      const amountStr = formatAmount(alert.amount, alert.asset ?? 'USDC');
+      // Address inside a code span: strip backticks rather than escape them.
+      const addrShort = formatAddress(alert.counterparty_address).replace(/`/g, '');
+      // Token symbol is chain/attacker-controlled — escape and cap before embedding.
+      const asset = escapeLegacyMarkdown((alert.asset ?? 'USDC').slice(0, 20));
+      const amountStr = formatAmount(alert.amount, asset);
 
       const text = [
         '❓ *New unknown transfer*',
@@ -95,16 +98,14 @@ export async function sendPendingAlerts(bot: Telegraf<Context>): Promise<void> {
         'What is this?',
       ].join('\n');
 
-      const sent = await bot.telegram.sendMessage(
-        chatId,
+      const keyboard = buildAlertKeyboard(alert.id, alert.event_id);
+      const sent = await sendMarkdownSafe(
+        (t, x) => bot.telegram.sendMessage(chatId, t, x as Parameters<Telegram['sendMessage']>[2]),
         text,
-        {
-          parse_mode: 'Markdown',
-          ...buildAlertKeyboard(alert.id, alert.event_id),
-        },
+        { reply_markup: keyboard.reply_markup },
       );
 
-      await markAlertSent(alert.id, sent.message_id);
+      if (sent) await markAlertSent(alert.id, sent.message_id);
     } catch (err) {
       logger.error({ err, alertId: alert.id }, 'Failed to send counterparty alert');
     }

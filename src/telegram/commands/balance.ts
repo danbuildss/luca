@@ -1,6 +1,6 @@
 import type { Context } from 'telegraf';
 import { query } from '../../db.js';
-import { formatAddress } from '../format.js';
+import { formatAddress, escapeLegacyMarkdown, replyMarkdownSafe } from '../format.js';
 import type { AuthedUser } from '../auth.js';
 import { getBankrPortfolio } from '../../bankr/portfolio.js';
 
@@ -53,9 +53,10 @@ export async function handleBalance(ctx: Context, user: AuthedUser): Promise<voi
 
     for (const [address, assets] of wallets) {
       const label = assets[0].wallet_label;
+      const addr = formatAddress(address).replace(/`/g, '');
       const header = label
-        ? `\`${formatAddress(address)}\` (${label})`
-        : `\`${formatAddress(address)}\``;
+        ? `\`${addr}\` (${escapeLegacyMarkdown(label)})`
+        : `\`${addr}\``;
       lines.push(header);
 
       for (const asset of assets) {
@@ -64,7 +65,7 @@ export async function handleBalance(ctx: Context, user: AuthedUser): Promise<voi
           minimumFractionDigits: asset.asset === 'ETH' ? 4 : 2,
           maximumFractionDigits: asset.asset === 'ETH' ? 4 : 2,
         });
-        lines.push(`  ${asset.asset.padEnd(6)} ${formatted}`);
+        lines.push(`  ${escapeLegacyMarkdown(asset.asset.padEnd(6))} ${formatted}`);
       }
       lines.push('');
     }
@@ -75,9 +76,9 @@ export async function handleBalance(ctx: Context, user: AuthedUser): Promise<voi
     lines.push('🏦 *DeFi positions*', '');
     for (const pos of bankr.defiPositions) {
       const usd = pos.usd_value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      lines.push(`  ${pos.protocol} (${pos.position_type})  $${usd}`);
+      lines.push(`  ${escapeLegacyMarkdown(String(pos.protocol))} (${escapeLegacyMarkdown(String(pos.position_type))})  $${usd}`);
       for (const asset of pos.assets) {
-        lines.push(`    ${asset.symbol} ${parseFloat(asset.balance).toFixed(4)}`);
+        lines.push(`    ${escapeLegacyMarkdown(String(asset.symbol))} ${parseFloat(asset.balance).toFixed(4)}`);
       }
     }
     lines.push('');
@@ -85,5 +86,5 @@ export async function handleBalance(ctx: Context, user: AuthedUser): Promise<voi
     lines.push(`Portfolio total  $${total}`);
   }
 
-  await ctx.reply(lines.join('\n'), { parse_mode: 'Markdown' });
+  await replyMarkdownSafe(ctx, lines.join('\n'));
 }

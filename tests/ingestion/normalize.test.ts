@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeTransfer, parseLogIndex } from '../../src/ingestion/normalize.js';
+import { normalizeTransfer, parseLogIndex, parseUniqueId } from '../../src/ingestion/normalize.js';
 import type { AlchemyTransfer } from '../../src/ingestion/alchemy.js';
 
 const WALLET = '0xabc0000000000000000000000000000000000001';
@@ -40,6 +40,86 @@ describe('parseLogIndex', () => {
 
   it('returns null for internal transfers', () => {
     expect(parseLogIndex('0xabc:internal')).toBeNull();
+    expect(parseLogIndex('0xabc:internal:3')).toBeNull();
+  });
+
+  it('parses Alchemy "<hash>:log:<n>" format (decimal and hex)', () => {
+    expect(parseLogIndex('0xabc:log:5')).toBe(5);
+    expect(parseLogIndex('0xabc:log:161')).toBe(161);
+    expect(parseLogIndex('0xabc:log:0x1f')).toBe(31);
+    expect(parseLogIndex('0xabc:log:0')).toBe(0);
+  });
+
+  it('parses bare decimal suffix as decimal', () => {
+    expect(parseLogIndex('0xabc:10')).toBe(10);
+  });
+
+  it('returns null for malformed ids', () => {
+    expect(parseLogIndex('0xabc')).toBeNull();
+    expect(parseLogIndex('0xabc:log')).toBeNull();
+    expect(parseLogIndex('0xabc:log:zz')).toBeNull();
+    expect(parseLogIndex('0xabc:garbage')).toBeNull();
+    expect(parseLogIndex('')).toBeNull();
+  });
+});
+
+describe('parseUniqueId', () => {
+  it('classifies each known format', () => {
+    expect(parseUniqueId('0xabc:log:7')).toEqual({ kind: 'log', index: 7 });
+    expect(parseUniqueId('0xabc:0x0a')).toEqual({ kind: 'log', index: 10 });
+    expect(parseUniqueId('0xabc:external')).toEqual({ kind: 'external', index: null });
+    expect(parseUniqueId('0xabc:internal')).toEqual({ kind: 'internal', index: null });
+    expect(parseUniqueId('0xabc:internal:2')).toEqual({ kind: 'internal', index: 2 });
+    expect(parseUniqueId('0xabc:internal:0x2')).toEqual({ kind: 'internal', index: 2 });
+    expect(parseUniqueId('0xabc:wat')).toEqual({ kind: 'unknown', index: null });
+  });
+});
+
+describe('source_key', () => {
+  it('keys erc20 transfers by log index regardless of uniqueId format', () => {
+    const a = normalizeTransfer(makeTransfer({ uniqueId: '0xdeadbeef:log:10' }), WALLET, WALLET_ID, USER_ID);
+    const b = normalizeTransfer(makeTransfer({ uniqueId: '0xdeadbeef:0x0a' }), WALLET, WALLET_ID, USER_ID);
+    expect(a.event.log_index).toBe(10);
+    expect(a.event.source_key).toBe('log:10');
+    expect(b.event.source_key).toBe('log:10');
+  });
+
+  it('gives distinct keys to two token transfers in the same tx', () => {
+    const a = normalizeTransfer(makeTransfer({ uniqueId: '0xdeadbeef:log:3' }), WALLET, WALLET_ID, USER_ID);
+    const b = normalizeTransfer(makeTransfer({ uniqueId: '0xdeadbeef:log:4' }), WALLET, WALLET_ID, USER_ID);
+    expect(a.event.source_key).not.toBe(b.event.source_key);
+  });
+
+  it('keys native external transfers as "external"', () => {
+    const t = makeTransfer({ uniqueId: '0xdeadbeef:external', category: 'external', asset: 'ETH' });
+    expect(normalizeTransfer(t, WALLET, WALLET_ID, USER_ID).event.source_key).toBe('external');
+  });
+
+  it('gives distinct keys to multiple internal transfers in the same tx', () => {
+    const base = { category: 'internal' as const, asset: 'ETH', uniqueId: '0xdeadbeef:internal' };
+    const a = normalizeTransfer(
+      makeTransfer({ ...base, from: OTHER, rawContract: { value: '0x1', address: null, decimal: '0x12' } }),
+      WALLET, WALLET_ID, USER_ID,
+    );
+    const b = normalizeTransfer(
+      makeTransfer({ ...base, from: OTHER, rawContract: { value: '0x2', address: null, decimal: '0x12' } }),
+      WALLET, WALLET_ID, USER_ID,
+    );
+    expect(a.event.log_index).toBeNull();
+    expect(a.event.source_key).toMatch(/^internal:/);
+    expect(a.event.source_key).not.toBe(b.event.source_key);
+  });
+
+  it('uses the trace position for internal transfers when present', () => {
+    const t = makeTransfer({ category: 'internal', asset: 'ETH', uniqueId: '0xdeadbeef:internal:2' });
+    expect(normalizeTransfer(t, WALLET, WALLET_ID, USER_ID).event.source_key).toBe('internal:2');
+  });
+
+  it('is stable for the same transfer seen twice (from- and to-address queries)', () => {
+    const t = makeTransfer({ category: 'internal', asset: 'ETH', uniqueId: '0xdeadbeef:internal' });
+    const a = normalizeTransfer(t, WALLET, WALLET_ID, USER_ID);
+    const b = normalizeTransfer({ ...t }, WALLET, WALLET_ID, USER_ID);
+    expect(a.event.source_key).toBe(b.event.source_key);
   });
 });
 

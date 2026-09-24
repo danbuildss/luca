@@ -35,6 +35,59 @@ export async function markBriefSent(briefId: string, telegramMessageId: number):
   );
 }
 
+// Refresh an unsent brief's content before retrying, so a failed send reuses
+// its row instead of piling up duplicate unsent rows.
+export async function updateBriefContent(params: {
+  briefId: string;
+  content: string;
+  periodStart: Date;
+  periodEnd: Date;
+}): Promise<void> {
+  await query(
+    `UPDATE briefs SET content = $1, period_start = $2, period_end = $3
+     WHERE id = $4 AND sent_at IS NULL`,
+    [params.content, params.periodStart, params.periodEnd, params.briefId],
+  );
+}
+
+export type BriefSlotStatus = {
+  sent: boolean;               // a brief of this type was sent since the slot opened
+  pendingBriefId: string | null; // latest unsent row created since the slot opened
+};
+
+// Status of today's scheduled slot: the slot opens at `briefTime` (HH:MM) on
+// `localDate` (YYYY-MM-DD) in `timezone`. Comparison is done in the user's
+// local wall-clock time (not as an instant) so a brief_time that falls in a
+// DST gap or repeated hour still counts a brief sent "after" it as sent.
+export async function getBriefSlotStatus(params: {
+  userId: string;
+  type: BriefType;
+  localDate: string;
+  briefTime: string;
+  timezone: string;
+}): Promise<BriefSlotStatus> {
+  const res = await query<{ sent: boolean; pending_id: string | null }>(
+    `SELECT
+       EXISTS (
+         SELECT 1 FROM briefs b
+         WHERE b.user_id = $1 AND b.type = $2
+           AND b.sent_at IS NOT NULL
+           AND (b.sent_at AT TIME ZONE $5::text) >= ($3::date + $4::time)
+       ) AS sent,
+       (
+         SELECT b.id FROM briefs b
+         WHERE b.user_id = $1 AND b.type = $2
+           AND b.sent_at IS NULL
+           AND (b.created_at AT TIME ZONE $5::text) >= ($3::date + $4::time)
+         ORDER BY b.created_at DESC
+         LIMIT 1
+       ) AS pending_id`,
+    [params.userId, params.type, params.localDate, params.briefTime, params.timezone],
+  );
+  const row = res.rows[0];
+  return { sent: row?.sent ?? false, pendingBriefId: row?.pending_id ?? null };
+}
+
 export async function getLastBrief(userId: string, type: BriefType): Promise<BriefRow | null> {
   const res = await query<BriefRow>(
     `SELECT id, content, period_start, period_end, sent_at, telegram_message_id, created_at

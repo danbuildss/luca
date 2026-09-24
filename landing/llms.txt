@@ -1,0 +1,35 @@
+# Luca
+
+> Luca is your financial employee on-chain. It watches the wallets that run an on-chain operation, keeps the books, remembers what the money means, and tells the operator what matters. Luca lives in chat — Telegram today, WhatsApp and iMessage next — not in a dashboard or app.
+
+Luca is currently in private beta for on-chain operators: teams, protocols and autonomous agents whose wallets do real work. It supports wallets on Base today.
+
+## What Luca does
+
+- **Builds the books from a wallet address.** Give Luca a wallet and it reviews the recent history (e.g. the last 30 days) and replies with cash, revenue, expenses, gas and anything that needs attention.
+- **Knows what the money means.** Every transfer is classified as revenue, expenses, treasury, internal transfers (between the operator's own wallets), gas, or unknown — with a short reason. When Luca can't tell, it asks instead of guessing.
+- **Remembers corrections.** When the operator corrects Luca once (e.g. "that address is our treasury wallet"), Luca fixes the books and applies that knowledge to future transactions.
+- **Speaks first.** Luca sends a short daily brief and proactive alerts when something material happens — a treasury balance below a floor, unusual spending, a payment to a new counterparty.
+- **Answers financial questions in plain language.** For example: "Why did we spend so much this week?" or "Can we afford another $1k/month server?" (answered from the operator's actual burn and runway).
+- **One Luca across chats.** The same books, memory and context wherever the operator talks to Luca.
+
+## Security
+
+- Read-only by design: Luca only needs public wallet addresses.
+- Luca never asks for private keys or seed phrases.
+- Luca cannot sign, send, trade, swap or bridge funds.
+- Each operator's books and corrections are private to them.
+
+## What Luca is not
+
+- Not a dashboard, portfolio tracker or app you need to keep opening.
+- Not a trading bot or wallet.
+- Not a tax or accounting-software replacement; Luca keeps operational books for day-to-day financial awareness.
+
+## Links
+
+- [Website](https://askluca.xyz/): Product overview
+- [Apply for the private beta](https://tally.so/r/J9yy8X): Application form
+- [X / Twitter](https://x.com/AskLucaAI): @AskLucaAI
+- [Telegram community](https://t.me/asklucaai): @asklucaai
+- [Source code](https://github.com/danbuildss/luca): GitHub repository

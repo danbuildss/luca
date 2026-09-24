@@ -1,5 +1,7 @@
 # Luca V1 — Current-State and Build-Gap Analysis
 
+> **Historical document.** This analysis predates the current architecture and product direction. References to Hermes, registries or earlier positioning are superseded — see [README.md](../README.md) and [architecture.md](architecture.md) for how Luca works today.
+
 ## Executive summary
 
 The repository is a strong **product and agent-behaviour specification**, but it is

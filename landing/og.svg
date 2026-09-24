@@ -1,0 +1,37 @@
+<!-- Source for og.png (1200×630). Render to PNG before deploying — social
+     platforms don't accept SVG previews. Fonts: Newsreader + Geist. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#F4F3EE"/>
+
+  <g transform="translate(80 76)">
+    <g transform="scale(0.075)" fill="#0B0B0A">
+      <path d="M85 0H102V221A30 30 0 0 0 132 251H318V283A65 65 0 0 1 253 348H85A85 85 0 0 1 0 263V85A85 85 0 0 1 85 0Z"/>
+      <rect x="152" y="118" width="86" height="86" rx="10"/>
+    </g>
+    <text x="36" y="22" font-family="Geist, Helvetica, Arial, sans-serif" font-size="26" font-weight="600" fill="#0B0B0A">Luca</text>
+  </g>
+
+  <text font-family="Newsreader, Georgia, serif" font-size="76" fill="#0B0B0A" letter-spacing="-1.5">
+    <tspan x="80" y="262">Your financial</tspan>
+    <tspan x="80" y="346">employee on-chain.</tspan>
+  </text>
+  <text x="80" y="420" font-family="Geist, Helvetica, Arial, sans-serif" font-size="26" fill="#3A3A36">Watches your wallets. Keeps your books. Remembers.</text>
+  <text x="80" y="456" font-family="Geist, Helvetica, Arial, sans-serif" font-size="26" fill="#3A3A36">Tells you what matters — in chat.</text>
+
+  <!-- Chat card -->
+  <g transform="translate(788 150)">
+    <rect width="332" height="330" rx="22" fill="#FBFAF7" stroke="#0B0B0A" stroke-opacity="0.1"/>
+    <rect x="158" y="24" width="150" height="40" rx="16" fill="#0B0B0A"/>
+    <text x="178" y="50" font-family="Geist Mono, Menlo, monospace" font-size="15" fill="#F4F3EE">0x3f9c…a1e7</text>
+    <rect x="24" y="84" width="284" height="222" rx="16" fill="#ECEAE3"/>
+    <g font-family="Geist Mono, Menlo, monospace" font-size="16">
+      <text x="44" y="122" fill="#6E6D66">Cash</text><text x="288" y="122" text-anchor="end" fill="#0B0B0A">$8,420</text>
+      <text x="44" y="160" fill="#6E6D66">Revenue</text><text x="288" y="160" text-anchor="end" fill="#1D7A4C">+$4,810</text>
+      <text x="44" y="198" fill="#6E6D66">Expenses</text><text x="288" y="198" text-anchor="end" fill="#0B0B0A">−$1,940</text>
+      <text x="44" y="236" fill="#6E6D66">Gas</text><text x="288" y="236" text-anchor="end" fill="#0B0B0A">−$83</text>
+      <text x="44" y="274" fill="#6E6D66">Unknown</text><text x="288" y="274" text-anchor="end" fill="#6E6D66">$410</text>
+    </g>
+  </g>
+
+  <text x="80" y="560" font-family="Geist Mono, Menlo, monospace" font-size="20" fill="#6E6D66">askluca.xyz</text>
+</svg>

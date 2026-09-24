@@ -1,12 +1,31 @@
 import type { UnclassifiedEvent, ClassificationResult, CounterpartyRuleRow } from './types.js';
 
+// Pick the rule for this counterparty that applies to the event's direction.
+// A direction-specific rule wins over a legacy (direction-less) rule; a rule for the
+// opposite direction never applies (a customer's payment label must not leak onto a
+// refund we send back to them).
+export function findCounterpartyRule(
+  counterparty: string,
+  direction: 'in' | 'out',
+  rules: CounterpartyRuleRow[],
+): CounterpartyRuleRow | null {
+  const addr = counterparty.toLowerCase();
+  let anyDirection: CounterpartyRuleRow | null = null;
+  for (const rule of rules) {
+    if (rule.address.toLowerCase() !== addr) continue;
+    if (rule.direction === direction) return rule;
+    if ((rule.direction === null || rule.direction === undefined) && !anyDirection) {
+      anyDirection = rule;
+    }
+  }
+  return anyDirection;
+}
+
 export function classifyByCounterparty(
   event: UnclassifiedEvent,
   rules: CounterpartyRuleRow[],
 ): ClassificationResult | null {
   if (rules.length === 0) return null;
-
-  const ruleMap = new Map(rules.map((r) => [r.address.toLowerCase(), r]));
 
   // The counterparty is the address that is NOT the user's wallet.
   // For incoming: the sender (from_address) is the counterparty.
@@ -16,7 +35,7 @@ export function classifyByCounterparty(
 
   if (!counterparty) return null;
 
-  const rule = ruleMap.get(counterparty.toLowerCase());
+  const rule = findCounterpartyRule(counterparty, event.direction, rules);
   if (!rule) return null;
 
   const name = rule.name ?? counterparty.slice(0, 10) + '…';
