@@ -45,6 +45,7 @@ const WELCOME_MSG = [
   "Welcome to Luca. You're in.",
   '',
   "Send me the Base wallet address you'd like me to watch and I'll start keeping your books.",
+  '',
   'After that, just ask me anything: how the month went, what you hold, or what a payment was for.',
 ].join('\n');
 
@@ -73,9 +74,9 @@ bot.command('start', async (ctx) => {
   const lines = [
     "Hi, I'm Luca. I keep the books on your on-chain wallets.",
     '',
-    'Just talk to me. Ask how the last month looked, what you hold, or what a payment was for,',
-    "and tell me when I've labeled something wrong. If you haven't yet, send me the wallet address",
-    "you'd like me to watch.",
+    "Just talk to me. Ask how the last month looked, what you hold, or what a payment was for, and tell me when I've labeled something wrong.",
+    '',
+    "If you haven't yet, send me the wallet address you'd like me to watch.",
   ];
   if (user.role === 'admin') {
     lines.push('', 'Admin: /ops, /invite @user, /revoke @user, /quality, /goldset');
