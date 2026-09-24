@@ -94,6 +94,11 @@ button { font: inherit; color: inherit; }
 .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 60px; gap: 24px; }
 .brand { display: inline-flex; align-items: center; gap: 9px; text-decoration: none; font-weight: 600; font-size: 17px; letter-spacing: -0.01em; }
 .brand .mark { width: 18px; height: 20px; fill: currentColor; }
+.wordmark {
+  display: block; width: 76px; height: 13px; background: currentColor;
+  -webkit-mask: url(/assets/wordmark.webp) center / contain no-repeat;
+          mask: url(/assets/wordmark.webp) center / contain no-repeat;
+}
 .nav-links { display: flex; gap: 28px; }
 .nav-links a { text-decoration: none; color: var(--ink-3); font-size: 14px; }
 .nav-links a:hover { color: var(--ink); }
