@@ -15,8 +15,13 @@ import {
   normalizeNativeTx,
 } from './blockscout.js';
 import { snapshotBalances } from './snapshot.js';
-import { enrichUsdValue, isTrackedAsset } from './price.js';
+import { enrichUsdValue } from './price.js';
 import type { TxRow, EventRow } from './normalize.js';
+
+// Alchemy's transfer index trails eth_blockNumber by a few seconds, so each sync stops
+// short of the tip and re-reads a window behind the cursor. Re-reads are idempotent.
+export const TIP_LAG_BLOCKS = 10;
+export const OVERLAP_BLOCKS = 300;
 
 export type WatchJobRow = {
   id: string;
@@ -42,29 +47,40 @@ export async function getActiveWatchJobs(): Promise<WatchJobRow[]> {
   return res.rows;
 }
 
+export function scanWindow(
+  lastBlock: string | null,
+  currentBlock: number,
+): { fromBlock: number; toBlock: number; isBackfill: boolean } | null {
+  const toBlock = currentBlock - TIP_LAG_BLOCKS;
+  if (lastBlock === null) {
+    return { fromBlock: Math.max(0, toBlock - BLOCKS_30_DAYS), toBlock, isBackfill: true };
+  }
+  const last = parseInt(lastBlock, 10);
+  if (last >= toBlock) return null;
+  return { fromBlock: Math.max(0, last + 1 - OVERLAP_BLOCKS), toBlock, isBackfill: false };
+}
+
 // Fetch transfers via Alchemy (primary) with Blockscout fallback
 async function fetchTransfers(
   walletAddress: string,
-  fromBlock: string,        // hex for Alchemy
-  fromBlockNumber: number,  // decimal for Blockscout
-  toBlock: string,
+  fromBlock: number,
+  toBlock: number,
   apiKey: string | undefined,
 ): Promise<{ pairs: Array<{ tx: TxRow; event: EventRow }>; provider: string }> {
   if (apiKey) {
     try {
-      const transfers = await fetchAllTransfers(apiKey, walletAddress, fromBlock, toBlock);
-      const pairs = transfers.map((t) => normalizeTransfer(t, walletAddress, '', ''));
+      const transfers = await fetchAllTransfers(apiKey, walletAddress, blockToHex(fromBlock), blockToHex(toBlock));
       // wallet_id / user_id are injected by the caller — return placeholders here
+      const pairs = transfers.map((t) => normalizeTransfer(t, walletAddress, '', ''));
       return { pairs, provider: 'alchemy' };
     } catch (err) {
       logger.warn({ err, wallet: walletAddress }, 'Alchemy failed — falling back to Blockscout');
     }
   }
 
-  // Blockscout fallback
   const [tokens, native] = await Promise.all([
-    fetchTokenTransfers(walletAddress, fromBlockNumber),
-    fetchNativeTransactions(walletAddress, fromBlockNumber),
+    fetchTokenTransfers(walletAddress, fromBlock),
+    fetchNativeTransactions(walletAddress, fromBlock),
   ]);
 
   const pairs = [
@@ -104,7 +120,8 @@ async function insertOrGetTxId(
 async function claimLegacyEvent(event: EventRow): Promise<boolean> {
   const res = await query(
     `UPDATE normalized_events
-     SET source_key = $5::text, log_index = COALESCE($6::integer, log_index)
+     SET source_key = $5::text, log_index = COALESCE($6::integer, log_index),
+         token_address = $10::text, supported = $11::boolean, asset = $8::text
      WHERE id = (
        SELECT id FROM normalized_events
        WHERE chain = $1::text AND hash = $2::text AND wallet_id = $3::uuid
@@ -126,26 +143,50 @@ async function claimLegacyEvent(event: EventRow): Promise<boolean> {
     [
       event.chain, event.hash, event.wallet_id, event.from_address,
       event.source_key, event.log_index, event.to_address, event.asset, event.amount,
+      event.token_address, event.supported,
     ],
   );
   return (res.rowCount ?? 0) > 0;
 }
 
+// New transfers are inserted; a re-read of an already stored transfer only fills in its
+// asset identity if it was stored before identity was known (migration 014).
 async function insertEvent(txId: string, event: EventRow): Promise<void> {
   if (await claimLegacyEvent(event)) return;
   await query(
     `INSERT INTO normalized_events
        (transaction_id, wallet_id, user_id, chain, hash, log_index, source_key, block_time,
-        from_address, to_address, asset, amount, usd_value, price_source, price_at, direction)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-     ON CONFLICT (chain, hash, wallet_id, source_key) DO NOTHING`,
+        from_address, to_address, asset, amount, usd_value, price_source, price_at, direction,
+        token_address, supported)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+     ON CONFLICT (chain, hash, wallet_id, source_key) DO UPDATE
+       SET token_address = EXCLUDED.token_address,
+           supported = EXCLUDED.supported,
+           asset = EXCLUDED.asset
+       WHERE normalized_events.supported IS NULL`,
     [
       txId, event.wallet_id, event.user_id, event.chain,
       event.hash, event.log_index, event.source_key, event.block_time,
       event.from_address, event.to_address, event.asset,
       event.amount, event.usd_value, event.price_source,
       event.price_at, event.direction,
+      event.token_address, event.supported,
     ],
+  );
+}
+
+// Labels on unsupported tokens are retired (kept in history) so books, alerts and
+// quality views never count them.
+async function retireUnsupportedLabels(walletId: string): Promise<void> {
+  await query(
+    `UPDATE classifications c
+     SET superseded_at = NOW()
+     FROM normalized_events ne
+     WHERE c.event_id = ne.id
+       AND ne.wallet_id = $1
+       AND ne.supported = FALSE
+       AND c.superseded_at IS NULL`,
+    [walletId],
   );
 }
 
@@ -158,27 +199,20 @@ export async function syncWallet(job: WatchJobRow, apiKey: string | undefined): 
   if (apiKey) {
     currentBlock = await getCurrentBlock(apiKey);
   } else {
-    // Approximate: Blockscout's tx list gives us the newest block seen
-    // We'll use a large sentinel and let the timestamp filter do the work
     // For production, ALCHEMY_API_KEY should always be set
     currentBlock = 999_999_999;
     logger.warn({ wallet_id }, 'No ALCHEMY_API_KEY — using Blockscout only; current block unknown');
   }
 
-  const isBackfill = last_block === null;
-  const fromBlockNumber = isBackfill
-    ? Math.max(0, currentBlock - BLOCKS_30_DAYS)
-    : parseInt(last_block, 10) + 1;
-  const fromBlock = blockToHex(fromBlockNumber);
-  const toBlock = blockToHex(currentBlock);
-
-  if (!isBackfill && parseInt(last_block, 10) >= currentBlock) {
+  const window = scanWindow(last_block, currentBlock);
+  if (!window) {
     logger.debug({ wallet_id, currentBlock }, 'No new blocks — skipping sync');
     return;
   }
+  const { fromBlock, toBlock, isBackfill } = window;
 
   logger.info(
-    { wallet_id, wallet_address, fromBlockNumber, currentBlock, isBackfill },
+    { wallet_id, wallet_address, fromBlock, toBlock, isBackfill },
     'Starting wallet sync',
   );
 
@@ -198,7 +232,6 @@ export async function syncWallet(job: WatchJobRow, apiKey: string | undefined): 
     const { pairs, provider: usedProvider } = await fetchTransfers(
       wallet_address,
       fromBlock,
-      fromBlockNumber,
       toBlock,
       apiKey,
     );
@@ -206,23 +239,12 @@ export async function syncWallet(job: WatchJobRow, apiKey: string | undefined): 
 
     for (const pair of pairs) {
       // Inject wallet_id and user_id (normalizers used placeholders)
-      const tx: TxRow = { ...pair.tx, wallet_id, };
+      const tx: TxRow = { ...pair.tx, wallet_id };
       const event: EventRow = { ...pair.event, wallet_id, user_id };
 
-      // Skip tokens Luca doesn't track (airdrops, spam tokens, unknown ERC-20s)
-      const rawContract =
-        (pair.tx.raw_payload as { rawContract?: { address?: string | null } })?.rawContract;
-      const pairContractAddress = rawContract?.address ?? null;
-      if (!isTrackedAsset(pair.event.asset, pairContractAddress)) continue;
-
       try {
-        // Enrich USD value for USDC (1:1), ETH, and BNKR (spot price at block time)
-        const contractAddress =
-          (pair.tx.raw_payload as { rawContract?: { address?: string | null } })
-            ?.rawContract?.address ?? null;
         const priceResult = await enrichUsdValue(
-          event.asset,
-          contractAddress,
+          { supported: event.supported, symbol: event.asset, tokenAddress: event.token_address },
           event.amount,
           event.block_time,
         );
@@ -256,23 +278,28 @@ export async function syncWallet(job: WatchJobRow, apiKey: string | undefined): 
       }
     }
 
+    await retireUnsupportedLabels(wallet_id);
+
     // Snapshot balances
     await snapshotBalances(apiKey, wallet_id, user_id, wallet_address);
 
-    // Advance cursor (only when Alchemy gave us a real block number)
-    const newLastBlock = apiKey ? currentBlock : null;
+    // A failed store leaves the cursor in place so the next sync retries the same range.
+    // Without Alchemy there is no real block number to advance to.
+    const advance = failed === 0 && Boolean(apiKey);
     await query(
       `UPDATE watch_jobs
-       SET last_synced_at = NOW(), last_block = $1, status = 'active', updated_at = NOW()
+       SET last_synced_at = NOW(),
+           last_block = CASE WHEN $3 THEN $1::bigint ELSE last_block END,
+           status = 'active', updated_at = NOW()
        WHERE id = $2`,
-      [newLastBlock, job.id],
+      [toBlock, job.id, advance],
     );
 
     await query(
       `UPDATE sync_runs
-       SET status = 'completed', completed_at = NOW(), events_ingested = $1, provider = $2
+       SET status = $4, completed_at = NOW(), events_ingested = $1, provider = $2, failed_count = $5
        WHERE id = $3`,
-      [ingested, provider, syncRunId],
+      [ingested, provider, syncRunId, failed === 0 ? 'completed' : 'partial', failed],
     );
 
     // Set activated_at on first successful sync (idempotent — only sets if null)
@@ -280,7 +307,7 @@ export async function syncWallet(job: WatchJobRow, apiKey: string | undefined): 
       void touchUserActivation(user_id);
     }
 
-    logger.info({ wallet_id, ingested, failed, provider, currentBlock }, 'Wallet sync complete');
+    logger.info({ wallet_id, ingested, failed, provider, toBlock }, 'Wallet sync complete');
   } catch (err) {
     await query(
       `UPDATE watch_jobs SET status = 'error', error_message = $1, updated_at = NOW() WHERE id = $2`,

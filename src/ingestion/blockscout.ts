@@ -2,6 +2,7 @@ import axios from 'axios';
 import pRetry from 'p-retry';
 import { logger } from '../logger.js';
 import { buildSourceKey, parseIndex } from './normalize.js';
+import { identifyAsset, BASE_USDC, BASE_BNKR, SUPPORTED_TOKENS } from './assets.js';
 import type { TxRow, EventRow } from './normalize.js';
 
 const BASE_URL = 'https://base.blockscout.com/api/v2';
@@ -142,17 +143,18 @@ export async function getEthBalanceBlockscout(walletAddress: string): Promise<nu
   return Number(BigInt(info.coin_balance)) / 1e18;
 }
 
-const USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
-
-export async function getUsdcBalanceBlockscout(walletAddress: string): Promise<number> {
+export async function getTokenBalancesBlockscout(
+  walletAddress: string,
+): Promise<{ usdc: number; bnkr: number }> {
   const balances = await get<TokenBalance[]>(
     buildUrl(`/addresses/${walletAddress}/token-balances`),
   );
-  const usdc = balances.find(
-    (b) => b.token.address.toLowerCase() === USDC_BASE.toLowerCase(),
-  );
-  if (!usdc) return 0;
-  return Number(BigInt(usdc.value)) / 1e6;
+  const balanceOf = (contract: string): number => {
+    const row = balances.find((b) => b.token.address.toLowerCase() === contract);
+    if (!row) return 0;
+    return Number(BigInt(row.value)) / 10 ** SUPPORTED_TOKENS[contract].decimals;
+  };
+  return { usdc: balanceOf(BASE_USDC), bnkr: balanceOf(BASE_BNKR) };
 }
 
 // ---- Normalizers (same output shape as normalize.ts for Alchemy) ----
@@ -178,6 +180,7 @@ export function normalizeTokenTransfer(
     to: t.to?.hash ?? null,
     rawValue: t.total.value,
   });
+  const identity = identifyAsset({ native: false, tokenAddress: t.token.address, providerSymbol: t.token.symbol });
 
   const tx: TxRow = {
     wallet_id: walletId,
@@ -187,7 +190,7 @@ export function normalizeTokenTransfer(
     block_time: blockTime,
     from_address: t.from.hash,
     to_address: t.to?.hash ?? null,
-    asset: t.token.symbol,
+    asset: identity.symbol,
     amount,
     usd_value: null,
     gas_used: null,
@@ -205,10 +208,12 @@ export function normalizeTokenTransfer(
     hash: t.tx_hash,
     log_index: logIndex,
     source_key: sourceKey,
+    token_address: identity.tokenAddress,
+    supported: identity.supported,
     block_time: blockTime,
     from_address: t.from.hash,
     to_address: t.to?.hash ?? null,
-    asset: t.token.symbol,
+    asset: identity.symbol,
     amount,
     usd_value: null,
     price_source: null,
@@ -259,6 +264,8 @@ export function normalizeNativeTx(
     hash: t.hash,
     log_index: null, // native ETH transfers don't have a log index
     source_key: 'external', // one top-level native transfer per tx — matches Alchemy's key
+    token_address: null,
+    supported: true,
     block_time: blockTime,
     from_address: t.from.hash,
     to_address: t.to?.hash ?? null,

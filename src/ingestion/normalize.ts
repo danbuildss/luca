@@ -1,4 +1,5 @@
 import type { AlchemyTransfer } from './alchemy.js';
+import { identifyAsset } from './assets.js';
 
 export type TxRow = {
   wallet_id: string;
@@ -27,6 +28,10 @@ export type EventRow = {
   log_index: number | null;
   // Stable per-transfer discriminator within (chain, hash, wallet_id) — see buildSourceKey
   source_key: string;
+  // Lowercase token contract; null for native ETH
+  token_address: string | null;
+  // ETH, USDC or BNKR by identity (see assets.ts); other tokens are stored but never shown
+  supported: boolean;
   block_time: Date;
   from_address: string;
   to_address: string | null;
@@ -134,6 +139,11 @@ export function normalizeTransfer(
     rawValue: t.rawContract?.value ?? t.value,
     uniqueId: t.uniqueId,
   });
+  const identity = identifyAsset({
+    native: t.category === 'external' || t.category === 'internal',
+    tokenAddress: t.rawContract?.address,
+    providerSymbol: t.asset,
+  });
 
   const tx: TxRow = {
     wallet_id: walletId,
@@ -143,7 +153,7 @@ export function normalizeTransfer(
     block_time: blockTime,
     from_address: t.from,
     to_address: t.to,
-    asset: t.asset,
+    asset: identity.symbol,
     amount: t.value,
     usd_value: null,
     gas_used: null,
@@ -161,10 +171,12 @@ export function normalizeTransfer(
     hash: t.hash,
     log_index: logIndex,
     source_key: sourceKey,
+    token_address: identity.tokenAddress,
+    supported: identity.supported,
     block_time: blockTime,
     from_address: t.from,
     to_address: t.to,
-    asset: t.asset,
+    asset: identity.symbol,
     amount: t.value,
     usd_value: null,
     price_source: null,

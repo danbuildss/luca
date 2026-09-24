@@ -25,7 +25,7 @@ export async function getEventWithClassification(
             c.confidence AS current_confidence
      FROM normalized_events ne
      LEFT JOIN classifications c ON c.event_id = ne.id AND c.superseded_at IS NULL
-     WHERE ne.id = $1 AND ne.user_id = $2`,
+     WHERE ne.id = $1 AND ne.user_id = $2 AND ne.supported IS TRUE`,
     [eventId, userId],
   );
   return res.rows[0] ?? null;
@@ -91,6 +91,7 @@ export async function getEventsForReview(params: {
      FROM normalized_events ne
      LEFT JOIN classifications c ON c.event_id = ne.id AND c.superseded_at IS NULL
      WHERE ne.user_id = $1
+       AND ne.supported IS TRUE
        AND ($2::text IS NULL OR c.label = $2::classification_label)
      ORDER BY ne.block_time DESC
      LIMIT $3`,

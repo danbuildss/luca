@@ -31,6 +31,7 @@ export async function getNextForGoldSet(userId: string): Promise<GoldSetCandidat
      FROM normalized_events ne
      JOIN classifications c ON c.event_id = ne.id AND c.superseded_at IS NULL
      WHERE ne.user_id = $1
+       AND ne.supported IS TRUE
        AND c.label != 'unknown'
        AND NOT EXISTS (
          SELECT 1 FROM gold_transactions gt

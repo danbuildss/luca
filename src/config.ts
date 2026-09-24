@@ -25,6 +25,10 @@ const schema = z.object({
   // Optional
   BASESCAN_API_KEY: z.string().optional(),
 
+  // CoinGecko prices. Works without a key (low rate limit); a key raises the limit.
+  COINGECKO_API_KEY: z.string().optional(),
+  COINGECKO_API_TIER: z.enum(['demo', 'pro']).default('demo'),
+
   // App
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(3000),

@@ -1,22 +1,8 @@
 import axios from 'axios';
+import { config } from '../config.js';
 import { logger } from '../logger.js';
-
-// Recognized token contracts on Base mainnet
-export const USDC_CONTRACT = '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913';
-export const BNKR_CONTRACT = '0x22af33fe49fd1fa80c7149773dde5890d3c76f3b';
-
-// Only these assets are tracked — everything else is skipped at ingestion
-const TRACKED_SYMBOLS = new Set(['USDC', 'ETH', 'BNKR']);
-const TRACKED_CONTRACTS = new Set([USDC_CONTRACT, BNKR_CONTRACT]);
-
-export function isTrackedAsset(
-  asset: string | null,
-  contractAddress: string | null,
-): boolean {
-  if (asset && TRACKED_SYMBOLS.has(asset.toUpperCase())) return true;
-  if (contractAddress && TRACKED_CONTRACTS.has(contractAddress.toLowerCase())) return true;
-  return false;
-}
+import { BASE_USDC, BASE_BNKR } from './assets.js';
+import type { AssetIdentity } from './assets.js';
 
 export type PriceResult = {
   usd_value: number | null;
@@ -24,107 +10,142 @@ export type PriceResult = {
   price_at: Date | null;
 };
 
-// Cache ETH and BNKR prices by UTC date string (dd-mm-yyyy) to reduce CoinGecko calls
-// during 30-day backfill. Keys: "eth:dd-mm-yyyy", "bnkr:dd-mm-yyyy"
-const priceCache = new Map<string, number>();
+// price_source values:
+//   'stable'           USDC at $1
+//   'coingecko_spot'   live price, used for transfers under an hour old
+//   'coingecko_daily'  CoinGecko's daily price for the transfer's UTC date (ETH only)
+//   'unavailable'      no trustworthy price exists (BNKR older than an hour)
+//   null               lookup failed; the worker retries (see repriceMissing)
+const SPOT_WINDOW_MS = 60 * 60 * 1000;
+const SPOT_TTL_MS = 60 * 1000;
+const FAILURE_TTL_MS = 10 * 60 * 1000;
 
-function toDateStr(d: Date): string {
-  const dd = String(d.getUTCDate()).padStart(2, '0');
-  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const yyyy = d.getUTCFullYear();
-  return `${dd}-${mm}-${yyyy}`;
+const NO_PRICE: PriceResult = { usd_value: null, price_source: null, price_at: null };
+
+type CachedPrice = { price: number | null; at: number };
+const spotCache = new Map<string, CachedPrice>();
+const dailyCache = new Map<string, CachedPrice>();
+
+function baseUrl(): string {
+  return config.COINGECKO_API_TIER === 'pro'
+    ? 'https://pro-api.coingecko.com/api/v3'
+    : 'https://api.coingecko.com/api/v3';
 }
 
-async function fetchCoingeckoHistorical(coinId: string, dateStr: string): Promise<number | null> {
-  try {
-    const res = await axios.get(`https://api.coingecko.com/api/v3/coins/${coinId}/history`, {
-      params: { date: dateStr, localization: false },
-      timeout: 8000,
-    });
-    const price = res.data?.market_data?.current_price?.usd;
-    return typeof price === 'number' ? price : null;
-  } catch (err) {
-    logger.warn({ coinId, dateStr, err }, 'CoinGecko historical price fetch failed');
-    return null;
-  }
+function headers(): Record<string, string> {
+  if (!config.COINGECKO_API_KEY) return {};
+  const name = config.COINGECKO_API_TIER === 'pro' ? 'x-cg-pro-api-key' : 'x-cg-demo-api-key';
+  return { [name]: config.COINGECKO_API_KEY };
 }
 
-async function fetchCoingeckoContractPrice(
-  chainId: string,
-  contractAddress: string,
+async function cached(
+  cache: Map<string, CachedPrice>,
+  key: string,
+  ttlMs: number,
+  fetchPrice: () => Promise<number | null>,
 ): Promise<number | null> {
-  try {
-    const res = await axios.get(
-      `https://api.coingecko.com/api/v3/simple/token_price/${chainId}`,
-      {
-        params: { contract_addresses: contractAddress, vs_currencies: 'usd' },
-        timeout: 8000,
-      },
-    );
-    const price = res.data?.[contractAddress.toLowerCase()]?.usd;
-    return typeof price === 'number' ? price : null;
-  } catch (err) {
-    logger.warn({ chainId, contractAddress, err }, 'CoinGecko contract price fetch failed');
-    return null;
-  }
-}
-
-async function getCachedPrice(
-  coinId: string,
-  fallbackFn: () => Promise<number | null>,
-  blockTime: Date,
-): Promise<number | null> {
-  const dateStr = toDateStr(blockTime);
-  const key = `${coinId}:${dateStr}`;
-
-  if (priceCache.has(key)) return priceCache.get(key)!;
-
-  const price = await fallbackFn();
-  if (price !== null) priceCache.set(key, price);
+  const hit = cache.get(key);
+  const now = Date.now();
+  if (hit && now - hit.at < (hit.price === null ? FAILURE_TTL_MS : ttlMs)) return hit.price;
+  const price = await fetchPrice();
+  cache.set(key, { price, at: now });
   return price;
 }
 
+type SimplePriceResponse = Record<string, { usd?: number } | undefined>;
+type HistoryResponse = { market_data?: { current_price?: { usd?: number } } };
+
+async function fetchEthSpot(): Promise<number | null> {
+  try {
+    const res = await axios.get<SimplePriceResponse>(`${baseUrl()}/simple/price`, {
+      params: { ids: 'ethereum', vs_currencies: 'usd' },
+      headers: headers(),
+      timeout: 8000,
+    });
+    const price = res.data.ethereum?.usd;
+    return typeof price === 'number' ? price : null;
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, 'CoinGecko ETH spot price fetch failed');
+    return null;
+  }
+}
+
+async function fetchBnkrSpot(): Promise<number | null> {
+  try {
+    const res = await axios.get<SimplePriceResponse>(`${baseUrl()}/simple/token_price/base`, {
+      params: { contract_addresses: BASE_BNKR, vs_currencies: 'usd' },
+      headers: headers(),
+      timeout: 8000,
+    });
+    const price = res.data[BASE_BNKR]?.usd;
+    return typeof price === 'number' ? price : null;
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, 'CoinGecko BNKR spot price fetch failed');
+    return null;
+  }
+}
+
+function toCoingeckoDate(d: Date): string {
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  return `${dd}-${mm}-${d.getUTCFullYear()}`;
+}
+
+async function fetchEthDaily(date: string): Promise<number | null> {
+  try {
+    const res = await axios.get<HistoryResponse>(`${baseUrl()}/coins/ethereum/history`, {
+      params: { date, localization: false },
+      headers: headers(),
+      timeout: 8000,
+    });
+    const price = res.data.market_data?.current_price?.usd;
+    return typeof price === 'number' ? price : null;
+  } catch (err) {
+    logger.warn({ date, err: (err as Error).message }, 'CoinGecko ETH daily price fetch failed');
+    return null;
+  }
+}
+
+// Live prices for valuing balances. Null when CoinGecko is unavailable.
+export async function getSpotPrices(): Promise<{ ETH: number | null; BNKR: number | null }> {
+  const [eth, bnkr] = await Promise.all([
+    cached(spotCache, 'eth', SPOT_TTL_MS, fetchEthSpot),
+    cached(spotCache, 'bnkr', SPOT_TTL_MS, fetchBnkrSpot),
+  ]);
+  return { ETH: eth, BNKR: bnkr };
+}
+
 export async function enrichUsdValue(
-  asset: string | null,
-  contractAddress: string | null,
+  identity: AssetIdentity,
   amount: number | null,
   blockTime: Date,
+  now: Date = new Date(),
 ): Promise<PriceResult> {
-  if (amount === null || amount === 0) {
-    return { usd_value: null, price_source: null, price_at: null };
-  }
+  if (!identity.supported || amount === null || amount === 0) return NO_PRICE;
 
-  const symbol = (asset ?? '').toUpperCase();
-  const contract = (contractAddress ?? '').toLowerCase();
-
-  // USDC — stable 1:1
-  if (symbol === 'USDC' || contract === USDC_CONTRACT) {
+  if (identity.tokenAddress === BASE_USDC) {
     return { usd_value: amount, price_source: 'stable', price_at: blockTime };
   }
 
-  // ETH (native transfers)
-  if (symbol === 'ETH') {
-    const dateStr = toDateStr(blockTime);
-    const price = await getCachedPrice(
-      'eth',
-      () => fetchCoingeckoHistorical('ethereum', dateStr),
-      blockTime,
-    );
-    if (price === null) return { usd_value: null, price_source: null, price_at: null };
-    return { usd_value: amount * price, price_source: 'coingecko', price_at: blockTime };
+  const recent = now.getTime() - blockTime.getTime() < SPOT_WINDOW_MS;
+
+  if (identity.tokenAddress === null && identity.symbol === 'ETH') {
+    if (recent) {
+      const spot = await cached(spotCache, 'eth', SPOT_TTL_MS, fetchEthSpot);
+      if (spot !== null) return { usd_value: amount * spot, price_source: 'coingecko_spot', price_at: now };
+    }
+    const date = toCoingeckoDate(blockTime);
+    const daily = await cached(dailyCache, `eth:${date}`, Number.POSITIVE_INFINITY, () => fetchEthDaily(date));
+    if (daily === null) return NO_PRICE;
+    return { usd_value: amount * daily, price_source: 'coingecko_daily', price_at: blockTime };
   }
 
-  // BNKR — use contract address lookup (current spot; historical not available on free tier)
-  if (symbol === 'BNKR' || contract === BNKR_CONTRACT) {
-    const price = await getCachedPrice(
-      'bnkr',
-      () => fetchCoingeckoContractPrice('base', BNKR_CONTRACT),
-      blockTime,
-    );
-    if (price === null) return { usd_value: null, price_source: null, price_at: null };
-    return { usd_value: amount * price, price_source: 'coingecko', price_at: blockTime };
+  if (identity.tokenAddress === BASE_BNKR) {
+    if (!recent) return { usd_value: null, price_source: 'unavailable', price_at: null };
+    const spot = await cached(spotCache, 'bnkr', SPOT_TTL_MS, fetchBnkrSpot);
+    if (spot === null) return NO_PRICE;
+    return { usd_value: amount * spot, price_source: 'coingecko_spot', price_at: now };
   }
 
-  // All other tokens — no USD value
-  return { usd_value: null, price_source: null, price_at: null };
+  return NO_PRICE;
 }

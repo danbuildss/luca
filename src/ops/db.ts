@@ -219,7 +219,7 @@ export async function getOpsOperatorDetail(userId: string): Promise<{
               COUNT(ne.id)::text AS event_count
        FROM wallets w
        LEFT JOIN watch_jobs wj ON wj.wallet_id = w.id
-       LEFT JOIN normalized_events ne ON ne.wallet_id = w.id
+       LEFT JOIN normalized_events ne ON ne.wallet_id = w.id AND ne.supported IS TRUE
        WHERE w.user_id = $1
        GROUP BY w.id, wj.status, wj.last_synced_at, wj.error_message
        ORDER BY w.created_at ASC`,
@@ -430,6 +430,7 @@ export async function getOpsQuality(): Promise<{
        JOIN normalized_events ne ON ne.id = c.event_id
        LEFT JOIN corrections cr ON cr.event_id = c.event_id AND cr.type = 'tx'
        WHERE c.superseded_at IS NULL
+         AND ne.supported IS TRUE
          AND ne.block_time >= DATE_TRUNC('week', NOW()) - INTERVAL '7 weeks'
        GROUP BY DATE_TRUNC('week', ne.block_time)
        ORDER BY week_start DESC`,

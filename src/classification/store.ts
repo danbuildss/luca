@@ -29,6 +29,7 @@ export async function getUnclassifiedEvents(
      FROM normalized_events ne
      LEFT JOIN classifications c ON c.event_id = ne.id AND c.superseded_at IS NULL
      WHERE ne.user_id = $1
+       AND ne.supported IS TRUE
        AND (
          c.id IS NULL
          OR (
@@ -183,9 +184,14 @@ export async function saveManyClassifications(results: SaveClassificationRow[]):
   return written;
 }
 
+// Users with at least one monitored wallet, including wallets whose last sync errored,
+// so a sync failure never pauses a user's classification, alerts or heartbeat.
 export async function getDistinctUserIds(): Promise<string[]> {
   const res = await query<{ user_id: string }>(
-    `SELECT DISTINCT user_id FROM watch_jobs WHERE status = 'active'`,
+    `SELECT DISTINCT wj.user_id
+     FROM watch_jobs wj
+     JOIN wallets w ON w.id = wj.wallet_id
+     WHERE wj.status IN ('active', 'error') AND w.active = TRUE`,
   );
   return res.rows.map((r) => r.user_id);
 }

@@ -32,6 +32,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
+import { BASE_USDC, BASE_BNKR } from '../../../src/ingestion/assets.js';
 import { afterAll, beforeAll, beforeEach, describe } from 'vitest';
 import { closeDb } from '../../../src/db.js';
 
@@ -292,6 +293,10 @@ export async function insertEvent(opts: {
   hash?: string;
   sourceKey?: string;
   logIndex?: number | null;
+  // Defaults follow the asset: ETH is native, USDC/BNKR their Base contracts; any
+  // other asset is an unsupported token. Pass supported: null for a pre-014 row.
+  tokenAddress?: string | null;
+  supported?: boolean | null;
 }): Promise<EventFx> {
   const n = next();
   const hash = opts.hash ?? `0x${n.toString(16).padStart(64, '0')}`;
@@ -302,6 +307,10 @@ export async function insertEvent(opts: {
   const amount = opts.amount === undefined ? 10 : opts.amount;
   const usd = opts.usdValue === undefined ? null : opts.usdValue;
   const at = opts.at ?? '1 hour';
+  const knownToken: Record<string, string | null> = { ETH: null, USDC: BASE_USDC, BNKR: BASE_BNKR };
+  const known = asset !== null && asset in knownToken;
+  const tokenAddress = opts.tokenAddress !== undefined ? opts.tokenAddress : known ? knownToken[asset] : null;
+  const supported = opts.supported !== undefined ? opts.supported : known;
 
   const txRows = await sql<{ id: string }>(
     `INSERT INTO transactions
@@ -315,12 +324,14 @@ export async function insertEvent(opts: {
   const evRows = await sql<{ id: string }>(
     `INSERT INTO normalized_events
        (transaction_id, wallet_id, user_id, chain, hash, log_index, block_time,
-        from_address, to_address, asset, amount, usd_value, direction, source_key)
-     VALUES ($1, $2, $3, 'base', $4, $5, ${atExpr(at, 6)}, $7, $8, $9, $10, $11, $12, $13)
+        from_address, to_address, asset, amount, usd_value, direction, source_key,
+        token_address, supported)
+     VALUES ($1, $2, $3, 'base', $4, $5, ${atExpr(at, 6)}, $7, $8, $9, $10, $11, $12, $13, $14, $15)
      RETURNING id`,
     [
       transactionId, opts.wallet.id, opts.wallet.userId, hash, opts.logIndex ?? null, at,
       from, to, asset, amount, usd, opts.direction, opts.sourceKey ?? 'external',
+      tokenAddress, supported,
     ],
   );
   return {

@@ -1,45 +1,26 @@
 import type { Context } from 'telegraf';
-import { query } from '../../db.js';
 import { formatAddress, escapeLegacyMarkdown, replyMarkdownSafe } from '../format.js';
 import type { AuthedUser } from '../auth.js';
+import { getValuedBalances, type ValuedBalance } from '../../books/balances.js';
 
-type BalanceRow = {
-  wallet_address: string;
-  wallet_label: string | null;
-  asset: string;
-  balance: string;
-  snapshot_at: Date;
-};
+const ASSET_ORDER = ['ETH', 'USDC', 'BNKR'];
 
-async function getLatestBalances(userId: string): Promise<BalanceRow[]> {
-  const res = await query<BalanceRow>(
-    `SELECT DISTINCT ON (bs.wallet_id, bs.asset)
-       w.address AS wallet_address,
-       w.label   AS wallet_label,
-       bs.asset,
-       bs.balance::text AS balance,
-       bs.snapshot_at
-     FROM balance_snapshots bs
-     JOIN wallets w ON w.id = bs.wallet_id
-     WHERE bs.user_id = $1
-     ORDER BY bs.wallet_id, bs.asset, bs.snapshot_at DESC`,
-    [userId],
-  );
-  return res.rows;
+function usd(n: number): string {
+  return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 export async function handleBalance(ctx: Context, user: AuthedUser): Promise<void> {
-  const rows = await getLatestBalances(user.userId);
+  const valued = await getValuedBalances(user.userId);
 
-  if (rows.length === 0) {
+  if (valued.balances.length === 0) {
     await ctx.reply('No balance snapshots yet — sync is still running.');
     return;
   }
 
   const lines: string[] = ['💼 *Balances*', ''];
 
-  const wallets = new Map<string, BalanceRow[]>();
-  for (const row of rows) {
+  const wallets = new Map<string, ValuedBalance[]>();
+  for (const row of valued.balances) {
     const existing = wallets.get(row.wallet_address) ?? [];
     existing.push(row);
     wallets.set(row.wallet_address, existing);
@@ -53,15 +34,22 @@ export async function handleBalance(ctx: Context, user: AuthedUser): Promise<voi
       : `\`${addr}\``;
     lines.push(header);
 
+    assets.sort((a, b) => ASSET_ORDER.indexOf(a.asset) - ASSET_ORDER.indexOf(b.asset));
     for (const asset of assets) {
-      const bal = parseFloat(asset.balance);
-      const formatted = bal.toLocaleString('en-US', {
-        minimumFractionDigits: asset.asset === 'ETH' ? 4 : 2,
-        maximumFractionDigits: asset.asset === 'ETH' ? 4 : 2,
+      const decimals = asset.asset === 'USDC' ? 2 : 4;
+      const amount = asset.balance.toLocaleString('en-US', {
+        minimumFractionDigits: decimals,
+        maximumFractionDigits: decimals,
       });
-      lines.push(`  ${escapeLegacyMarkdown(asset.asset.padEnd(6))} ${formatted}`);
+      const value = asset.asset === 'USDC' || asset.usd_value === null ? '' : `  ($${usd(asset.usd_value)})`;
+      lines.push(`  ${escapeLegacyMarkdown(asset.asset.padEnd(6))} ${amount}${value}`);
     }
     lines.push('');
+  }
+
+  lines.push(`Total  $${usd(valued.total_usd)}`);
+  if (valued.total_incomplete) {
+    lines.push('_Live price unavailable for some holdings, so the total is incomplete._');
   }
 
   await replyMarkdownSafe(ctx, lines.join('\n'));

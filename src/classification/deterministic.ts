@@ -56,18 +56,6 @@ export function classifyDeterministic(
     };
   }
 
-  // 4. Gas: zero-value ETH movement with no to_address (self-destruct edge case)
-  //    Real gas event creation (from gas_used * gas_price) is handled post-Gate C
-  //    when gas fields are populated on transactions.
-  if (event.asset === 'ETH' && event.amount !== null && event.amount < 0.0001 && event.direction === 'out') {
-    return {
-      label: ClassificationLabel.GAS,
-      confidence: 0.8,
-      method: 'deterministic',
-      evidence: 'Tiny outgoing ETH movement — likely network fee',
-    };
-  }
-
   return null;
 }
 
