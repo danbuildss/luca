@@ -163,6 +163,13 @@ describeDb('prices and traceable answers (integration)', () => {
       expect(revenue.count).toBe(4);
       expect(revenue.rows[0]).toMatchObject({ usd: '1200', label: 'revenue', status: 'confirmed' });
       expect(revenue.rows[0].basescan).toBe(`https://basescan.org/tx/${revenue.rows[0].hash}`);
+      const h = revenue.rows[0].hash;
+      expect(revenue.rows[0]).toMatchObject({
+        amount_display: '1,200 USDC',
+        usd_display: '$1,200.00',
+        link: `[${h.slice(0, 6)}…${h.slice(-4)}](https://basescan.org/tx/${h})`,
+      });
+      expect(gas.rows[0]).toMatchObject({ amount_display: '0.0001 ETH', usd_display: '$0.25' });
       expect(revenue.rows.find((r) => r.label === 'refund')?.usd).toBe('-50');
 
       const provisional = await getFigureBreakdown(user.id, 'provisional', 30);

@@ -25,11 +25,38 @@ const CONTRIBUTION: Record<Figure, string> = {
                    AND c.label NOT IN (${list([...BRIEF_CATEGORIES.internal, ...BRIEF_CATEGORIES.conversion])}) THEN 0 END`,
 };
 
+// A token amount to `digits` significant digits, never in exponent form, with thousands
+// separators and no trailing zeros: 0.000006670978989347 → "0.00000667098".
+export function significant(n: number, digits = 6): string {
+  if (!Number.isFinite(n) || n === 0) return '0';
+  const exp = Math.floor(Math.log10(Math.abs(n)));
+  const fixed = n.toFixed(Math.min(Math.max(0, digits - 1 - exp), 20));
+  const [int, frac = ''] = fixed.split('.');
+  const trimmed = frac.replace(/0+$/, '');
+  const withCommas = int.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return trimmed ? `${withCommas}.${trimmed}` : withCommas;
+}
+
+// Dollars: two decimals from $0.10 up; smaller amounts keep two significant digits so a
+// $0.016 fee does not read as $0.02 or $0.00. The sign is kept: "-$50.00".
+export function usdDisplay(n: number): string {
+  const abs = Math.abs(n);
+  const body = abs >= 0.1 || abs === 0
+    ? abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : significant(abs, 2).padEnd(4, '0');
+  return `${n < 0 ? '-' : ''}$${body}`;
+}
+
 export type BreakdownRow = {
   date: Date;
   direction: 'in' | 'out';
   asset: string | null;
   amount: string | null;
+  // Ready to show: "0.00000667098 ETH", "$0.016". Use these, not the raw values.
+  amount_display: string | null;
+  usd_display: string | null;
+  // "[0xd5d2…a4a0](https://basescan.org/tx/0x…)" for Telegram Markdown
+  link: string;
   usd: string | null;        // the transfer's signed contribution to the figure
   price_source: string | null;
   price_ref: string | null;
@@ -57,7 +84,7 @@ export async function getFigureBreakdown(
   limit = 50,
 ): Promise<Breakdown> {
   const contribution = CONTRIBUTION[figure];
-  const res = await query<Omit<BreakdownRow, 'basescan'> & { total: string | null; n: number }>(
+  const res = await query<Omit<BreakdownRow, 'basescan' | 'link' | 'amount_display' | 'usd_display'> & { total: string | null; n: number }>(
     `SELECT * FROM (
        SELECT ne.block_time AS date, ne.direction, ne.asset, ne.amount::text AS amount,
               (${contribution})::text AS usd, ne.price_source, ne.price_ref,
@@ -84,11 +111,17 @@ export async function getFigureBreakdown(
     period_days: periodDays,
     total_usd: first?.total != null ? parseFloat(first.total) : 0,
     count: first?.n ?? 0,
-    rows: res.rows.map((r) => ({
-      date: r.date, direction: r.direction, asset: r.asset, amount: r.amount, usd: r.usd,
-      price_source: r.price_source, price_ref: r.price_ref, label: r.label, status: r.status,
-      counterparty: r.counterparty, hash: r.hash, basescan: `https://basescan.org/tx/${r.hash}`,
-    })),
+    rows: res.rows.map((r) => {
+      const basescan = `https://basescan.org/tx/${r.hash}`;
+      return {
+        date: r.date, direction: r.direction, asset: r.asset, amount: r.amount,
+        amount_display: r.amount != null ? `${significant(parseFloat(r.amount))} ${r.asset ?? ''}`.trim() : null,
+        usd_display: r.usd != null ? usdDisplay(parseFloat(r.usd)) : null,
+        link: `[${r.hash.slice(0, 6)}…${r.hash.slice(-4)}](${basescan})`,
+        usd: r.usd, price_source: r.price_source, price_ref: r.price_ref, label: r.label, status: r.status,
+        counterparty: r.counterparty, hash: r.hash, basescan,
+      };
+    }),
     truncated: (first?.n ?? 0) > res.rows.length,
   };
 }
