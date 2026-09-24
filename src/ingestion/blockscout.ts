@@ -1,7 +1,7 @@
 import axios from 'axios';
 import pRetry from 'p-retry';
 import { logger } from '../logger.js';
-import { buildSourceKey, parseIndex } from './normalize.js';
+import { buildSourceKey, parseIndex, toRawAmount } from './normalize.js';
 import { identifyAsset, BASE_USDC, BASE_BNKR, SUPPORTED_TOKENS } from './assets.js';
 import type { TxRow, EventRow } from './normalize.js';
 
@@ -130,6 +130,38 @@ export async function fetchNativeTransactions(
   return all;
 }
 
+// Every transaction the wallet sent in [fromBlock, toBlock], including failed ones: they
+// cost gas even though no value moved. Pending transactions (status null) are skipped.
+export async function fetchSentTransactions(
+  walletAddress: string,
+  fromBlock: number,
+  toBlock: number,
+): Promise<BlockscoutTx[]> {
+  const all: BlockscoutTx[] = [];
+  let nextParams: Record<string, unknown> | null = null;
+  const wallet = walletAddress.toLowerCase();
+
+  do {
+    const url = buildUrl(`/addresses/${walletAddress}/transactions`, {
+      filter: 'from',
+      ...(nextParams ?? {}),
+    });
+
+    const page = await get<PagedResponse<BlockscoutTx>>(url);
+    all.push(...page.items.filter((t) =>
+      t.block >= fromBlock && t.block <= toBlock &&
+      t.status !== null &&
+      t.from.hash.toLowerCase() === wallet));
+
+    const oldest = page.items.at(-1);
+    if (!oldest || oldest.block < fromBlock) break;
+
+    nextParams = page.next_page_params;
+  } while (nextParams);
+
+  return all;
+}
+
 // ---- Balance helpers ----
 
 type AddressInfo = { coin_balance: string };
@@ -210,6 +242,9 @@ export function normalizeTokenTransfer(
     source_key: sourceKey,
     token_address: identity.tokenAddress,
     supported: identity.supported,
+    raw_amount: toRawAmount(t.total.value),
+    block_number: t.block_number,
+    category: 'erc20',
     block_time: blockTime,
     from_address: t.from.hash,
     to_address: t.to?.hash ?? null,
@@ -266,6 +301,9 @@ export function normalizeNativeTx(
     source_key: 'external', // one top-level native transfer per tx — matches Alchemy's key
     token_address: null,
     supported: true,
+    raw_amount: toRawAmount(t.value),
+    block_number: t.block,
+    category: 'external',
     block_time: blockTime,
     from_address: t.from.hash,
     to_address: t.to?.hash ?? null,

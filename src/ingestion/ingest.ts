@@ -4,9 +4,13 @@ import { touchUserActivation } from '../ops/db.js';
 import {
   fetchAllTransfers,
   getCurrentBlock,
+  getBlock,
   blockToHex,
   BLOCKS_30_DAYS,
+  type TxReceipt,
 } from './alchemy.js';
+import { fetchSupportedTokenLogs, normalizeTokenLog } from './logs.js';
+import { fetchGasItems, fetchGasItemsForBlock } from './gas.js';
 import { normalizeTransfer } from './normalize.js';
 import {
   fetchTokenTransfers,
@@ -121,7 +125,8 @@ async function claimLegacyEvent(event: EventRow): Promise<boolean> {
   const res = await query(
     `UPDATE normalized_events
      SET source_key = $5::text, log_index = COALESCE($6::integer, log_index),
-         token_address = $10::text, supported = $11::boolean, asset = $8::text
+         token_address = $10::text, supported = $11::boolean, asset = $8::text,
+         raw_amount = COALESCE(raw_amount, $12::numeric), block_number = COALESCE(block_number, $13::bigint)
      WHERE id = (
        SELECT id FROM normalized_events
        WHERE chain = $1::text AND hash = $2::text AND wallet_id = $3::uuid
@@ -143,34 +148,80 @@ async function claimLegacyEvent(event: EventRow): Promise<boolean> {
     [
       event.chain, event.hash, event.wallet_id, event.from_address,
       event.source_key, event.log_index, event.to_address, event.asset, event.amount,
-      event.token_address, event.supported,
+      event.token_address, event.supported, event.raw_amount, event.block_number,
     ],
   );
   return (res.rowCount ?? 0) > 0;
 }
 
-// New transfers are inserted; a re-read of an already stored transfer only fills in its
-// asset identity if it was stored before identity was known (migration 014).
+// New transfers are inserted. A re-read of an already stored transfer fills in what earlier
+// versions did not record: asset identity (migration 014), exact amount and block (016).
 async function insertEvent(txId: string, event: EventRow): Promise<void> {
   if (await claimLegacyEvent(event)) return;
   await query(
     `INSERT INTO normalized_events
        (transaction_id, wallet_id, user_id, chain, hash, log_index, source_key, block_time,
         from_address, to_address, asset, amount, usd_value, price_source, price_at, direction,
-        token_address, supported)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+        token_address, supported, raw_amount, block_number)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
      ON CONFLICT (chain, hash, wallet_id, source_key) DO UPDATE
-       SET token_address = EXCLUDED.token_address,
-           supported = EXCLUDED.supported,
-           asset = EXCLUDED.asset
-       WHERE normalized_events.supported IS NULL`,
+       SET token_address = CASE WHEN normalized_events.supported IS NULL
+                                THEN EXCLUDED.token_address ELSE normalized_events.token_address END,
+           asset = CASE WHEN normalized_events.supported IS NULL
+                        THEN EXCLUDED.asset ELSE normalized_events.asset END,
+           supported = COALESCE(normalized_events.supported, EXCLUDED.supported),
+           raw_amount = COALESCE(normalized_events.raw_amount, EXCLUDED.raw_amount),
+           block_number = COALESCE(normalized_events.block_number, EXCLUDED.block_number)
+       WHERE normalized_events.supported IS NULL
+          OR normalized_events.raw_amount IS NULL
+          OR normalized_events.block_number IS NULL`,
     [
       txId, event.wallet_id, event.user_id, event.chain,
       event.hash, event.log_index, event.source_key, event.block_time,
       event.from_address, event.to_address, event.asset,
       event.amount, event.usd_value, event.price_source,
       event.price_at, event.direction,
-      event.token_address, event.supported,
+      event.token_address, event.supported, event.raw_amount, event.block_number,
+    ],
+  );
+}
+
+// Raw evidence: every transfer as observed, spam included; first provider wins.
+async function insertRawTransfer(
+  event: EventRow,
+  provider: string,
+  syncRunId: string,
+  payload: Record<string, unknown>,
+  blockHash: string | null,
+): Promise<void> {
+  await query(
+    `INSERT INTO raw_transfers
+       (wallet_id, chain, tx_hash, source_key, block_number, block_hash, category, token_address,
+        raw_amount, from_address, to_address, provider, sync_run_id, payload)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+     ON CONFLICT (chain, tx_hash, wallet_id, source_key) DO UPDATE
+       SET raw_amount = COALESCE(raw_transfers.raw_amount, EXCLUDED.raw_amount),
+           block_number = COALESCE(raw_transfers.block_number, EXCLUDED.block_number),
+           block_hash = COALESCE(raw_transfers.block_hash, EXCLUDED.block_hash)`,
+    [
+      event.wallet_id, event.chain, event.hash, event.source_key, event.block_number, blockHash,
+      event.category, event.token_address, event.raw_amount, event.from_address, event.to_address,
+      provider, syncRunId, JSON.stringify(payload),
+    ],
+  );
+}
+
+async function insertRawReceipt(walletId: string, r: TxReceipt): Promise<void> {
+  await query(
+    `INSERT INTO raw_receipts
+       (wallet_id, chain, tx_hash, block_number, block_hash, status, from_address, to_address,
+        gas_used, effective_gas_price, l1_fee, operator_fee, fee_wei, payload)
+     VALUES ($1, 'base', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+     ON CONFLICT (chain, tx_hash, wallet_id) DO NOTHING`,
+    [
+      walletId, r.hash, r.blockNumber, r.blockHash, r.status, r.from, r.to,
+      r.gasUsed.toString(), r.effectiveGasPrice.toString(), r.l1Fee.toString(),
+      r.operatorFee.toString(), r.fee.toString(), JSON.stringify(r.raw),
     ],
   );
 }
@@ -190,8 +241,168 @@ async function retireUnsupportedLabels(walletId: string): Promise<void> {
   );
 }
 
+const TX_SQL = `
+  INSERT INTO transactions
+    (wallet_id, chain, hash, block_number, block_time, from_address, to_address,
+     asset, amount, usd_value, gas_used, gas_price, gas_usd, direction, tx_type, raw_payload)
+  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+  ON CONFLICT (chain, hash, wallet_id) DO UPDATE SET chain = EXCLUDED.chain
+  RETURNING id`;
+
+async function storeItem(tx: TxRow, event: EventRow): Promise<void> {
+  const price = await enrichUsdValue(
+    { supported: event.supported, symbol: event.asset, tokenAddress: event.token_address },
+    event.amount,
+    event.block_time,
+  );
+  const enrichedEvent: EventRow = { ...event, ...price };
+  const enrichedTx: TxRow = event.category === 'gas'
+    ? { ...tx, gas_usd: price.usd_value }
+    : { ...tx, usd_value: price.usd_value };
+
+  const txId = await insertOrGetTxId(tx.wallet_id, enrichedTx.hash, enrichedTx.chain, TX_SQL, [
+    enrichedTx.wallet_id, enrichedTx.chain, enrichedTx.hash, enrichedTx.block_number,
+    enrichedTx.block_time, enrichedTx.from_address, enrichedTx.to_address,
+    enrichedTx.asset, enrichedTx.amount, enrichedTx.usd_value,
+    enrichedTx.gas_used, enrichedTx.gas_price, enrichedTx.gas_usd,
+    enrichedTx.direction, enrichedTx.tx_type, JSON.stringify(enrichedTx.raw_payload),
+  ]);
+  if (event.category === 'gas') {
+    await query(
+      `UPDATE transactions SET gas_used = $2, gas_price = $3, gas_usd = COALESCE($4, gas_usd) WHERE id = $1`,
+      [txId, enrichedTx.gas_used, enrichedTx.gas_price, enrichedTx.gas_usd],
+    );
+  }
+  await insertEvent(txId, enrichedEvent);
+}
+
+export type WalletRef = { wallet_id: string; user_id: string; wallet_address: string };
+
+export type RangeResult = {
+  ingested: number;
+  failed: number;
+  provider: string;
+  // True when the range may be incomplete: Blockscout fallback (misses internal ETH) or a
+  // failed cross-check / gas lookup. Degraded ranges are re-read with Alchemy later.
+  degraded: boolean;
+  logGaps: number;
+};
+
+async function blockTimes(apiKey: string, blocks: number[]): Promise<Map<number, Date>> {
+  const times = new Map<number, Date>();
+  for (const b of new Set(blocks)) {
+    const info = await getBlock(apiKey, b);
+    if (info) times.set(b, new Date(info.timestamp * 1000));
+  }
+  return times;
+}
+
+// Reads one block range from every source and stores it. Throws only when no transfer
+// source is reachable at all.
+export async function ingestRange(
+  w: WalletRef,
+  fromBlock: number,
+  toBlock: number,
+  apiKey: string | undefined,
+  syncRunId: string,
+  opts: { gasFromBlock?: boolean } = {},
+): Promise<RangeResult> {
+  const { pairs, provider } = await fetchTransfers(w.wallet_address, fromBlock, toBlock, apiKey);
+  let degraded = provider !== 'alchemy';
+  let logGaps = 0;
+
+  type Item = { tx: TxRow; event: EventRow; provider: string; blockHash: string | null; receipt?: TxReceipt };
+  const items: Item[] = pairs.map((p) => ({ ...p, provider, blockHash: null }));
+
+  if (apiKey) {
+    try {
+      const logs = await fetchSupportedTokenLogs(apiKey, w.wallet_address, fromBlock, toBlock);
+      const seen = new Set(pairs.map((p) => `${p.event.hash.toLowerCase()}|${p.event.source_key}`));
+      const missing = logs.filter((l) => !seen.has(`${l.hash.toLowerCase()}|log:${l.logIndex}`));
+      const times = await blockTimes(apiKey, missing.map((l) => l.blockNumber));
+      for (const l of missing) {
+        const time = times.get(l.blockNumber);
+        if (!time) { degraded = true; continue; }
+        items.push({ ...normalizeTokenLog(l, w.wallet_address, time), provider: 'logs', blockHash: l.blockHash });
+        logGaps++;
+      }
+      if (logGaps > 0) {
+        logger.warn({ wallet_id: w.wallet_id, logGaps, fromBlock, toBlock }, 'Token logs had transfers the transfer feed missed');
+      }
+    } catch (err) {
+      degraded = true;
+      logger.warn({ err, wallet_id: w.wallet_id }, 'Token log cross-check failed — range marked degraded');
+    }
+
+    try {
+      const gas = opts.gasFromBlock
+        ? (await Promise.all(
+            Array.from({ length: toBlock - fromBlock + 1 }, (_, i) =>
+              fetchGasItemsForBlock(apiKey, w.wallet_address, fromBlock + i)),
+          )).flat()
+        : await fetchGasItems(apiKey, w.wallet_address, fromBlock, toBlock);
+      for (const g of gas) {
+        items.push({ tx: g.tx, event: g.event, provider: 'alchemy', blockHash: g.receipt.blockHash, receipt: g.receipt });
+      }
+    } catch (err) {
+      degraded = true;
+      logger.warn({ err, wallet_id: w.wallet_id }, 'Gas lookup failed — range marked degraded');
+    }
+  } else {
+    degraded = true; // no receipts, logs or block reads without Alchemy
+  }
+
+  let ingested = 0;
+  let failed = 0;
+  for (const item of items) {
+    // Inject wallet_id and user_id (normalizers used placeholders)
+    const tx: TxRow = { ...item.tx, wallet_id: w.wallet_id };
+    const event: EventRow = { ...item.event, wallet_id: w.wallet_id, user_id: w.user_id };
+    try {
+      if (item.receipt) {
+        await insertRawReceipt(w.wallet_id, item.receipt);
+        if (item.receipt.fee === 0n) { ingested++; continue; }
+      } else {
+        await insertRawTransfer(event, item.provider, syncRunId, tx.raw_payload, item.blockHash);
+      }
+      await storeItem(tx, event);
+      ingested++;
+    } catch (err) {
+      failed++;
+      logger.error({ err, hash: tx.hash, wallet_id: w.wallet_id }, 'Failed to store transfer');
+    }
+  }
+
+  await retireUnsupportedLabels(w.wallet_id);
+  return { ingested, failed, provider, degraded, logGaps };
+}
+
+// Re-read the oldest degraded range with Alchemy; it is cleared once a re-read is clean.
+async function rescanDegradedRange(w: WalletRef, apiKey: string): Promise<void> {
+  const res = await query<{ id: string; from_block: string; to_block: string }>(
+    `SELECT id, from_block::text, to_block::text FROM sync_runs
+     WHERE wallet_id = $1 AND degraded AND rescanned_at IS NULL
+       AND from_block IS NOT NULL AND to_block IS NOT NULL AND status <> 'running'
+     ORDER BY started_at ASC
+     LIMIT 1`,
+    [w.wallet_id],
+  );
+  const run = res.rows[0];
+  if (!run) return;
+  try {
+    const result = await ingestRange(w, Number(run.from_block), Number(run.to_block), apiKey, run.id);
+    if (!result.degraded && result.failed === 0) {
+      await query(`UPDATE sync_runs SET rescanned_at = NOW() WHERE id = $1`, [run.id]);
+      logger.info({ wallet_id: w.wallet_id, run_id: run.id }, 'Degraded range re-read with Alchemy');
+    }
+  } catch (err) {
+    logger.warn({ err, wallet_id: w.wallet_id, run_id: run.id }, 'Degraded range re-read failed');
+  }
+}
+
 export async function syncWallet(job: WatchJobRow, apiKey: string | undefined): Promise<void> {
   const { wallet_id, user_id, wallet_address, last_block } = job;
+  const w: WalletRef = { wallet_id, user_id, wallet_address };
 
   // Get current tip — use Alchemy if available, else Blockscout isn't block-aware so we
   // derive current block from the latest Blockscout tx (best-effort; Alchemy preferred).
@@ -207,6 +418,7 @@ export async function syncWallet(job: WatchJobRow, apiKey: string | undefined): 
   const window = scanWindow(last_block, currentBlock);
   if (!window) {
     logger.debug({ wallet_id, currentBlock }, 'No new blocks — skipping sync');
+    if (apiKey) await rescanDegradedRange(w, apiKey);
     return;
   }
   const { fromBlock, toBlock, isBackfill } = window;
@@ -217,75 +429,25 @@ export async function syncWallet(job: WatchJobRow, apiKey: string | undefined): 
   );
 
   const runRes = await query<{ id: string }>(
-    `INSERT INTO sync_runs (wallet_id, provider, chain, started_at, status)
-     VALUES ($1, 'pending', 'base', NOW(), 'running')
+    `INSERT INTO sync_runs (wallet_id, provider, chain, started_at, status, from_block, to_block)
+     VALUES ($1, 'pending', 'base', NOW(), 'running', $2, $3)
      RETURNING id`,
-    [wallet_id],
+    [wallet_id, fromBlock, toBlock],
   );
   const syncRunId = runRes.rows[0].id;
 
-  let ingested = 0;
-  let failed = 0;
   let provider = 'unknown';
 
   try {
-    const { pairs, provider: usedProvider } = await fetchTransfers(
-      wallet_address,
-      fromBlock,
-      toBlock,
-      apiKey,
-    );
-    provider = usedProvider;
-
-    for (const pair of pairs) {
-      // Inject wallet_id and user_id (normalizers used placeholders)
-      const tx: TxRow = { ...pair.tx, wallet_id };
-      const event: EventRow = { ...pair.event, wallet_id, user_id };
-
-      try {
-        const priceResult = await enrichUsdValue(
-          { supported: event.supported, symbol: event.asset, tokenAddress: event.token_address },
-          event.amount,
-          event.block_time,
-        );
-        const enrichedEvent: EventRow = { ...event, ...priceResult };
-        const enrichedTx: TxRow = { ...tx, usd_value: priceResult.usd_value };
-
-        const txSql = `
-          INSERT INTO transactions
-            (wallet_id, chain, hash, block_number, block_time, from_address, to_address,
-             asset, amount, usd_value, gas_used, gas_price, gas_usd, direction, tx_type, raw_payload)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-          ON CONFLICT (chain, hash, wallet_id) DO UPDATE SET chain = EXCLUDED.chain
-          RETURNING id`;
-
-        const txParams = [
-          enrichedTx.wallet_id, enrichedTx.chain, enrichedTx.hash, enrichedTx.block_number,
-          enrichedTx.block_time, enrichedTx.from_address, enrichedTx.to_address,
-          enrichedTx.asset, enrichedTx.amount, enrichedTx.usd_value,
-          enrichedTx.gas_used, enrichedTx.gas_price, enrichedTx.gas_usd,
-          enrichedTx.direction, enrichedTx.tx_type, JSON.stringify(enrichedTx.raw_payload),
-        ];
-
-        const txId = await insertOrGetTxId(wallet_id, enrichedTx.hash, enrichedTx.chain, txSql, txParams);
-
-        await insertEvent(txId, enrichedEvent);
-
-        ingested++;
-      } catch (err) {
-        failed++;
-        logger.error({ err, hash: tx.hash, wallet_id }, 'Failed to store transfer');
-      }
-    }
-
-    await retireUnsupportedLabels(wallet_id);
+    const result = await ingestRange(w, fromBlock, toBlock, apiKey, syncRunId);
+    provider = result.provider;
 
     // Snapshot balances
     await snapshotBalances(apiKey, wallet_id, user_id, wallet_address);
 
     // A failed store leaves the cursor in place so the next sync retries the same range.
     // Without Alchemy there is no real block number to advance to.
-    const advance = failed === 0 && Boolean(apiKey);
+    const advance = result.failed === 0 && Boolean(apiKey);
     await query(
       `UPDATE watch_jobs
        SET last_synced_at = NOW(),
@@ -297,17 +459,24 @@ export async function syncWallet(job: WatchJobRow, apiKey: string | undefined): 
 
     await query(
       `UPDATE sync_runs
-       SET status = $4, completed_at = NOW(), events_ingested = $1, provider = $2, failed_count = $5
+       SET status = $4, completed_at = NOW(), events_ingested = $1, provider = $2, failed_count = $5,
+           degraded = $6, log_gaps = $7
        WHERE id = $3`,
-      [ingested, provider, syncRunId, failed === 0 ? 'completed' : 'partial', failed],
+      [
+        result.ingested, provider, syncRunId, result.failed === 0 ? 'completed' : 'partial',
+        result.failed, result.degraded, result.logGaps,
+      ],
     );
 
     // Set activated_at on first successful sync (idempotent — only sets if null)
-    if (isBackfill || ingested > 0) {
+    if (isBackfill || result.ingested > 0) {
       void touchUserActivation(user_id);
     }
 
-    logger.info({ wallet_id, ingested, failed, provider, toBlock }, 'Wallet sync complete');
+    logger.info(
+      { wallet_id, ingested: result.ingested, failed: result.failed, provider, toBlock, degraded: result.degraded },
+      'Wallet sync complete',
+    );
   } catch (err) {
     await query(
       `UPDATE watch_jobs SET status = 'error', error_message = $1, updated_at = NOW() WHERE id = $2`,
@@ -321,4 +490,6 @@ export async function syncWallet(job: WatchJobRow, apiKey: string | undefined): 
     );
     throw err;
   }
+
+  if (apiKey) await rescanDegradedRange(w, apiKey);
 }

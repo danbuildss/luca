@@ -6,6 +6,8 @@ export type UnclassifiedEvent = {
   wallet_id: string;
   hash: string;
   log_index: number | null;
+  // 'gas' marks a network fee the wallet paid (see src/ingestion/gas.ts)
+  source_key?: string;
   block_time: Date;
   from_address: string;
   to_address: string | null;

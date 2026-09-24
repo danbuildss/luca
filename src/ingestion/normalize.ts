@@ -32,6 +32,11 @@ export type EventRow = {
   token_address: string | null;
   // ETH, USDC or BNKR by identity (see assets.ts); other tokens are stored but never shown
   supported: boolean;
+  // Exact integer amount in the asset's smallest unit (wei), as a decimal string
+  raw_amount: string | null;
+  block_number: number;
+  // How the transfer was observed; 'gas' marks a fee paid by the wallet
+  category: 'external' | 'internal' | 'erc20' | 'log' | 'gas';
   block_time: Date;
   from_address: string;
   to_address: string | null;
@@ -111,6 +116,16 @@ function toTxType(category: AlchemyTransfer['category']): TxRow['tx_type'] {
   return 'transfer';
 }
 
+// Alchemy/Blockscout raw values: hex ("0x1dcd6500") or decimal strings
+export function toRawAmount(value: string | number | null | undefined): string | null {
+  if (value === null || value === undefined || value === '') return null;
+  try {
+    return BigInt(value).toString();
+  } catch {
+    return null;
+  }
+}
+
 export function normalizeTransfer(
   t: AlchemyTransfer,
   walletAddress: string,
@@ -173,6 +188,9 @@ export function normalizeTransfer(
     source_key: sourceKey,
     token_address: identity.tokenAddress,
     supported: identity.supported,
+    raw_amount: toRawAmount(t.rawContract?.value),
+    block_number: blockNumber,
+    category: t.category === 'specialnft' ? 'erc20' : t.category,
     block_time: blockTime,
     from_address: t.from,
     to_address: t.to,

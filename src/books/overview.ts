@@ -3,6 +3,7 @@ import { usdValueSql } from '../ingestion/assets.js';
 import { BRIEF_CATEGORIES } from '../types/index.js';
 import { getPnlSummary, type PnlSummary } from './query.js';
 import { getValuedBalances } from './balances.js';
+import { getLedgerStatus, type LedgerStatus } from '../ledger/status.js';
 
 const USD = usdValueSql('ne');
 const COUNTERPARTY = `CASE WHEN ne.direction = 'in' THEN ne.from_address ELSE ne.to_address END`;
@@ -38,6 +39,8 @@ export type Overview = {
   first_time_payments: FirstTimePayment[];
   // Last 7 days of spending vs the weekly average of the 4 weeks before; null without history
   spend_vs_usual: { last_7d_usd: number; usual_weekly_usd: number; ratio: number } | null;
+  // Whether the books were proven against the chain; see src/ledger/reconcile.ts
+  ledger: LedgerStatus;
 };
 
 function num(v: string | null | undefined): number {
@@ -46,9 +49,10 @@ function num(v: string | null | undefined): number {
 
 // Everything behind a "what does the last month look like?" answer, from the ledger only.
 export async function getOverview(userId: string, periodDays: number): Promise<Overview> {
-  const [pnl, valued, totals, unknownRows, firstTime, spend] = await Promise.all([
+  const [pnl, valued, ledger, totals, unknownRows, firstTime, spend] = await Promise.all([
     getPnlSummary(userId, periodDays),
     getValuedBalances(userId),
+    getLedgerStatus(userId),
     query<{ transaction_count: number; internal_usd: string | null; unknown_usd: string | null }>(
       `SELECT COUNT(DISTINCT ne.hash)::int AS transaction_count,
               SUM(${USD}) FILTER (WHERE c.label::text = ANY($3::text[]))::text AS internal_usd,
@@ -80,6 +84,7 @@ export async function getOverview(userId: string, periodDays: number): Promise<O
        JOIN classifications c ON c.event_id = ne.id AND c.superseded_at IS NULL
        WHERE ne.user_id = $1 AND ne.supported IS TRUE
          AND ne.direction = 'out'
+         AND ne.source_key <> 'gas'
          AND c.label::text <> ALL($2::text[])
          AND ne.block_time >= NOW() - INTERVAL '7 days'
          AND NOT EXISTS (
@@ -129,5 +134,6 @@ export async function getOverview(userId: string, periodDays: number): Promise<O
     spend_vs_usual: s?.has_history && usualWeekly > 0
       ? { last_7d_usd: last7, usual_weekly_usd: usualWeekly, ratio: last7 / usualWeekly }
       : null,
+    ledger,
   };
 }

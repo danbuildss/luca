@@ -7,6 +7,7 @@ import {
   getOpsOperatorDetail,
 } from '../../ops/db.js';
 import { query } from '../../db.js';
+import { getLedgerHealth } from '../../ledger/status.js';
 import { escapeLegacyMarkdown, replyMarkdownSafe } from '../format.js';
 
 // Escape DB/user-controlled text for legacy Markdown (usernames often contain `_`).
@@ -37,7 +38,7 @@ function workerStatus(minutesStale: number | null): string {
 
 // /ops — system overview
 async function handleOpsOverview(ctx: Context): Promise<void> {
-  const ov = await getOpsOverview();
+  const [ov, ledger] = await Promise.all([getOpsOverview(), getLedgerHealth()]);
 
   const lines = [
     `*Luca ops overview*`,
@@ -50,6 +51,11 @@ async function handleOpsOverview(ctx: Context): Promise<void> {
     ``,
     `*Worker*`,
     `  ${workerStatus(ov.worker_minutes_stale)}  |  Loop: ${fmt(ov.worker_loop_count)}  |  Ping: ${ago(ov.worker_last_ping)}`,
+    ``,
+    `*Books vs chain*`,
+    `  Complete: ${ledger.complete}  |  Incomplete: ${ledger.incomplete}  |  Not yet checked: ${ledger.unchecked}`,
+    `  Repairs 7d: ${ledger.repairs_7d}  |  Missed by feed, caught by logs 7d: ${ledger.log_gaps_7d}`,
+    `  Blockscout ranges waiting for re-read: ${ledger.degraded_pending}`,
     ``,
     `*Quality*`,
     `  Unknown total: ${ov.total_unknown}  |  Unacked alerts: ${ov.unacked_alerts}`,
@@ -68,10 +74,22 @@ async function handleOpsOverview(ctx: Context): Promise<void> {
 
 // /ops errors — sync failures, stale wallets, brief failures
 async function handleOpsErrors(ctx: Context): Promise<void> {
-  const errors = await getOpsErrors();
+  const [errors, ledger] = await Promise.all([getOpsErrors(), getLedgerHealth()]);
   const lines: string[] = [`*Current errors*`, ``];
 
-  if (errors.sync_errors.length === 0 && errors.stale_wallets.length === 0 && errors.failed_briefs.length === 0) {
+  if (ledger.incomplete_wallets.length > 0) {
+    lines.push(`*Incomplete books (${ledger.incomplete_wallets.length})*`);
+    for (const w of ledger.incomplete_wallets.slice(0, 5)) {
+      const who = md(w.username ?? 'unknown');
+      const addr = md(w.address.slice(0, 10)) + '…';
+      const since = w.since_at ? ago(w.since_at) : `block ${md(w.since_block ?? '?')}`;
+      lines.push(`  @${who} ${addr} — unexplained balance change since ${since}`);
+    }
+    lines.push('');
+  }
+
+  if (ledger.incomplete_wallets.length === 0 && errors.sync_errors.length === 0
+    && errors.stale_wallets.length === 0 && errors.failed_briefs.length === 0) {
     lines.push('Nothing is broken right now.');
     await replyMarkdownSafe(ctx, lines.join('\n'));
     return;
@@ -139,7 +157,12 @@ async function handleOpsUser(ctx: Context, handle: string): Promise<void> {
     ...detail.wallets.map((w) => {
       const status = w.status === 'error' ? 'Error ' : w.active ? 'OK    ' : 'Paused';
       const addr = md(w.address.slice(0, 10)) + '…';
-      return `  ${status} ${addr}${w.label ? ` (${md(w.label)})` : ''}  ${fmt(w.event_count)} events  sync: ${ago(w.last_synced_at)}`;
+      const books = w.ledger_status === 'complete'
+        ? `books OK (checked ${ago(w.last_reconciled_at)})`
+        : w.ledger_status === 'incomplete'
+          ? `books INCOMPLETE since ${ago(w.incomplete_since_at)}`
+          : 'books not yet checked';
+      return `  ${status} ${addr}${w.label ? ` (${md(w.label)})` : ''}  ${fmt(w.event_count)} events  sync: ${ago(w.last_synced_at)}  ${books}`;
     }),
     ``,
     `*Quality*`,

@@ -184,6 +184,7 @@ export async function getOpsOperatorDetail(userId: string): Promise<{
     address: string; label: string | null; chain: string; active: boolean;
     status: string | null; last_synced_at: Date | null; error_message: string | null;
     event_count: number;
+    ledger_status: string | null; incomplete_since_at: Date | null; last_reconciled_at: Date | null;
   }>;
   recent_sync_runs: Array<{
     started_at: Date; status: string; provider: string; events_ingested: number | null;
@@ -213,15 +214,18 @@ export async function getOpsOperatorDetail(userId: string): Promise<{
       address: string; label: string | null; chain: string; active: boolean;
       status: string | null; last_synced_at: Date | null; error_message: string | null;
       event_count: string;
+      ledger_status: string | null; incomplete_since_at: Date | null; last_reconciled_at: Date | null;
     }>(
       `SELECT w.address, w.label, w.chain, w.active,
               wj.status, wj.last_synced_at, wj.error_message,
-              COUNT(ne.id)::text AS event_count
+              COUNT(ne.id)::text AS event_count,
+              wj.ledger_status, wj.incomplete_since_at, wj.last_reconciled_at
        FROM wallets w
        LEFT JOIN watch_jobs wj ON wj.wallet_id = w.id
        LEFT JOIN normalized_events ne ON ne.wallet_id = w.id AND ne.supported IS TRUE
        WHERE w.user_id = $1
-       GROUP BY w.id, wj.status, wj.last_synced_at, wj.error_message
+       GROUP BY w.id, wj.status, wj.last_synced_at, wj.error_message,
+                wj.ledger_status, wj.incomplete_since_at, wj.last_reconciled_at
        ORDER BY w.created_at ASC`,
       [userId],
     ),

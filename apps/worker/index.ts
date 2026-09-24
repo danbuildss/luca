@@ -3,6 +3,7 @@ import { closeDb } from '../../src/db.js';
 import { logger } from '../../src/logger.js';
 import { getActiveWatchJobs, syncWallet } from '../../src/ingestion/ingest.js';
 import { repriceMissing } from '../../src/ingestion/reprice.js';
+import { reconcileDueWallets } from '../../src/ledger/reconcile.js';
 import { classifyAllUsers } from '../../src/classification/engine.js';
 import { getDistinctUserIds } from '../../src/classification/store.js';
 import { detectUnknownCounterparties } from '../../src/alerts/counterparty.js';
@@ -40,6 +41,10 @@ async function runCycle(): Promise<void> {
     } catch (err) {
       logger.error({ err, wallet_id: job.wallet_id }, 'Sync failed — wallet marked error');
     }
+  }
+
+  if (!shuttingDown && apiKey) {
+    await reconcileDueWallets(apiKey).catch((err: unknown) => logger.error({ err }, 'Balance check failed'));
   }
 
   if (!shuttingDown) {
