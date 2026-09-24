@@ -5,8 +5,6 @@ import type { ClassificationResult } from './types.js';
 
 // Pure parsing/validation of the classifier LLM output — no DB, no network.
 
-const labelSet = new Set<string>(CLASSIFICATION_LABELS);
-
 // Lenient envelope: items are validated one by one below so a single bad item
 // never poisons the whole batch.
 const envelopeSchema = z.union([
@@ -14,7 +12,7 @@ const envelopeSchema = z.union([
   z.object({ results: z.array(z.unknown()) }).passthrough(),
 ]);
 
-const itemSchema = z.object({
+const itemSchema = (labelSet: ReadonlySet<string>) => z.object({
   id: z.string().min(1),
   label: z
     .string()
@@ -44,11 +42,14 @@ function stripFences(text: string): string {
     .trim();
 }
 
+// allowedLabels: labels the model may choose; any other label makes that item invalid.
 export function parseLlmClassificationResponse(
   text: string,
   batchIds: readonly string[],
+  allowedLabels: readonly string[] = CLASSIFICATION_LABELS,
 ): LlmParseResult {
   const allowedIds = new Set(batchIds);
+  const schema = itemSchema(new Set(allowedLabels));
   const results = new Map<string, ClassificationResult>();
 
   let raw: unknown;
@@ -65,7 +66,7 @@ export function parseLlmClassificationResponse(
   const items = Array.isArray(envelope.data) ? envelope.data : envelope.data.results;
 
   for (const item of items) {
-    const parsed = itemSchema.safeParse(item);
+    const parsed = schema.safeParse(item);
     if (!parsed.success) continue;
     const { id, label, confidence, evidence } = parsed.data;
     if (!allowedIds.has(id) || results.has(id)) continue; // unknown id or duplicate → first wins

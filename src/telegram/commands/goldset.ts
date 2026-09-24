@@ -10,7 +10,8 @@ import type { AuthedUser } from '../auth.js';
 const LABEL_ROWS = [
   ['revenue', 'expense', 'gas'],
   ['internal_transfer', 'treasury', 'refund'],
-  ['x402_income', 'x402_spend', 'unknown'],
+  ['x402_income', 'x402_spend', 'swap'],
+  ['unknown'],
 ];
 
 const LABEL_DISPLAY: Record<string, string> = {
@@ -22,6 +23,7 @@ const LABEL_DISPLAY: Record<string, string> = {
   refund: 'Refund',
   x402_income: 'x402 in',
   x402_spend: 'x402 out',
+  swap: 'Swap',
   unknown: 'Unknown',
 };
 

@@ -4,6 +4,7 @@ import { config } from '../config.js';
 import { logger } from '../logger.js';
 import type { ClassificationFailure, ClassificationResult, UnclassifiedEvent } from './types.js';
 import { parseLlmClassificationResponse } from './llmParse.js';
+import { MODEL_LABELS } from '../types/index.js';
 
 const LLM_MODEL = 'gpt-4o-mini';
 const LLM_BATCH_SIZE = 20;
@@ -15,20 +16,29 @@ const INPUT_COST_PER_TOKEN = 0.15 / 1_000_000;
 const OUTPUT_COST_PER_TOKEN = 0.60 / 1_000_000;
 
 const SYSTEM_PROMPT = `You are a financial transaction classifier for an on-chain business.
-Classify each transaction into exactly one of these labels:
+Network fees, transfers between the operator's own wallets and swaps are already handled
+before you see anything. Classify each remaining transfer into exactly one of these labels:
 - revenue: payment received for goods or services sold
 - expense: payment sent for goods or services purchased
-- internal_transfer: movement of funds between wallets owned by the same entity
 - treasury: large capital allocation to/from a treasury wallet
-- gas: network fee payment (small ETH amounts for transaction costs)
 - x402_income: micropayment received via the x402 HTTP payment protocol
 - x402_spend: micropayment sent via the x402 HTTP payment protocol
 - refund: return of a prior payment
 - unknown: cannot determine purpose with reasonable confidence
 
+Each transfer comes with "same_transaction" (the other movements in its transaction) and
+"counterparty_history" (how many earlier transfers with this address there were, and how
+they were labeled). Use them as evidence. Prefer unknown over a guess.
+
 Return a JSON object with a "results" array — one object per input transaction, in the same order,
 copying each "id" exactly:
 {"results":[{"id":"<id>","label":"<label>","confidence":<0.0-1.0>,"evidence":"<one concise sentence>"}]}`;
+
+// Evidence beyond the transfer itself (built in src/classification/engine.ts)
+export type LlmContext = {
+  same_transaction: Array<{ kind: 'transfer' | 'network_fee'; direction: 'in' | 'out'; asset: string | null; amount: number | null }>;
+  counterparty_history: { count: number; labels: Partial<Record<string, number>> };
+};
 
 type LlmEventInput = {
   id: string;
@@ -38,7 +48,7 @@ type LlmEventInput = {
   from: string;
   to: string | null;
   block_time: string;
-};
+} & Partial<LlmContext>;
 
 export type LlmClassificationOutcome = {
   results: Map<string, ClassificationResult>;
@@ -87,6 +97,7 @@ function isPermanentApiError(err: unknown): boolean {
 export async function classifyWithLlmDetailed(
   events: UnclassifiedEvent[],
   userId: string,
+  context: Map<string, LlmContext> = new Map(),
 ): Promise<LlmClassificationOutcome> {
   const results = new Map<string, ClassificationResult>();
   const failures = new Map<string, ClassificationFailure>();
@@ -127,6 +138,7 @@ export async function classifyWithLlmDetailed(
       from: e.from_address,
       to: e.to_address,
       block_time: e.block_time.toISOString(),
+      ...context.get(e.id),
     }));
 
     const response = await openai.chat.completions
@@ -169,7 +181,7 @@ export async function classifyWithLlmDetailed(
       continue;
     }
 
-    const parsed = parseLlmClassificationResponse(text, batchIds);
+    const parsed = parseLlmClassificationResponse(text, batchIds, MODEL_LABELS);
     if (parsed.malformed) {
       logger.warn({ text: text.slice(0, 500) }, 'LLM response is not valid JSON');
     } else if (parsed.invalidIds.length > 0) {

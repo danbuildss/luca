@@ -26,6 +26,7 @@ describeDb('getPnlSummary (integration)', () => {
     // Excluded from P&L
     await ev({ direction: 'out', label: 'internal_transfer', amount: 1000, usdValue: 1000 });
     await ev({ direction: 'in', label: 'treasury', amount: 500, usdValue: 500 });
+    // Refund received: reduces expenses
     await ev({ direction: 'in', label: 'refund', amount: 3, usdValue: 3 });
     await ev({ direction: 'in', label: 'unknown', amount: 7, usdValue: 7 });
     // Outside the 7-day window
@@ -39,9 +40,9 @@ describeDb('getPnlSummary (integration)', () => {
     const pnl = await getPnlSummary(user.id, 7);
     expect(pnl.period_days).toBe(7);
     expect(pnl.revenue_usdc).toBeCloseTo(110, 6); // 100 − 10 + 20
-    expect(pnl.expenses_usdc).toBeCloseTo(35, 6); // 40 − 5
+    expect(pnl.expenses_usdc).toBeCloseTo(32, 6); // 40 − 5 − 3
     expect(pnl.gas_usdc).toBeCloseTo(2, 6);
-    expect(pnl.net_usdc).toBeCloseTo(73, 6);      // 110 − 35 − 2
+    expect(pnl.net_usdc).toBeCloseTo(76, 6);      // 110 − 32 − 2
     expect(pnl.unknown_count).toBe(1);
   });
 
@@ -63,7 +64,9 @@ describeDb('getPnlSummary (integration)', () => {
 
     const pnl = await getPnlSummary(user.id, 30);
     expect(pnl).toEqual({
-      period_days: 30, revenue_usdc: 0, expenses_usdc: 0, gas_usdc: 0, net_usdc: 0, unknown_count: 0, pending_count: 0,
+      period_days: 30, revenue_usdc: 0, expenses_usdc: 0, gas_usdc: 0, net_usdc: 0,
+      revenue_provisional_usdc: 0, expenses_provisional_usdc: 0,
+      provisional_count: 0, unknown_count: 0, unpriced_count: 0, pending_count: 0,
     });
   });
 });

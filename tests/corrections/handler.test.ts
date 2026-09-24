@@ -4,7 +4,13 @@ import { applyCorrection, EventNotFoundError } from '../../src/corrections/handl
 // Mock DB modules to keep tests unit-level (no real DB)
 vi.mock('../../src/corrections/store.js', () => ({
   getEventWithClassification: vi.fn(),
-  upsertCounterpartyRule: vi.fn().mockResolvedValue(undefined),
+  upsertCounterpartyRule: vi.fn().mockResolvedValue('rule-1'),
+  getActiveRule: vi.fn().mockResolvedValue(null),
+  isSwapVenue: vi.fn().mockResolvedValue(false),
+  disableRule: vi.fn().mockResolvedValue(undefined),
+  relabelEvents: vi.fn().mockResolvedValue(0),
+  eventsForRule: vi.fn().mockResolvedValue([]),
+  eventsLabeledByRule: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('../../src/db.js', () => {

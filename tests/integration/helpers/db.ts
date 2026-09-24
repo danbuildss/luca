@@ -194,7 +194,7 @@ export function addr(tag?: number): string {
 
 export type Label =
   | 'revenue' | 'expense' | 'internal_transfer' | 'treasury' | 'gas'
-  | 'x402_income' | 'x402_spend' | 'refund' | 'unknown';
+  | 'x402_income' | 'x402_spend' | 'refund' | 'swap' | 'unknown';
 
 export type UserFx = { id: string; telegramId: number };
 export type WalletFx = { id: string; userId: string; address: string };
@@ -316,6 +316,8 @@ export async function insertEvent(opts: {
     `INSERT INTO transactions
        (wallet_id, chain, hash, block_time, from_address, to_address, asset, amount, usd_value, direction, tx_type)
      VALUES ($1, 'base', $2, ${atExpr(at, 3)}, $4, $5, $6, $7, $8, $9, 'transfer')
+     -- several movements of one transaction share its row
+     ON CONFLICT (chain, hash, wallet_id) DO UPDATE SET chain = EXCLUDED.chain
      RETURNING id`,
     [opts.wallet.id, hash, at, from, to, asset, amount, usd, opts.direction],
   );

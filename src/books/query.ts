@@ -8,6 +8,8 @@ export type BooksSummaryRow = {
   direction: 'in' | 'out' | null;
   event_count: number;
   total_usdc: string | null; // NUMERIC comes back as string from pg
+  // Part of total_usdc that is the AI's guess, not confirmed
+  provisional_usdc: string | null;
 };
 
 export type BooksEvent = {
@@ -22,6 +24,7 @@ export type BooksEvent = {
   direction: 'in' | 'out';
   label: ClassificationLabel;
   confidence: string;
+  status: 'confirmed' | 'provisional' | 'unknown';
 };
 
 const USD_COALESCE = usdValueSql('ne');
@@ -31,7 +34,8 @@ export async function getBooksSummary(userId: string, periodDays: number): Promi
     `SELECT c.label,
             ne.direction,
             COUNT(*)::int            AS event_count,
-            SUM(${USD_COALESCE})     AS total_usdc
+            SUM(${USD_COALESCE})     AS total_usdc,
+            SUM(${USD_COALESCE}) FILTER (WHERE c.status = 'provisional') AS provisional_usdc
      FROM classifications c
      JOIN normalized_events ne ON ne.id = c.event_id
      WHERE ne.user_id = $1
@@ -54,7 +58,7 @@ export async function getBooksEvents(params: {
   const res = await query<BooksEvent>(
     `SELECT ne.id, ne.hash, ne.block_time, ne.from_address, ne.to_address,
             ne.asset, ne.amount, ne.usd_value, ne.direction,
-            c.label, c.confidence
+            c.label, c.confidence, c.status
      FROM classifications c
      JOIN normalized_events ne ON ne.id = c.event_id
      WHERE ne.user_id = $1
@@ -75,35 +79,57 @@ export type PnlSummary = {
   expenses_usdc: number;
   gas_usdc: number;
   net_usdc: number;
+  // Parts of revenue and expenses that are the AI's guesses (status provisional)
+  revenue_provisional_usdc: number;
+  expenses_provisional_usdc: number;
+  // Labeled transfers that are the AI's guesses, in any category
+  provisional_count: number;
+  // Transfers that need the operator's answer
   unknown_count: number;
+  // Transfers in the totals' categories (or unknown) with no USD price yet
+  unpriced_count: number;
   // Supported transfers in the period not classified yet, so not in the totals above
   pending_count: number;
 };
 
-// Direction-aware P&L totals. Money flowing against a category's natural
-// direction nets it down: a revenue-labelled 'out' (customer refund) reduces
-// revenue, an expense/gas-labelled 'in' (vendor refund) reduces expenses/gas.
-// internal / treasury / refund labels are excluded from P&L.
+// Direction-aware P&L totals. Money flowing against a category's natural direction nets
+// it down: a revenue-labelled 'out' (customer refund) reduces revenue, an expense/gas-
+// labelled 'in' (vendor refund) reduces expenses/gas. Refunds net the same way: one sent
+// reduces revenue, one received reduces expenses. Internal transfers, treasury moves and
+// swaps are not in P&L (a swap's gas is).
 export async function getPnlSummary(userId: string, periodDays: number): Promise<PnlSummary> {
+  const REVENUE = `CASE
+    WHEN c.label::text = ANY($3::text[]) THEN CASE WHEN ne.direction = 'out' THEN -${USD_COALESCE} ELSE ${USD_COALESCE} END
+    WHEN c.label = 'refund' AND ne.direction = 'out' THEN -${USD_COALESCE}
+  END`;
+  const EXPENSES = `CASE
+    WHEN c.label::text = ANY($4::text[]) THEN CASE WHEN ne.direction = 'in' THEN -${USD_COALESCE} ELSE ${USD_COALESCE} END
+    WHEN c.label = 'refund' AND ne.direction = 'in' THEN -${USD_COALESCE}
+  END`;
   const res = await query<{
     revenue_usdc: string | null;
     expenses_usdc: string | null;
     gas_usdc: string | null;
+    revenue_provisional_usdc: string | null;
+    expenses_provisional_usdc: string | null;
+    provisional_count: number | null;
     unknown_count: number | null;
+    unpriced_count: number | null;
     pending_count: number | null;
   }>(
     `SELECT
-       SUM(CASE WHEN c.label::text = ANY($3::text[])
-                THEN CASE WHEN ne.direction = 'out' THEN -${USD_COALESCE} ELSE ${USD_COALESCE} END
-           END)::text AS revenue_usdc,
-       SUM(CASE WHEN c.label::text = ANY($4::text[])
-                THEN CASE WHEN ne.direction = 'in' THEN -${USD_COALESCE} ELSE ${USD_COALESCE} END
-           END)::text AS expenses_usdc,
+       SUM(${REVENUE})::text AS revenue_usdc,
+       SUM(${EXPENSES})::text AS expenses_usdc,
        SUM(CASE WHEN c.label::text = ANY($5::text[])
                 THEN CASE WHEN ne.direction = 'in' THEN -${USD_COALESCE} ELSE ${USD_COALESCE} END
            END)::text AS gas_usdc,
-       (COUNT(*) FILTER (WHERE c.label::text = ANY($6::text[])))::int AS unknown_count,
-       (COUNT(*) FILTER (WHERE c.id IS NULL))::int AS pending_count
+       SUM(${REVENUE}) FILTER (WHERE c.status = 'provisional')::text AS revenue_provisional_usdc,
+       SUM(${EXPENSES}) FILTER (WHERE c.status = 'provisional')::text AS expenses_provisional_usdc,
+       (COUNT(*) FILTER (WHERE c.status = 'provisional'))::int AS provisional_count,
+       (COUNT(*) FILTER (WHERE c.label::text = ANY($6::text[]) AND c.source IS DISTINCT FROM 'failure'))::int AS unknown_count,
+       (COUNT(*) FILTER (WHERE ${USD_COALESCE} IS NULL AND c.source IS DISTINCT FROM 'failure'
+                           AND c.label::text <> ALL($7::text[])))::int AS unpriced_count,
+       (COUNT(*) FILTER (WHERE c.id IS NULL OR c.source = 'failure'))::int AS pending_count
      FROM normalized_events ne
      LEFT JOIN classifications c ON c.event_id = ne.id AND c.superseded_at IS NULL
      WHERE ne.user_id = $1
@@ -116,6 +142,7 @@ export async function getPnlSummary(userId: string, periodDays: number): Promise
       BRIEF_CATEGORIES.expenses,
       BRIEF_CATEGORIES.gas,
       BRIEF_CATEGORIES.unknown,
+      [...BRIEF_CATEGORIES.internal, ...BRIEF_CATEGORIES.conversion],
     ],
   );
 
@@ -131,7 +158,11 @@ export async function getPnlSummary(userId: string, periodDays: number): Promise
     expenses_usdc: expenses,
     gas_usdc: gas,
     net_usdc: revenue - expenses - gas,
+    revenue_provisional_usdc: num(row?.revenue_provisional_usdc),
+    expenses_provisional_usdc: num(row?.expenses_provisional_usdc),
+    provisional_count: row?.provisional_count ?? 0,
     unknown_count: row?.unknown_count ?? 0,
+    unpriced_count: row?.unpriced_count ?? 0,
     pending_count: row?.pending_count ?? 0,
   };
 }

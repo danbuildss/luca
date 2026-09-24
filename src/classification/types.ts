@@ -1,4 +1,4 @@
-import type { ClassificationLabel, ClassificationMethod } from '../types/index.js';
+import type { ClassificationLabel, ClassificationMethod, TxShape } from '../types/index.js';
 
 export type UnclassifiedEvent = {
   id: string;
@@ -24,9 +24,14 @@ export type ClassificationResult = {
   confidence: number;
   method: ClassificationMethod;
   evidence: string;
+  // What the whole transaction looked like (src/classification/shape.ts)
+  shape?: TxShape;
+  // The learned rule that produced this label
+  rule_id?: string | null;
 };
 
 export type CounterpartyRuleRow = {
+  id?: string;
   address: string;
   label: ClassificationLabel;
   name: string | null;

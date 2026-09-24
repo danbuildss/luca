@@ -53,6 +53,13 @@ export function figuresBlock(rows: string[][]): string {
   return ['```', ...lines, '```'].join('\n');
 }
 
+// Third column beside a total that includes the AI's guesses: "incl. $300.00 provisional"
+export function provisionalNote(amount: number): string {
+  if (Math.abs(amount) < 0.005) return '';
+  const abs = Math.abs(amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `incl. ${amount < 0 ? '-' : ''}$${abs} provisional`;
+}
+
 export const TELEGRAM_MAX_LENGTH = 4096;
 
 // Split text into Telegram-sized chunks, preferring newline boundaries.

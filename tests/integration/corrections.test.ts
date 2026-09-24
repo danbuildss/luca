@@ -78,16 +78,32 @@ describeDb('corrections (integration)', () => {
 
       await applyCorrection({ userId: user.id, eventId: inEv.id, newLabel: 'revenue' });
       await applyCorrection({ userId: user.id, eventId: outEv.id, newLabel: 'refund' });
-      // Re-correcting the same direction updates in place (no third rule)
-      await applyCorrection({ userId: user.id, eventId: inEv.id, newLabel: 'x402_income' });
 
       const rules = (await getCounterpartyRules(user.id))
         .map((r) => ({ direction: r.direction, label: r.label }))
         .sort((a, b) => String(a.direction).localeCompare(String(b.direction)));
       expect(rules).toEqual([
-        { direction: 'in', label: 'x402_income' },
+        { direction: 'in', label: 'revenue' },
         { direction: 'out', label: 'refund' },
       ]);
+    });
+
+    it('a correction that contradicts a rule switches it off; the next answer teaches it again', async () => {
+      const { user, wallet } = await seedUserWithWallet();
+      const inEv = await insertEvent({ wallet, direction: 'in', counterparty: CUSTOMER });
+
+      await applyCorrection({ userId: user.id, eventId: inEv.id, newLabel: 'revenue' });
+      const off = await applyCorrection({ userId: user.id, eventId: inEv.id, newLabel: 'x402_income' });
+      expect(off.rule).toEqual({ kind: 'switched_off', sentBack: 0 });
+      expect(await getCounterpartyRules(user.id)).toEqual([]);
+
+      const again = await applyCorrection({ userId: user.id, eventId: inEv.id, newLabel: 'x402_income' });
+      expect(again.rule).toEqual({ kind: 'learned', relabeled: 0 });
+      const rules = await getCounterpartyRules(user.id);
+      expect(rules.map((r) => [r.direction, r.label])).toEqual([['in', 'x402_income']]);
+      // Still one row per address and direction
+      const all = await sql(`SELECT 1 FROM counterparty_rules WHERE user_id = $1`, [user.id]);
+      expect(all).toHaveLength(1);
     });
 
     it('throws EventNotFoundError for another user\'s event', async () => {

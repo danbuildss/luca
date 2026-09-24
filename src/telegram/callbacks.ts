@@ -1,8 +1,9 @@
 import type { Context } from 'telegraf';
 import { Markup } from 'telegraf';
 import { ClassificationLabel, CLASSIFICATION_LABELS } from '../types/index.js';
-import { applyCorrection, EventNotFoundError } from '../corrections/handler.js';
+import { applyCorrection, describeRuleOutcome, EventNotFoundError } from '../corrections/handler.js';
 import { resolveAlert } from '../alerts/counterparty.js';
+import { labelQuestionGroup, skipQuestionGroup } from '../alerts/questions.js';
 import { addGoldTransaction } from '../quality/goldset.js';
 import { setFailureReason } from '../corrections/store.js';
 import type { FailureReason } from '../corrections/handler.js';
@@ -44,6 +45,7 @@ const FAILURE_REASON_KEYBOARD = (correctionId: string) =>
 //   skip:<eventId>                     — skip a review event (no change)
 //   al:<alertId>:<label>               — label from a counterparty alert (eventId resolved server-side)
 //   alert_label:<alertId>:<eventId>:<label>  — legacy format (kept for already-sent messages)
+//   qg:<groupId>:<label> / qg_skip:<groupId>  — answer or skip a grouped question
 //   agentok:<actionId> / agentno:<actionId>  — confirm / cancel an agent write action
 
 export async function handleCallback(ctx: Context, user: AuthedUser): Promise<void> {
@@ -58,6 +60,12 @@ export async function handleCallback(ctx: Context, user: AuthedUser): Promise<vo
       await handleLabelCallback(ctx, user, data);
     } else if (data.startsWith('skip:')) {
       await handleSkipCallback(ctx, data);
+    } else if (data.startsWith('qg:')) {
+      await handleQuestionGroupCallback(ctx, user, data);
+    } else if (data.startsWith('qg_skip:')) {
+      await skipQuestionGroup(data.slice('qg_skip:'.length), user.userId);
+      await ctx.answerCbQuery('Skipped. I will ask again if more of these come in.');
+      try { await ctx.editMessageReplyMarkup(undefined); } catch { /* already edited */ }
     } else if (data.startsWith('al:')) {
       await handleAlertLabelShortCallback(ctx, user, data);
     } else if (data.startsWith('alert_label:')) {
@@ -108,6 +116,8 @@ async function handleLabelCallback(ctx: Context, user: AuthedUser, data: string)
         ? `${(ctx.callbackQuery!.message as { text: string }).text}\n\nLabeled as ${labelValue}.`
         : `Labeled as ${labelValue}.`,
     );
+    const note = describeRuleOutcome(result.rule);
+    if (note) await ctx.reply(note);
     if (result.wasCorrection) {
       await ctx.reply(
         'What did I get wrong? This helps me improve.',
@@ -131,6 +141,33 @@ async function handleSkipCallback(ctx: Context, _data: string): Promise<void> {
   } catch {
     // message may already be edited — ignore
   }
+}
+
+const LABEL_WORDS: Partial<Record<ClassificationLabel, string>> = {
+  revenue: 'revenue', expense: 'expenses', internal_transfer: 'internal transfers', refund: 'refunds',
+};
+
+async function handleQuestionGroupCallback(ctx: Context, user: AuthedUser, data: string): Promise<void> {
+  // qg:<groupId>:<label>
+  const parts = data.split(':');
+  if (parts.length !== 3) { await ctx.answerCbQuery('Bad callback data'); return; }
+  const [, groupId, labelValue] = parts;
+  if (!(CLASSIFICATION_LABELS as readonly string[]).includes(labelValue)) {
+    await ctx.answerCbQuery('Invalid label');
+    return;
+  }
+  const label = labelValue as ClassificationLabel;
+
+  const answer = await labelQuestionGroup(groupId, user.userId, label);
+  try { await ctx.editMessageReplyMarkup(undefined); } catch { /* already edited */ }
+  if (!answer.ok) {
+    await ctx.answerCbQuery(answer.reason === 'nothing_open' ? 'These are already labeled.' : 'Question not found');
+    return;
+  }
+  await ctx.answerCbQuery('Labeled.');
+  const what = answer.labeled === 1 ? 'that transfer' : `all ${answer.labeled} transfers`;
+  const note = describeRuleOutcome(answer.rule);
+  await ctx.reply([`Done. I labeled ${what} as ${LABEL_WORDS[label] ?? label}.`, note].filter(Boolean).join(' '));
 }
 
 async function getEventIdForAlert(alertId: string, userId: string): Promise<string | null> {
@@ -184,8 +221,10 @@ async function handleAlertLabelShortCallback(ctx: Context, user: AuthedUser, dat
       }),
       resolveAlert({ alertId, userId: user.userId, status: 'labeled' }),
     ]);
-    await ctx.answerCbQuery(`Labeled as ${labelValue}. Future transfers from this address will be labeled the same way.`);
+    await ctx.answerCbQuery(`Labeled as ${labelValue}.`);
     await ctx.editMessageReplyMarkup(undefined);
+    const note = describeRuleOutcome(result.rule);
+    if (note) await ctx.reply(note);
     if (result.wasCorrection) {
       await ctx.reply('What did I get wrong? This helps me improve.', FAILURE_REASON_KEYBOARD(result.correctionId));
     }
@@ -219,8 +258,10 @@ async function handleAlertLabelCallback(ctx: Context, user: AuthedUser, data: st
       }),
       resolveAlert({ alertId, userId: user.userId, status: 'labeled' }),
     ]);
-    await ctx.answerCbQuery(`Labeled as ${labelValue}. Future transfers from this address will be labeled the same way.`);
+    await ctx.answerCbQuery(`Labeled as ${labelValue}.`);
     await ctx.editMessageReplyMarkup(undefined);
+    const note = describeRuleOutcome(result.rule);
+    if (note) await ctx.reply(note);
     if (result.wasCorrection) {
       await ctx.reply('What did I get wrong? This helps me improve.', FAILURE_REASON_KEYBOARD(result.correctionId));
     }
@@ -330,10 +371,14 @@ async function handleAgentActionCallback(
   try { await ctx.editMessageReplyMarkup(undefined); } catch { /* already edited */ }
 
   let errorMsg: string | null = null;
+  let note: string | null = null;
   try {
     const result = await executeTool(action.userId, action.toolName, action.args);
     if (result && !Array.isArray(result) && typeof result.error === 'string') {
       errorMsg = result.error;
+    }
+    if (result && !Array.isArray(result) && typeof result.note === 'string') {
+      note = result.note;
     }
   } catch (err) {
     if (err instanceof EventNotFoundError) {
@@ -346,7 +391,7 @@ async function handleAgentActionCallback(
 
   const text = errorMsg
     ? `I could not complete this: ${desc}\n${errorMsg}`
-    : `Done: ${desc}`;
+    : `Done: ${desc}${note ? `\n${note}` : ''}`;
   try {
     await ctx.editMessageText(text);
   } catch {
@@ -354,6 +399,6 @@ async function handleAgentActionCallback(
   }
   await recordAgentOutcome(
     user.userId,
-    errorMsg ? `(Confirmed action failed: ${desc} — ${errorMsg})` : `(Operator confirmed and I completed: ${desc})`,
+    errorMsg ? `(Confirmed action failed: ${desc} — ${errorMsg})` : `(Operator confirmed and I completed: ${desc}${note ? ` ${note}` : ''})`,
   );
 }

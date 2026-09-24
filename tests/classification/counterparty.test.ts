@@ -93,7 +93,7 @@ describe('classifyByCounterparty', () => {
   it('includes source note in evidence', () => {
     const event = makeEvent({ direction: 'in', from_address: KNOWN });
     const result = classifyByCounterparty(event, rules);
-    expect(result?.evidence).toContain('user correction');
+    expect(result?.evidence).toContain('learned from your answer');
   });
 });
 

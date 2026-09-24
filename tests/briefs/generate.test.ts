@@ -23,6 +23,11 @@ const pnlRow = (rev: string, exp: string, gas: string, unknown = 0) => ({
   rows: [{ revenue_usdc: rev, expenses_usdc: exp, gas_usdc: gas, unknown_count: unknown }],
 });
 
+// Open unknown transfers across question groups (getOpenUnknowns)
+const open = (count: number, small = 0, smallUsd: string | null = null) => ({
+  rows: [{ count, small_count: small, small_usd: smallUsd }],
+});
+
 // Extract the amount printed on a given brief line, e.g. "Net" → "-$50.00"
 function lineValue(brief: string, label: string): string | undefined {
   const line = brief.split('\n').find((l) => l.includes(label));
@@ -62,11 +67,11 @@ describe('generateDailyBrief', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('prints signed revenue, expenses, gas and net', async () => {
-    // Query order: getPnlSummary(1d), getPnlSummary(2d), unknownCount, topCounterparties
+    // Query order: getPnlSummary(1d), getPnlSummary(2d), open unknowns, topCounterparties
     queueResults(
       pnlRow('450', '23.50', '0.80'),   // today
       pnlRow('900', '47', '1.60'),       // 2d total
-      { rows: [{ cnt: '2' }] },          // unknownCount
+      open(2),                           // open unknowns
       { rows: [] },                      // topCounterparties
     );
 
@@ -82,7 +87,7 @@ describe('generateDailyBrief', () => {
     queueResults(
       pnlRow('10', '60', '0'),
       pnlRow('20', '120', '0'),
-      { rows: [{ cnt: '0' }] },
+      open(0),
       { rows: [] },
     );
 
@@ -94,7 +99,7 @@ describe('generateDailyBrief', () => {
     queueResults(
       pnlRow('100', '40', '10'),
       pnlRow('100', '40', '10'),
-      { rows: [{ cnt: '0' }] },
+      open(0),
       { rows: [] },
     );
 
@@ -106,7 +111,7 @@ describe('generateDailyBrief', () => {
     queueResults(
       pnlRow('150', '50', '0'),   // today
       pnlRow('250', '100', '0'),  // 2d → yesterday: rev 100, exp 50
-      { rows: [{ cnt: '0' }] },
+      open(0),
       { rows: [] },
     );
 
@@ -119,20 +124,38 @@ describe('generateDailyBrief', () => {
     queueResults(
       pnlRow('100', '0', '0'),
       pnlRow('100', '0', '0'),
-      { rows: [{ cnt: '5' }] },
+      open(5),
       { rows: [] },
     );
 
     const brief = await generateDailyBrief('user-1');
-    expect(brief).toContain('5 unknown transfers need context');
+    expect(brief).toContain('5 transfers need context.');
     expect(brief).not.toContain('/review');
+  });
+
+  it('lists small unknowns that never got their own question', async () => {
+    queueResults(pnlRow('0', '0', '0'), pnlRow('0', '0', '0'), open(3, 2, '4.20'), { rows: [] });
+    const brief = await generateDailyBrief('user-1');
+    expect(brief).toContain('3 transfers need context. 2 of them are under $10.00 ($4.20 in total), so I have not pinged you about them.');
+  });
+
+  it('shows the provisional part beside revenue and says how many labels are guesses', async () => {
+    queueResults(
+      { rows: [{ revenue_usdc: '450', expenses_usdc: '0', gas_usdc: '0', revenue_provisional_usdc: '300', provisional_count: 2 }] },
+      pnlRow('450', '0', '0'),
+      open(0),
+      { rows: [] },
+    );
+    const brief = await generateDailyBrief('user-1');
+    expect(brief.split('\n').find((l) => l.startsWith('Revenue'))).toContain('incl. $300.00 provisional');
+    expect(brief).toContain('2 labels are my best guess, not confirmed by you or a rule.');
   });
 
   it('omits unknown nudge when no unknowns', async () => {
     queueResults(
       pnlRow('100', '0', '0'),
       pnlRow('100', '0', '0'),
-      { rows: [{ cnt: '0' }] },
+      open(0),
       { rows: [] },
     );
 
@@ -144,7 +167,7 @@ describe('generateDailyBrief', () => {
     queueResults(
       pnlRow('500', '50', '1'),
       pnlRow('1000', '100', '2'),
-      { rows: [{ cnt: '0' }] },
+      open(0),
       {
         rows: [
           { address: '0xABCDEF1234567890abcdef', name: 'Acme Corp', total_usdc: '300' },
@@ -164,7 +187,7 @@ describe('generateDailyBrief', () => {
     queueResults(
       pnlRow('500', '50', '1'),
       pnlRow('1000', '100', '2'),
-      { rows: [{ cnt: '0' }] },
+      open(0),
       { rows: [{ address: '0xABCDEF1234567890abcdef', name: 'evil_*name[`', total_usdc: '300' }] },
     );
 
@@ -177,7 +200,7 @@ describe('generateDailyBrief', () => {
     queueResults(
       pnlRow('0', '0', '0'),
       pnlRow('0', '0', '0'),
-      { rows: [{ cnt: '0' }] },
+      open(0),
       { rows: [] },
     );
 
@@ -193,7 +216,7 @@ describe('generateWeeklyBrief', () => {
     queueResults(
       pnlRow('2450', '180', '3.20'),   // this week (7d)
       pnlRow('4500', '400', '6'),       // 14d total
-      { rows: [{ cnt: '3' }] },
+      open(3),
       { rows: [] },
     );
 
@@ -212,7 +235,7 @@ describe('generateWeeklyBrief', () => {
     queueResults(
       pnlRow('10', '60', '0'),
       pnlRow('10', '60', '0'),
-      { rows: [{ cnt: '0' }] },
+      open(0),
       { rows: [] },
     );
 
@@ -224,7 +247,7 @@ describe('generateWeeklyBrief', () => {
     queueResults(
       pnlRow('0', '0', '0'),
       pnlRow('0', '0', '0'),
-      { rows: [{ cnt: '0' }] },
+      open(0),
       { rows: [] },
     );
 
