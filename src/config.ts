@@ -31,6 +31,9 @@ const schema = z.object({
   // App
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(3000),
+  // API bind address. Loopback by default: user routes trust the x-user-id header,
+  // so the API must never be reachable from outside the host without real auth.
+  API_HOST: z.string().min(1).default('127.0.0.1'),
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
 
   // LLM circuit breaker (dollars per day — halt LLM calls if exceeded)

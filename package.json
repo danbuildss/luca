@@ -9,7 +9,7 @@
     "worker:dev": "tsx watch apps/worker/index.ts",
     "bot:dev": "tsx watch apps/telegram/index.ts",
     "api:dev": "tsx watch apps/api/index.ts",
-    "build": "tsc",
+    "build": "tsc && node -e \"require('fs').copyFileSync('apps/api/ops.html','dist/apps/api/ops.html')\"",
     "start:worker": "node dist/apps/worker/index.js",
     "start:bot": "node dist/apps/telegram/index.js",
     "start:api": "node dist/apps/api/index.js",

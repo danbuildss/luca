@@ -1,4 +1,5 @@
 import { query } from '../db.js';
+import { logger } from '../logger.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -220,7 +221,7 @@ export async function getOpsOperatorDetail(userId: string): Promise<{
        LEFT JOIN watch_jobs wj ON wj.wallet_id = w.id
        LEFT JOIN normalized_events ne ON ne.wallet_id = w.id
        WHERE w.user_id = $1
-       GROUP BY w.address, w.label, w.chain, w.active, wj.status, wj.last_synced_at, wj.error_message
+       GROUP BY w.id, wj.status, wj.last_synced_at, wj.error_message
        ORDER BY w.created_at ASC`,
       [userId],
     ),
@@ -248,7 +249,9 @@ export async function getOpsOperatorDetail(userId: string): Promise<{
         COUNT(DISTINCT cr.id)::text AS correction_count,
         COUNT(DISTINCT cr.id) FILTER (WHERE cr.old_confidence > 0.8)::text AS high_confidence_errors
        FROM classifications c
-       LEFT JOIN corrections cr ON cr.event_id = c.id AND cr.user_id = $1
+       -- corrections.classification_id points at the (now superseded) wrong row, so match
+       -- the active classification to its corrections by event instead.
+       LEFT JOIN corrections cr ON cr.event_id = c.event_id AND cr.type = 'tx' AND cr.user_id = $1
        WHERE c.user_id = $1 AND c.superseded_at IS NULL`,
       [userId],
     ),
@@ -393,16 +396,20 @@ export async function getOpsQuality(): Promise<{
         COUNT(DISTINCT cr.id)::text AS corrections,
         COUNT(DISTINCT cr.id) FILTER (WHERE cr.old_confidence > 0.8)::text AS hce
        FROM classifications c
-       LEFT JOIN corrections cr ON cr.classification_id = c.id
+       -- corrections.classification_id points at the superseded (wrong) row; match by event
+       LEFT JOIN corrections cr ON cr.event_id = c.event_id AND cr.type = 'tx'
        WHERE c.superseded_at IS NULL`,
     ),
 
+    // Error rate per method of the classification that was wrong: active rows plus
+    // superseded rows that a correction points at (via classification_id).
     query<{ method: string; total: string; error_count: string }>(
-      `SELECT c.method, COUNT(*)::text AS total, COUNT(cr.id)::text AS error_count
+      `SELECT c.method, COUNT(DISTINCT c.id)::text AS total, COUNT(DISTINCT cr.classification_id)::text AS error_count
        FROM classifications c
        LEFT JOIN corrections cr ON cr.classification_id = c.id
-       WHERE c.confidence > 0.8 AND c.superseded_at IS NULL
-       GROUP BY c.method ORDER BY COUNT(cr.id)::float / NULLIF(COUNT(*), 0) DESC`,
+       WHERE c.confidence > 0.8 AND (c.superseded_at IS NULL OR cr.id IS NOT NULL)
+       GROUP BY c.method
+       ORDER BY COUNT(DISTINCT cr.classification_id)::float / NULLIF(COUNT(DISTINCT c.id), 0) DESC`,
     ),
 
     query<{ failure_reason: string; count: string }>(
@@ -411,10 +418,20 @@ export async function getOpsQuality(): Promise<{
        GROUP BY failure_reason ORDER BY COUNT(*) DESC`,
     ),
 
-    query<{ week_start: Date; unknown_rate: string; correction_rate: string; total_classified: string }>(
-      `SELECT week_start, unknown_rate::text, correction_rate::text, total_classified::text
-       FROM quality_weekly_trend
-       WHERE week_start >= NOW() - INTERVAL '8 weeks'
+    // System-wide weekly trend: one row per week across all users. Rates are recomputed
+    // from summed counts (not averaged per-user rates). Queried directly rather than via
+    // quality_weekly_trend, whose correction join (classification_id = active row) is always empty.
+    query<{ week_start: Date; total_classified: string; unknown_count: string; corrected_count: string }>(
+      `SELECT DATE_TRUNC('week', ne.block_time) AS week_start,
+              COUNT(DISTINCT c.id)::text AS total_classified,
+              COUNT(DISTINCT c.id) FILTER (WHERE c.label = 'unknown')::text AS unknown_count,
+              COUNT(DISTINCT c.id) FILTER (WHERE cr.id IS NOT NULL)::text AS corrected_count
+       FROM classifications c
+       JOIN normalized_events ne ON ne.id = c.event_id
+       LEFT JOIN corrections cr ON cr.event_id = c.event_id AND cr.type = 'tx'
+       WHERE c.superseded_at IS NULL
+         AND ne.block_time >= DATE_TRUNC('week', NOW()) - INTERVAL '7 weeks'
+       GROUP BY DATE_TRUNC('week', ne.block_time)
        ORDER BY week_start DESC`,
     ),
   ]);
@@ -437,12 +454,17 @@ export async function getOpsQuality(): Promise<{
       return { method: r.method, total: t, error_count: e, error_rate: t > 0 ? e / t : 0 };
     }),
     failure_reasons: reasons.rows.map((r) => ({ reason: r.failure_reason, count: parseInt(r.count) })),
-    weekly_trend: trend.rows.map((r) => ({
-      week_start: r.week_start,
-      unknown_rate: parseFloat(r.unknown_rate ?? '0'),
-      correction_rate: parseFloat(r.correction_rate ?? '0'),
-      total_classified: parseInt(r.total_classified ?? '0'),
-    })),
+    weekly_trend: trend.rows.map((r) => {
+      const t = parseInt(r.total_classified ?? '0');
+      const u = parseInt(r.unknown_count ?? '0');
+      const cc = parseInt(r.corrected_count ?? '0');
+      return {
+        week_start: r.week_start,
+        unknown_rate: t > 0 ? u / t : 0,
+        correction_rate: t > 0 ? cc / t : 0,
+        total_classified: t,
+      };
+    }),
   };
 }
 
@@ -560,11 +582,16 @@ export async function getOpsCost(days = 30): Promise<{
 // Activity touch — update last_user_active_at for a real human action
 // ---------------------------------------------------------------------------
 
+// Fire-and-forget from bot handlers — never throws.
 export async function touchUserActivity(userId: string): Promise<void> {
-  await query(
-    `UPDATE users SET last_user_active_at = NOW() WHERE id = $1`,
-    [userId],
-  );
+  try {
+    await query(
+      `UPDATE users SET last_user_active_at = NOW() WHERE id = $1`,
+      [userId],
+    );
+  } catch (err) {
+    logger.warn({ err, userId }, 'Failed to touch user activity');
+  }
 }
 
 // ---------------------------------------------------------------------------

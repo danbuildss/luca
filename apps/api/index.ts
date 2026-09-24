@@ -20,7 +20,14 @@ import {
 } from '../../src/ops/db.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const OPS_HTML = readFileSync(join(__dirname, 'ops.html'), 'utf-8');
+
+// Loaded lazily so a missing ops.html only breaks /ops, not the whole API.
+// `npm run build` copies it next to the compiled index.js.
+let opsHtml: string | null = null;
+function getOpsHtml(): string {
+  opsHtml ??= readFileSync(join(__dirname, 'ops.html'), 'utf-8');
+  return opsHtml;
+}
 
 if (config.NODE_ENV === 'production') {
   requireProductionConfig();
@@ -460,7 +467,7 @@ function requireAdminKey(req: { headers: Record<string, string | string[] | unde
 
 // Serve the ops HTML UI
 app.get('/ops', async (_req, reply) => {
-  return reply.header('content-type', 'text/html; charset=utf-8').send(OPS_HTML);
+  return reply.header('content-type', 'text/html; charset=utf-8').send(getOpsHtml());
 });
 
 // JSON API routes prefixed /ops/api — all admin-gated
@@ -502,8 +509,9 @@ app.get('/ops/api/cost', async (req, reply) => {
 // ---------------------------------------------------------------------------
 const start = async () => {
   try {
-    await app.listen({ port: config.PORT, host: '0.0.0.0' });
-    logger.info({ port: config.PORT }, 'Luca API listening');
+    // Loopback-only by default (see API_HOST in src/config.ts) — auth is the x-user-id header.
+    await app.listen({ port: config.PORT, host: config.API_HOST });
+    logger.info({ port: config.PORT, host: config.API_HOST }, 'Luca API listening');
   } catch (err) {
     logger.error(err, 'Failed to start API');
     process.exit(1);
