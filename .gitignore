@@ -6,3 +6,11 @@ dist/
 *.log
 coverage/
 .DS_Store
+
+# Kept in the private danbuildss/luca-private repo, never here
+/NOTES.md
+/notes.md
+/LUCA.md
+/hermes/
+/docs/build-gap-analysis.md
+/.claude/skills/

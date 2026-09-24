@@ -141,9 +141,9 @@ All tool calls are gated by `assertUserScoped(userId)` — cross-user access is 
 
 Luca no longer uses the Hermes runtime. On 2026-09-24 the runtime pieces were deleted: `hermes/config.yaml`, `hermes/.env.example`, the `hermes/luca/plugins/luca_core.py` plugin, `scripts/setup-hermes.sh`, and the `GET /users/resolve` API endpoint that only the plugin called. The TypeScript Telegraf bot (`luca-telegram`) is Luca's only chat runtime and calls `runAgent()` directly.
 
-The Markdown files under `hermes/` (`SOUL.md`, `BOOTSTRAP.md`, `hermes/luca/*.md`, skills, cron and memory notes) are kept as Luca's written identity and operating reference. They are not loaded by any code; the agent's prompt is `prompts/system.md`.
+The Markdown files that were under `hermes/` (`SOUL.md`, `BOOTSTRAP.md`, skills, cron and memory notes) now live in the maintainer's private notes, with `LUCA.md`. No code ever loaded them; the agent's prompt is `prompts/system.md`.
 
-**LUCA.md sections 4–9** describe the intended Hermes architecture. The current production implementation fulfills the same goals (Luca Core deterministic, LLM reasoning separate, PostgreSQL as truth) through a different mechanism: an embedded TypeScript agentic loop rather than a separate Hermes process.
+The goals of the original Hermes design still hold (Luca Core deterministic, LLM reasoning separate, PostgreSQL as truth); production meets them with an embedded TypeScript agentic loop rather than a separate Hermes process.
 
 ---
 
