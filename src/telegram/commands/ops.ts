@@ -7,6 +7,12 @@ import {
   getOpsOperatorDetail,
 } from '../../ops/db.js';
 import { query } from '../../db.js';
+import { escapeLegacyMarkdown, replyMarkdownSafe } from '../format.js';
+
+// Escape DB/user-controlled text for legacy Markdown (usernames often contain `_`).
+function md(value: string | number | null | undefined): string {
+  return escapeLegacyMarkdown(String(value ?? ''));
+}
 
 function fmt(n: number, decimals = 0): string {
   return n.toFixed(decimals).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
@@ -57,7 +63,7 @@ async function handleOpsOverview(ctx: Context): Promise<void> {
     `_/ops errors — current failures_`,
   ];
 
-  await ctx.reply(lines.join('\n'), { parse_mode: 'Markdown' });
+  await replyMarkdownSafe(ctx, lines.join('\n'));
 }
 
 // /ops errors — sync failures, stale wallets, brief failures
@@ -67,16 +73,16 @@ async function handleOpsErrors(ctx: Context): Promise<void> {
 
   if (errors.sync_errors.length === 0 && errors.stale_wallets.length === 0 && errors.failed_briefs.length === 0) {
     lines.push('✅ Nothing broken right now.');
-    await ctx.reply(lines.join('\n'), { parse_mode: 'Markdown' });
+    await replyMarkdownSafe(ctx, lines.join('\n'));
     return;
   }
 
   if (errors.sync_errors.length > 0) {
     lines.push(`*Sync Errors (${errors.sync_errors.length})*`);
     for (const e of errors.sync_errors.slice(0, 5)) {
-      const who = e.username ?? 'unknown';
-      const addr = e.address.slice(0, 10) + '…';
-      lines.push(`  @${who} ${addr} — ${(e.error_message ?? '').slice(0, 60)}`);
+      const who = md(e.username ?? 'unknown');
+      const addr = md(e.address.slice(0, 10)) + '…';
+      lines.push(`  @${who} ${addr} — ${md((e.error_message ?? '').slice(0, 60))}`);
     }
     lines.push('');
   }
@@ -84,8 +90,8 @@ async function handleOpsErrors(ctx: Context): Promise<void> {
   if (errors.stale_wallets.length > 0) {
     lines.push(`*Stale Wallets (${errors.stale_wallets.length})*`);
     for (const w of errors.stale_wallets.slice(0, 5)) {
-      const who = w.username ?? 'unknown';
-      const addr = w.address.slice(0, 10) + '…';
+      const who = md(w.username ?? 'unknown');
+      const addr = md(w.address.slice(0, 10)) + '…';
       lines.push(`  @${who} ${addr} — ${fmt(w.hours_stale, 1)}h stale`);
     }
     lines.push('');
@@ -94,11 +100,11 @@ async function handleOpsErrors(ctx: Context): Promise<void> {
   if (errors.failed_briefs.length > 0) {
     lines.push(`*Failed Brief Deliveries (${errors.failed_briefs.length})*`);
     for (const b of errors.failed_briefs.slice(0, 3)) {
-      lines.push(`  @${b.username ?? 'unknown'} — ${b.type} brief (${ago(b.created_at)})`);
+      lines.push(`  @${md(b.username ?? 'unknown')} — ${md(b.type)} brief (${ago(b.created_at)})`);
     }
   }
 
-  await ctx.reply(lines.join('\n'), { parse_mode: 'Markdown' });
+  await replyMarkdownSafe(ctx, lines.join('\n'));
 }
 
 // /ops @username — per-user detail
@@ -107,7 +113,7 @@ async function handleOpsUser(ctx: Context, handle: string): Promise<void> {
 
   // Resolve by username or telegram_id or user_id prefix
   const resolved = await query<{ id: string }>(
-    `SELECT id FROM users WHERE LOWER(username) = $1 OR telegram_id::text = $1 OR id::text LIKE $2 LIMIT 1`,
+    `SELECT id FROM users WHERE LOWER(telegram_username) = $1 OR telegram_id::text = $1 OR id::text LIKE $2 LIMIT 1`,
     [clean, `${clean}%`],
   );
   if (!resolved.rows[0]) {
@@ -123,17 +129,17 @@ async function handleOpsUser(ctx: Context, handle: string): Promise<void> {
   const syncOk = detail.wallets.every((w) => w.status !== 'error');
 
   const lines = [
-    `👤 *@${u.username ?? u.telegram_id}*`,
+    `👤 *@${md(u.username ?? u.telegram_id)}*`,
     ``,
     `Joined: ${ago(u.joined_at)}  |  Activated: ${u.activated_at ? ago(u.activated_at) : '—'}`,
-    `Last active: ${ago(u.last_user_active_at)}  |  Role: ${u.role}`,
-    `TZ: ${u.timezone}  |  Brief: ${u.brief_time}`,
+    `Last active: ${ago(u.last_user_active_at)}  |  Role: ${md(u.role)}`,
+    `TZ: ${md(u.timezone)}  |  Brief: ${md(u.brief_time)}`,
     ``,
     `*Wallets (${detail.wallets.length})*`,
     ...detail.wallets.map((w) => {
       const status = w.status === 'error' ? '❌' : w.active ? '✅' : '⏸';
-      const addr = w.address.slice(0, 10) + '…';
-      return `  ${status} ${addr}${w.label ? ` (${w.label})` : ''}  ${fmt(w.event_count)} events  sync: ${ago(w.last_synced_at)}`;
+      const addr = md(w.address.slice(0, 10)) + '…';
+      return `  ${status} ${addr}${w.label ? ` (${md(w.label)})` : ''}  ${fmt(w.event_count)} events  sync: ${ago(w.last_synced_at)}`;
     }),
     ``,
     `*Quality*`,
@@ -144,10 +150,10 @@ async function handleOpsUser(ctx: Context, handle: string): Promise<void> {
     `*Recent Syncs*`,
     ...detail.recent_sync_runs.slice(0, 3).map((r) => {
       const icon = r.status === 'completed' ? '✅' : r.status === 'failed' ? '❌' : '⏳';
-      return `  ${icon} ${ago(r.started_at)} via ${r.provider}${r.events_ingested != null ? ` — ${r.events_ingested} events` : ''}`;
+      return `  ${icon} ${ago(r.started_at)} via ${md(r.provider)}${r.events_ingested != null ? ` — ${r.events_ingested} events` : ''}`;
     }),
     ``,
-    `Last brief: ${detail.last_brief ? `${detail.last_brief.type} ${ago(detail.last_brief.sent_at)}` : '—'}`,
+    `Last brief: ${detail.last_brief ? `${md(detail.last_brief.type)} ${ago(detail.last_brief.sent_at)}` : '—'}`,
     `Unacked alerts: ${detail.recent_alerts.filter((a) => !a.acknowledged_at).length}`,
     ...(syncOk ? [] : [
       ``,
@@ -155,7 +161,7 @@ async function handleOpsUser(ctx: Context, handle: string): Promise<void> {
     ]),
   ];
 
-  await ctx.reply(lines.join('\n'), { parse_mode: 'Markdown' });
+  await replyMarkdownSafe(ctx, lines.join('\n'));
 }
 
 // /ops operators — compact table of all operators
@@ -165,12 +171,12 @@ async function handleOpsOperators(ctx: Context): Promise<void> {
 
   for (const op of operators) {
     const icon = op.has_sync_error ? '❌' : op.active_wallets === 0 ? '⚪' : '✅';
-    const name = op.username ?? op.telegram_id;
+    const name = md(op.username ?? op.telegram_id);
     const active = op.last_user_active_at ? ago(op.last_user_active_at) : '—';
     lines.push(`${icon} @${name}  wallets:${op.active_wallets}  active:${active}  unknown:${op.unknown_count}`);
   }
 
-  await ctx.reply(lines.join('\n'), { parse_mode: 'Markdown' });
+  await replyMarkdownSafe(ctx, lines.join('\n'));
 }
 
 export async function handleOps(ctx: Context, user: AuthedUser, args: string[]): Promise<void> {

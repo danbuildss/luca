@@ -368,22 +368,26 @@ export async function executeTool(
           [userId],
         ),
       ]);
+      // Sum the latest USDC snapshot of EACH active wallet (not just the newest row overall).
       const cashRes = await query<{
-        asset: string;
         total: string;
+        wallet_count: number;
       }>(
-        `SELECT DISTINCT ON (bs.asset)
-           bs.asset, bs.balance::text AS total
-         FROM balance_snapshots bs
-         JOIN wallets w ON w.id = bs.wallet_id
-         WHERE bs.user_id = $1 AND bs.asset = 'USDC' AND w.active = true
-         ORDER BY bs.asset, bs.snapshot_at DESC
-         LIMIT 1`,
+        `SELECT COALESCE(SUM(latest.balance), 0)::text AS total,
+                COUNT(*)::int AS wallet_count
+         FROM (
+           SELECT DISTINCT ON (bs.wallet_id) bs.balance
+           FROM balance_snapshots bs
+           JOIN wallets w ON w.id = bs.wallet_id
+           WHERE bs.user_id = $1 AND w.user_id = $1 AND bs.asset = 'USDC' AND w.active = true
+           ORDER BY bs.wallet_id, bs.snapshot_at DESC
+         ) latest`,
         [userId],
       );
+      const cashRow = cashRes.rows[0];
       return {
         period_days: periodDays,
-        cash_usdc: cashRes.rows[0]?.total ?? null,
+        cash_usdc: cashRow && cashRow.wallet_count > 0 ? cashRow.total : null,
         pnl,
         unknown_count: unknowns.length,
         recent_alerts: alerts.rows,

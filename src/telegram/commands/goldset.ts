@@ -1,7 +1,7 @@
 import type { Context } from 'telegraf';
 import { Markup } from 'telegraf';
 import { getNextForGoldSet, getGoldSetCount } from '../../quality/goldset.js';
-import { formatAddress, formatAmount } from '../format.js';
+import { formatAddress, formatAmount, escapeLegacyMarkdown, replyMarkdownSafe } from '../format.js';
 import type { AuthedUser } from '../auth.js';
 
 // Callback format: gs:<eventId>:<label>  (max 57 bytes — fits 64-byte limit)
@@ -54,9 +54,10 @@ export async function handleGoldSet(ctx: Context, user: AuthedUser): Promise<voi
     ? candidate.from_address
     : (candidate.to_address ?? candidate.from_address);
 
+  // Token symbol is chain-controlled — escape before embedding in Markdown.
   const amount = formatAmount(
     candidate.amount != null ? String(candidate.amount) : null,
-    candidate.asset ?? 'ETH',
+    escapeLegacyMarkdown((candidate.asset ?? 'ETH').slice(0, 20)),
   );
   const dir = candidate.direction === 'in' ? '↓ in' : '↑ out';
   const date = new Date(candidate.block_time).toLocaleDateString('en-US', {
@@ -71,16 +72,15 @@ export async function handleGoldSet(ctx: Context, user: AuthedUser): Promise<voi
     `🏅 *Gold set labeling* — ${count} labeled so far`,
     '',
     `${amount} ${dir}  •  ${date}`,
-    `Counterparty: ${formatAddress(counterparty)}`,
-    `Hash: ${hashSnip}`,
+    `Counterparty: ${escapeLegacyMarkdown(formatAddress(counterparty))}`,
+    `Hash: ${escapeLegacyMarkdown(hashSnip)}`,
     '',
-    `Luca says: *${candidate.current_label}* via ${candidate.current_method ?? '?'} (${confLine})`,
+    // Labels/methods contain `_` (internal_transfer, counterparty_rule) — escape them.
+    `Luca says: *${escapeLegacyMarkdown(String(candidate.current_label))}* via ${escapeLegacyMarkdown(String(candidate.current_method ?? '?'))} (${confLine})`,
     '',
     `Is this correct? Tap the true label ↓`,
   ].join('\n');
 
-  await ctx.reply(text, {
-    parse_mode: 'Markdown',
-    ...buildKeyboard(candidate.event_id),
-  });
+  const keyboard = buildKeyboard(candidate.event_id);
+  await replyMarkdownSafe(ctx, text, { reply_markup: keyboard.reply_markup });
 }

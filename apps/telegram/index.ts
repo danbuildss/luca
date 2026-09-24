@@ -10,8 +10,11 @@ import { handleQuality } from '../../src/telegram/commands/quality.js';
 import { handleGoldSet } from '../../src/telegram/commands/goldset.js';
 import { handleOps } from '../../src/telegram/commands/ops.js';
 import { touchUserActivity } from '../../src/ops/db.js';
-import { handleCallback } from '../../src/telegram/callbacks.js';
+import { handleCallback, agentConfirmKeyboard } from '../../src/telegram/callbacks.js';
 import { sendPendingAlerts } from '../../src/telegram/alerts.js';
+import { replyMarkdownSafe } from '../../src/telegram/format.js';
+import { UserRateLimiter, singleFlight } from '../../src/telegram/ratelimit.js';
+import { describePendingAction } from '../../src/agent/pending.js';
 import { generateDailyBrief, generateWeeklyBrief } from '../../src/briefs/generate.js';
 import { saveBrief, markBriefSent } from '../../src/briefs/store.js';
 import { runAgent } from '../../src/agent/run.js';
@@ -110,8 +113,8 @@ bot.command('brief', async (ctx) => {
       periodEnd: now,
     });
 
-    const msg = await ctx.reply(content, { parse_mode: 'Markdown' });
-    await markBriefSent(briefId, msg.message_id);
+    const msg = await replyMarkdownSafe(ctx, content);
+    if (msg) await markBriefSent(briefId, msg.message_id);
   } catch (err) {
     logger.error({ err, userId: user.userId }, '/brief command failed');
     await ctx.reply('Failed to generate brief — try again shortly.');
@@ -177,6 +180,10 @@ bot.command('label', async (ctx) => {
 // ---------------------------------------------------------------------------
 // Free-text messages — agent loop
 // ---------------------------------------------------------------------------
+// Each message can trigger several LLM calls: one run at a time per user,
+// and at most 20 messages per 10 minutes.
+const agentLimiter = new UserRateLimiter({ maxPerWindow: 20, windowMs: 10 * 60_000 });
+
 bot.on('text', async (ctx) => {
   const user = await requireUser(ctx);
   if (!user) {
@@ -188,15 +195,37 @@ bot.on('text', async (ctx) => {
   const userMessage = ctx.message.text.trim();
   if (!userMessage) return;
 
-  // Typing indicator while agent works
-  await ctx.sendChatAction('typing');
+  const slot = agentLimiter.tryAcquire(user.userId);
+  if (!slot.ok) {
+    if (slot.reason === 'busy') {
+      await ctx.reply("Still working on your last message — give me a moment.");
+    } else {
+      const mins = Math.max(1, Math.ceil(slot.retryAfterMs / 60_000));
+      await ctx.reply(`You're sending messages faster than I can keep up. Try again in ~${mins} min.`);
+    }
+    return;
+  }
 
   try {
-    const reply = await runAgent({ userId: user.userId, userMessage });
-    await ctx.reply(reply, { parse_mode: 'Markdown' });
+    // Typing indicator while agent works
+    await ctx.sendChatAction('typing');
+
+    const { text, pendingActions } = await runAgent({ userId: user.userId, userMessage });
+    await replyMarkdownSafe(ctx, text);
+
+    // Write actions the agent proposed — executed only after the user confirms.
+    for (const action of pendingActions) {
+      const kb = agentConfirmKeyboard(action.id);
+      await ctx.reply(
+        `Confirm action?\n${describePendingAction(action.toolName, action.args)}\n\n(expires in 10 minutes)`,
+        { reply_markup: kb.reply_markup },
+      );
+    }
   } catch (err) {
     logger.error({ err, userId: user.userId }, 'Agent run failed');
     await ctx.reply("Something went wrong — I'll look into it.");
+  } finally {
+    agentLimiter.release(user.userId);
   }
 });
 
@@ -211,9 +240,15 @@ bot.on('callback_query', async (ctx) => {
   const data = (ctx.callbackQuery as { data?: string } | undefined)?.data ?? '';
   if (data.startsWith('alert_skip:')) {
     const alertId = data.split(':')[1];
-    const { resolveAlert } = await import('../../src/alerts/counterparty.js');
-    await resolveAlert({ alertId, userId: user.userId, status: 'skipped' });
-    await ctx.answerCbQuery('Skipped');
+    try {
+      const { resolveAlert } = await import('../../src/alerts/counterparty.js');
+      await resolveAlert({ alertId, userId: user.userId, status: 'skipped' });
+      await ctx.answerCbQuery('Skipped');
+    } catch (err) {
+      logger.error({ err, alertId, userId: user.userId }, 'alert_skip callback failed');
+      try { await ctx.answerCbQuery('Something went wrong — try again'); } catch { /* already answered */ }
+      return;
+    }
     try { await ctx.editMessageReplyMarkup(undefined); } catch { /* already edited */ }
     return;
   }
@@ -228,16 +263,25 @@ bot.catch((err, ctx) => {
   logger.error({ err, update: ctx.update }, 'Unhandled bot error');
 });
 
+// Safety net: a stray rejected promise must not take the whole bot down.
+process.on('unhandledRejection', (err) => {
+  logger.error({ err }, 'Unhandled promise rejection');
+});
+
 // ---------------------------------------------------------------------------
 // Alert polling — checks for unsent counterparty alerts every 30s
 // ---------------------------------------------------------------------------
 let alertTimer: ReturnType<typeof setTimeout> | null = null;
 
+// Alert poll and health poll both deliver alerts; never let two sends overlap
+// (overlap = the same unsent alert delivered twice).
+const sendPendingAlertsOnce = singleFlight(() => sendPendingAlerts(bot));
+
 function scheduleAlertPoll() {
   alertTimer = setTimeout(() => {
     void (async () => {
       try {
-        await sendPendingAlerts(bot);
+        await sendPendingAlertsOnce();
       } catch (err: unknown) {
         logger.error({ err }, 'Alert polling error');
       }
@@ -261,7 +305,7 @@ function scheduleHealthPoll() {
         }
         // Worker stale alerts land in `alerts` table → delivered by deliverPendingAlerts in worker
         // But if the worker is down, we need to deliver them here instead.
-        await sendPendingAlerts(bot);
+        await sendPendingAlertsOnce();
       } catch (err: unknown) {
         logger.error({ err }, 'Health poll error');
       }
