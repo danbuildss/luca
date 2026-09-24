@@ -15,7 +15,7 @@ const VENDOR = '0x0000000000000000000000000000000000000bad';
 
 function topCounterpartyLines(brief: string): string[] {
   const lines = brief.split('\n');
-  const start = lines.indexOf('🔝 Top counterparties');
+  const start = lines.indexOf('Top counterparties');
   if (start < 0) return [];
   const out: string[] = [];
   for (const l of lines.slice(start + 1)) {

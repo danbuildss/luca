@@ -30,13 +30,12 @@ export async function handleReview(ctx: Context, user: AuthedUser): Promise<void
   const events = await getEventsForReview({ userId: user.userId, label: 'unknown', limit: 5 });
 
   if (events.length === 0) {
-    await ctx.reply('No unknown events — you\'re all caught up ✓');
+    await ctx.reply('Nothing needs your attention. Every transfer is labeled.');
     return;
   }
 
-  await ctx.reply(`📋 *${events.length} event${events.length > 1 ? 's' : ''} to review:*`, {
-    parse_mode: 'Markdown',
-  });
+  const one = events.length === 1;
+  await ctx.reply(`${events.length} ${one ? 'transfer needs' : 'transfers need'} context. Tap a label on each, or tell me what ${one ? 'it was' : 'they were'} in a message.`);
 
   for (const evt of events) {
     const from = formatAddress(evt.from_address);
@@ -45,13 +44,15 @@ export async function handleReview(ctx: Context, user: AuthedUser): Promise<void
       evt.amount != null ? String(evt.amount) : null,
       evt.asset ?? 'ETH',
     );
-    const dir = evt.direction === 'in' ? '↓ in' : '↑ out';
+    const verb = evt.direction === 'in' ? 'Received' : 'Sent';
     const date = new Date(evt.block_time).toLocaleDateString('en-US', {
       month: 'short',
       day: 'numeric',
     });
 
-    const text = [`📋 ${from} → ${to}`, `${amount} ${dir}  •  ${date}`].join('\n');
+    const text = evt.direction === 'in'
+      ? `${verb} ${amount} from ${from} on ${date}.`
+      : `${verb} ${amount} to ${to} on ${date}.`;
 
     await ctx.reply(text, buildKeyboard(evt.id));
   }

@@ -60,7 +60,7 @@ export async function detectPortfolioChanges(userId: string): Promise<number> {
     const inserted = await insertAlert({
       userId,
       type: 'portfolio_up',
-      message: `💹 Portfolio up $${fmt(delta)} (+${(deltaPct * 100).toFixed(1)}%) — balance now $${fmt(latestBalance)}`,
+      message: `Your holdings are up $${fmt(delta)} (+${(deltaPct * 100).toFixed(1)}%) since yesterday, now $${fmt(latestBalance)}.`,
       evidence: { delta, delta_pct: deltaPct, latest_balance: latestBalance, prev_balance: prevBalance, date: latestDate },
       dedupKey: `portfolio_up:${userId}:${latestDate}`,
     });
@@ -72,7 +72,7 @@ export async function detectPortfolioChanges(userId: string): Promise<number> {
     const inserted = await insertAlert({
       userId,
       type: 'portfolio_down',
-      message: `📉 Portfolio down $${fmt(Math.abs(delta))} (-${(deltaPct * 100).toFixed(1)}%) — balance now $${fmt(latestBalance)}`,
+      message: `Your holdings are down $${fmt(Math.abs(delta))} (-${(deltaPct * 100).toFixed(1)}%) since yesterday, now $${fmt(latestBalance)}.`,
       evidence: { delta, delta_pct: deltaPct, latest_balance: latestBalance, prev_balance: prevBalance, date: latestDate },
       dedupKey: `portfolio_down:${userId}:${latestDate}`,
     });
@@ -91,7 +91,7 @@ export async function detectPortfolioChanges(userId: string): Promise<number> {
     const inserted = await insertAlert({
       userId,
       type: 'pnl_positive',
-      message: `✅ Positive week: $${fmt(netPnl7d)} net P&L — revenue $${fmt(parseFloat(latest.revenue_7d))}, expenses $${fmt(parseFloat(latest.expenses_7d))}`,
+      message: `A positive week: net $${fmt(netPnl7d)}, from $${fmt(parseFloat(latest.revenue_7d))} revenue and $${fmt(parseFloat(latest.expenses_7d))} expenses.`,
       evidence: { net_pnl_7d: netPnl7d, revenue_7d: parseFloat(latest.revenue_7d), expenses_7d: parseFloat(latest.expenses_7d), date: latestDate },
       dedupKey: `pnl_positive:${userId}:${weekKey}`,
     });
@@ -104,7 +104,7 @@ export async function detectPortfolioChanges(userId: string): Promise<number> {
     const inserted = await insertAlert({
       userId,
       type: 'books_attention',
-      message: `📋 Books need attention: ${unknownCount} unclassified transactions this week — label them to keep your P&L accurate`,
+      message: `${unknownCount} transfers this week still need context. Tell me what they were and I will keep your books accurate.`,
       evidence: { unknown_count_7d: unknownCount, date: latestDate },
       dedupKey: `books_attention:${userId}:${latestDate}`,
     });

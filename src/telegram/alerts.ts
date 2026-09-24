@@ -14,6 +14,8 @@ type UnsentAlert = {
   amount: string | null;
   asset: string | null;
   event_id: string | null;
+  direction: 'in' | 'out';
+  block_time: Date;
 };
 
 async function getUnsentAlerts(): Promise<UnsentAlert[]> {
@@ -26,13 +28,15 @@ async function getUnsentAlerts(): Promise<UnsentAlert[]> {
        pca.watched_wallet_address,
        ne.amount::text AS amount,
        ne.asset,
-       ne.id AS event_id
+       ne.id AS event_id,
+       ne.direction,
+       ne.block_time
      FROM pending_counterparty_alerts pca
      JOIN users u ON u.id = pca.user_id
      -- the most recent unknown supported event from this counterparty; alerts with none
      -- (e.g. only spam tokens) are never sent
      JOIN LATERAL (
-       SELECT ne2.id, ne2.amount, ne2.asset
+       SELECT ne2.id, ne2.amount, ne2.asset, ne2.direction, ne2.block_time
        FROM normalized_events ne2
        JOIN classifications c ON c.event_id = ne2.id AND c.superseded_at IS NULL
        WHERE ne2.user_id = pca.user_id
@@ -92,12 +96,14 @@ export async function sendPendingAlerts(bot: Telegraf<Context>): Promise<void> {
       const asset = escapeLegacyMarkdown((alert.asset ?? 'USDC').slice(0, 20));
       const amountStr = formatAmount(alert.amount, asset);
 
+      const date = new Date(alert.block_time).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      const what = alert.direction === 'in'
+        ? `You received ${amountStr} from \`${addrShort}\` on ${date}.`
+        : `You sent ${amountStr} to \`${addrShort}\` on ${date}.`;
       const text = [
-        '❓ *New unknown transfer*',
-        `From: \`${addrShort}\``,
-        `Amount: ${amountStr}`,
+        what,
         '',
-        'What is this?',
+        'What was it for? Tap a label below, or just tell me in a message.',
       ].join('\n');
 
       const keyboard = buildAlertKeyboard(alert.id, alert.event_id);

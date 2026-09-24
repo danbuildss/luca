@@ -1,6 +1,6 @@
 import { query } from '../db.js';
 import { getPnlSummary } from '../books/query.js';
-import { escapeLegacyMarkdown } from '../telegram/format.js';
+import { escapeLegacyMarkdown, figuresBlock } from '../telegram/format.js';
 import { usdValueSql } from '../ingestion/assets.js';
 
 // Unpriced rows count as 0 so totals and ORDER BY never see NULL
@@ -96,6 +96,28 @@ async function getUnknownCount(userId: string, periodDays: number): Promise<numb
   return parseInt(res.rows[0]?.cnt ?? '0', 10);
 }
 
+// Counterparty names are user-set, so they stay outside the monospace block where
+// Markdown escaping applies.
+function appendCounterpartiesAndUnknowns(
+  lines: string[],
+  topCounterparties: TopCounterparty[],
+  unknownCount: number,
+): void {
+  if (topCounterparties.length > 0) {
+    lines.push(``, `Top counterparties`);
+    for (const cp of topCounterparties) {
+      lines.push(`- ${counterpartyLabel(cp)} ${usd(parseFloat(cp.total_usdc))}`);
+    }
+  }
+  if (unknownCount > 0) {
+    const one = unknownCount === 1;
+    lines.push(
+      ``,
+      `${unknownCount} unknown ${one ? 'transfer needs' : 'transfers need'} context. Reply here and tell me what ${one ? 'it was' : 'they were'}.`,
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Daily brief
 // ---------------------------------------------------------------------------
@@ -121,28 +143,19 @@ export async function generateDailyBrief(userId: string, timezone?: string): Pro
   }, timezone);
 
   const lines: string[] = [
-    `📅 *Daily brief — ${dateStr}*`,
+    `*Daily brief, ${dateStr}*`,
     ``,
-    `💰 Revenue      ${signedUsd(today.revenue_usdc)}`,
-    `💸 Expenses     ${signedUsd(-today.expenses_usdc, '-')}`,
-    `⛽ Gas          ${signedUsd(-today.gas_usdc, '-')}`,
-    `─────────────────────`,
-    `📈 Net          ${signedUsd(today.net_usdc)}`,
+    figuresBlock([
+      ['Revenue', signedUsd(today.revenue_usdc)],
+      ['Expenses', signedUsd(-today.expenses_usdc, '-')],
+      ['Gas', signedUsd(-today.gas_usdc, '-')],
+      ['Net', signedUsd(today.net_usdc)],
+    ]),
     ``,
-    `📊 vs yesterday  ${revChange} revenue  •  ${expChange} expenses`,
+    `Compared with yesterday: ${revChange} revenue, ${expChange} expenses.`,
   ];
 
-  if (topCounterparties.length > 0) {
-    lines.push(``, `🔝 Top counterparties`);
-    for (const cp of topCounterparties) {
-      lines.push(`  ${counterpartyLabel(cp)} ${usd(parseFloat(cp.total_usdc))}`);
-    }
-  }
-
-  if (unknownCount > 0) {
-    lines.push(``, `❓ ${unknownCount} unknown${unknownCount > 1 ? 's' : ''} — /review to label`);
-  }
-
+  appendCounterpartiesAndUnknowns(lines, topCounterparties, unknownCount);
   return lines.join('\n');
 }
 
@@ -171,25 +184,16 @@ export async function generateWeeklyBrief(userId: string, timezone?: string): Pr
   const weekRange = `${formatDate(weekAgo, dayOpts, timezone)}–${formatDate(now, dayOpts, timezone)}`;
 
   const lines: string[] = [
-    `📅 *Week of ${weekRange}*`,
+    `*Week of ${weekRange}*`,
     ``,
-    `💰 Revenue      ${signedUsd(thisWeek.revenue_usdc)}  (${revChange} vs prior week)`,
-    `💸 Expenses     ${signedUsd(-thisWeek.expenses_usdc, '-')}  (${expChange} vs prior week)`,
-    `⛽ Gas          ${signedUsd(-thisWeek.gas_usdc, '-')}`,
-    `─────────────────────`,
-    `📈 Net          ${signedUsd(thisWeek.net_usdc)}  (${netChange} vs prior week)`,
+    figuresBlock([
+      ['Revenue', signedUsd(thisWeek.revenue_usdc), `${revChange} vs prior week`],
+      ['Expenses', signedUsd(-thisWeek.expenses_usdc, '-'), `${expChange} vs prior week`],
+      ['Gas', signedUsd(-thisWeek.gas_usdc, '-'), ''],
+      ['Net', signedUsd(thisWeek.net_usdc), `${netChange} vs prior week`],
+    ]),
   ];
 
-  if (topCounterparties.length > 0) {
-    lines.push(``, `🔝 Top counterparties`);
-    for (const cp of topCounterparties) {
-      lines.push(`  ${counterpartyLabel(cp)} ${usd(parseFloat(cp.total_usdc))}`);
-    }
-  }
-
-  if (unknownCount > 0) {
-    lines.push(``, `❓ ${unknownCount} unknown${unknownCount > 1 ? 's' : ''} — /review to label`);
-  }
-
+  appendCounterpartiesAndUnknowns(lines, topCounterparties, unknownCount);
   return lines.join('\n');
 }

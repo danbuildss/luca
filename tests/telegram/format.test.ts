@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   formatAddress,
   formatAmount,
+  figuresBlock,
   sanitizeName,
   escapeMarkdown,
   escapeLegacyMarkdown,
@@ -70,7 +71,12 @@ describe('formatAmount', () => {
   });
 
   it('handles numeric input', () => {
-    expect(formatAmount(1234.5678, 'ETH')).toBe('1,234.57 ETH');
+    expect(formatAmount(1234.5678, 'ETH')).toBe('1,234.5678 ETH');
+  });
+
+  it('keeps small token amounts visible but rounds USDC to cents', () => {
+    expect(formatAmount(0.000758, 'ETH')).toBe('0.000758 ETH');
+    expect(formatAmount(13.711609, 'USDC')).toBe('13.71 USDC');
   });
 });
 
@@ -97,3 +103,23 @@ describe('escapeMarkdown', () => {
     expect(result).toContain('\\!');
   });
 });
+
+describe('figuresBlock', () => {
+  it('wraps rows in a code block with labels left-aligned and amounts right-aligned', () => {
+    const block = figuresBlock([
+      ['Cash', '$8,420.00'],
+      ['Gas', '-$83.00'],
+    ]);
+    expect(block).toBe(['```', 'Cash   $8,420.00', 'Gas      -$83.00', '```'].join('\n'));
+  });
+
+  it('aligns every column and drops trailing padding', () => {
+    const block = figuresBlock([
+      ['ETH', '0.0008', '$3.10'],
+      ['USDC', '0.44', '$0.44'],
+    ]).split('\n');
+    expect(block[1]).toBe('ETH    0.0008   $3.10');
+    expect(block[2]).toBe('USDC     0.44   $0.44');
+  });
+});
+

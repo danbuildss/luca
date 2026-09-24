@@ -58,7 +58,8 @@ I need your decision on:
 
 ## Tone Rules
 
-- Dry. Precise. Employee-like.
+- Professional and friendly. Plain English.
+- No emojis or decorative symbols.
 - No hype. No speculation.
 - One sentence verdict.
 - If things are bad, say so.
@@ -86,8 +87,8 @@ Runway
 39 days
 
 Attention
-⚠️ New recurring $18 vendor — unclassified
-⚠️ 2 unknown transactions
+- New recurring $18 vendor, not yet classified
+- 2 unknown transactions
 
 Verdict
 Operations are healthy. Revenue is still too small to justify increasing spend.

@@ -29,10 +29,10 @@ function ago(d: Date | null): string {
 }
 
 function workerStatus(minutesStale: number | null): string {
-  if (minutesStale === null) return '❌ unknown';
-  if (minutesStale < 5) return '✅ alive';
-  if (minutesStale < 15) return '⚠️ slow';
-  return `❌ stale (${fmt(minutesStale)}m)`;
+  if (minutesStale === null) return 'unknown';
+  if (minutesStale < 5) return 'alive';
+  if (minutesStale < 15) return 'slow';
+  return `stale (${fmt(minutesStale)}m)`;
 }
 
 // /ops — system overview
@@ -40,7 +40,7 @@ async function handleOpsOverview(ctx: Context): Promise<void> {
   const ov = await getOpsOverview();
 
   const lines = [
-    `📊 *Luca Ops Overview*`,
+    `*Luca ops overview*`,
     ``,
     `*Operators*`,
     `  Total: ${ov.total_operators}  |  Activated: ${ov.activated_operators}  |  Active 24h: ${ov.active_24h}  |  7d: ${ov.active_7d}`,
@@ -69,10 +69,10 @@ async function handleOpsOverview(ctx: Context): Promise<void> {
 // /ops errors — sync failures, stale wallets, brief failures
 async function handleOpsErrors(ctx: Context): Promise<void> {
   const errors = await getOpsErrors();
-  const lines: string[] = [`🚨 *Current Errors*`, ``];
+  const lines: string[] = [`*Current errors*`, ``];
 
   if (errors.sync_errors.length === 0 && errors.stale_wallets.length === 0 && errors.failed_briefs.length === 0) {
-    lines.push('✅ Nothing broken right now.');
+    lines.push('Nothing is broken right now.');
     await replyMarkdownSafe(ctx, lines.join('\n'));
     return;
   }
@@ -129,7 +129,7 @@ async function handleOpsUser(ctx: Context, handle: string): Promise<void> {
   const syncOk = detail.wallets.every((w) => w.status !== 'error');
 
   const lines = [
-    `👤 *@${md(u.username ?? u.telegram_id)}*`,
+    `*@${md(u.username ?? u.telegram_id)}*`,
     ``,
     `Joined: ${ago(u.joined_at)}  |  Activated: ${u.activated_at ? ago(u.activated_at) : '—'}`,
     `Last active: ${ago(u.last_user_active_at)}  |  Role: ${md(u.role)}`,
@@ -137,7 +137,7 @@ async function handleOpsUser(ctx: Context, handle: string): Promise<void> {
     ``,
     `*Wallets (${detail.wallets.length})*`,
     ...detail.wallets.map((w) => {
-      const status = w.status === 'error' ? '❌' : w.active ? '✅' : '⏸';
+      const status = w.status === 'error' ? 'Error ' : w.active ? 'OK    ' : 'Paused';
       const addr = md(w.address.slice(0, 10)) + '…';
       return `  ${status} ${addr}${w.label ? ` (${md(w.label)})` : ''}  ${fmt(w.event_count)} events  sync: ${ago(w.last_synced_at)}`;
     }),
@@ -149,7 +149,7 @@ async function handleOpsUser(ctx: Context, handle: string): Promise<void> {
     ``,
     `*Recent Syncs*`,
     ...detail.recent_sync_runs.slice(0, 3).map((r) => {
-      const icon = r.status === 'completed' ? '✅' : r.status === 'failed' ? '❌' : '⏳';
+      const icon = r.status === 'completed' ? 'OK     ' : r.status === 'failed' ? 'Failed ' : r.status === 'partial' ? 'Partial' : 'Running';
       return `  ${icon} ${ago(r.started_at)} via ${md(r.provider)}${r.events_ingested != null ? ` — ${r.events_ingested} events` : ''}`;
     }),
     ``,
@@ -157,7 +157,7 @@ async function handleOpsUser(ctx: Context, handle: string): Promise<void> {
     `Unacked alerts: ${detail.recent_alerts.filter((a) => !a.acknowledged_at).length}`,
     ...(syncOk ? [] : [
       ``,
-      `⚠️ *Sync errors present — run /ops errors*`,
+      `*Sync errors present. Run /ops errors for details.*`,
     ]),
   ];
 
@@ -167,10 +167,10 @@ async function handleOpsUser(ctx: Context, handle: string): Promise<void> {
 // /ops operators — compact table of all operators
 async function handleOpsOperators(ctx: Context): Promise<void> {
   const operators = await getOpsOperators();
-  const lines = [`👥 *All Operators (${operators.length})*`, ``];
+  const lines = [`*All operators (${operators.length})*`, ``];
 
   for (const op of operators) {
-    const icon = op.has_sync_error ? '❌' : op.active_wallets === 0 ? '⚪' : '✅';
+    const icon = op.has_sync_error ? 'Error' : op.active_wallets === 0 ? 'Idle ' : 'OK   ';
     const name = md(op.username ?? op.telegram_id);
     const active = op.last_user_active_at ? ago(op.last_user_active_at) : '—';
     lines.push(`${icon} @${name}  wallets:${op.active_wallets}  active:${active}  unknown:${op.unknown_count}`);
@@ -181,7 +181,7 @@ async function handleOpsOperators(ctx: Context): Promise<void> {
 
 export async function handleOps(ctx: Context, user: AuthedUser, args: string[]): Promise<void> {
   if (user.role !== 'admin') {
-    await ctx.reply('⛔ Admin only.');
+    await ctx.reply('That one is for admins only.');
     return;
   }
 

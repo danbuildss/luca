@@ -5,7 +5,10 @@ export function formatAmount(amount: number | string | null, asset = 'USDC'): st
   if (amount == null) return '—';
   const n = typeof amount === 'string' ? parseFloat(amount) : amount;
   if (isNaN(n)) return '—';
-  const formatted = n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const formatted = n.toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: asset === 'USDC' ? 2 : 6,
+  });
   return `${formatted} ${asset}`;
 }
 
@@ -35,6 +38,19 @@ export function escapeMarkdown(text: string): string {
 // (the mode this bot uses). Only _ * ` [ are special there.
 export function escapeLegacyMarkdown(text: string): string {
   return text.replace(/[_*`[]/g, '\\$&');
+}
+
+// Monospace figures block: first column left-aligned, the rest right-aligned.
+// Cells must not contain user-controlled text: Markdown escaping does not apply inside it.
+export function figuresBlock(rows: string[][]): string {
+  const widths: number[] = [];
+  for (const row of rows) {
+    row.forEach((cell, i) => { widths[i] = Math.max(widths[i] ?? 0, cell.length); });
+  }
+  const lines = rows.map((row) =>
+    row.map((cell, i) => (i === 0 ? cell.padEnd(widths[i]) : cell.padStart(widths[i]))).join('   ').trimEnd(),
+  );
+  return ['```', ...lines, '```'].join('\n');
 }
 
 export const TELEGRAM_MAX_LENGTH = 4096;

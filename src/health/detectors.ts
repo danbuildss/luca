@@ -43,10 +43,13 @@ export async function detectWorkerStale(userId: string): Promise<number> {
   if (staleMinutes < 5) return 0;
 
   const sinceStr = hb
-    ? `Last ping ${Math.round(staleMinutes)} min ago`
-    : 'No heartbeat row found';
+    ? `Its last check-in was ${Math.round(staleMinutes)} minutes ago`
+    : 'It has never checked in';
 
-  const message = [`🔴 Worker is down`, sinceStr, `Luca is not syncing wallets or firing alerts`].join('\n');
+  const message = [
+    `Luca's worker has stopped`,
+    `${sinceStr}, so wallets are not syncing and alerts are paused.`,
+  ].join('\n');
 
   const inserted = await insertHealthAlert({
     userId,
@@ -76,10 +79,10 @@ export async function detectStaleWallets(userId: string): Promise<number> {
       : formatAddress(w.wallet_address);
 
     const lastStr = w.last_synced_at
-      ? `Last synced ${Math.round(w.stale_hours)}h ago`
-      : 'Never synced';
+      ? `last synced ${Math.round(w.stale_hours)} hours ago`
+      : 'has never synced';
 
-    const message = [`⚠️ Wallet sync stale`, `${walletHint}`, lastStr].join('\n');
+    const message = [`Wallet sync is behind`, `${walletHint} ${lastStr}.`].join('\n');
 
     const inserted = await insertHealthAlert({
       userId,
@@ -109,13 +112,12 @@ export async function detectDiskPressure(userId: string): Promise<number> {
   for (const disk of disks) {
     if (disk.used_pct < 80) continue;
 
-    const icon = disk.used_pct >= 90 ? '🔴' : '🟡';
     const dedupKey = `disk_pressure:${disk.mountpoint}:${windowKey}`;
 
     const message = [
-      `${icon} Disk pressure on ${disk.mountpoint}`,
-      `${disk.used_pct}% used — ${disk.avail_gb}GB free`,
-      disk.used_pct >= 90 ? `Action needed: clear logs or old backups` : `Getting full — keep an eye on it`,
+      `Server disk is ${disk.used_pct >= 90 ? 'nearly full' : 'filling up'}`,
+      `${disk.mountpoint} is ${disk.used_pct}% used with ${disk.avail_gb} GB free. ${
+        disk.used_pct >= 90 ? 'Clear old logs or backups soon.' : 'Worth keeping an eye on.'}`,
     ].join('\n');
 
     const inserted = await insertHealthAlert({
