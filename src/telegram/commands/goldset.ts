@@ -31,7 +31,7 @@ function buildKeyboard(eventId: string) {
       Markup.button.callback(LABEL_DISPLAY[label] ?? label, `gs:${eventId}:${label}`),
     ),
   );
-  rows.push([Markup.button.callback('⏭ Skip', `gs_skip:${eventId}`)]);
+  rows.push([Markup.button.callback('Skip', `gs_skip:${eventId}`)]);
   return Markup.inlineKeyboard(rows);
 }
 
@@ -43,8 +43,8 @@ export async function handleGoldSet(ctx: Context, user: AuthedUser): Promise<voi
 
   if (!candidate) {
     await ctx.reply(
-      `🏅 *Gold set*\n\nAll classified transactions have been labeled.\n\n` +
-      `Total in gold set: ${count}`,
+      `*Gold set*\n\nEvery classified transaction has been labeled. ` +
+      `The gold set now holds ${count}.`,
       { parse_mode: 'Markdown' },
     );
     return;
@@ -59,7 +59,7 @@ export async function handleGoldSet(ctx: Context, user: AuthedUser): Promise<voi
     candidate.amount != null ? String(candidate.amount) : null,
     escapeLegacyMarkdown((candidate.asset ?? 'ETH').slice(0, 20)),
   );
-  const dir = candidate.direction === 'in' ? '↓ in' : '↑ out';
+  const dir = candidate.direction === 'in' ? 'received' : 'sent';
   const date = new Date(candidate.block_time).toLocaleDateString('en-US', {
     month: 'short', day: 'numeric', year: 'numeric',
   });
@@ -69,9 +69,9 @@ export async function handleGoldSet(ctx: Context, user: AuthedUser): Promise<voi
     : 'no confidence';
 
   const text = [
-    `🏅 *Gold set labeling* — ${count} labeled so far`,
+    `*Gold set labeling*, ${count} labeled so far`,
     '',
-    `${amount} ${dir}  •  ${date}`,
+    `${amount} ${dir} on ${date}`,
     `Counterparty: ${escapeLegacyMarkdown(formatAddress(counterparty))}`,
     `Hash: ${escapeLegacyMarkdown(hashSnip)}`,
     '',

@@ -127,8 +127,7 @@ export async function detectLargeMovements(userId: string): Promise<number> {
   for (const row of res.rows) {
     const usd = parseFloat(row.usd_value ?? row.amount ?? '0');
     const type: AlertType = row.direction === 'in' ? 'large_inflow' : 'large_outflow';
-    const icon = row.direction === 'in' ? '💰' : '🔴';
-    const verb = row.direction === 'in' ? 'received from' : 'sent to';
+    const verb = row.direction === 'in' ? 'came in from' : 'went out to';
     const counterparty = row.direction === 'in'
       ? formatAddress(row.from_address)
       : row.to_address ? formatAddress(row.to_address) : '—';
@@ -137,9 +136,8 @@ export async function detectLargeMovements(userId: string): Promise<number> {
       : formatAddress(row.wallet_address);
 
     const message = [
-      `${icon} ${type === 'large_inflow' ? 'Large inflow' : 'Large outflow'}`,
-      `$${usd.toFixed(2)} ${row.asset ?? ''} ${verb} ${counterparty}`,
-      `Wallet: ${walletHint}`,
+      `${type === 'large_inflow' ? 'Large inflow' : 'Large outflow'}`,
+      `$${usd.toFixed(2)} in ${row.asset ?? 'tokens'} ${verb} ${counterparty}, on ${walletHint}.`,
     ].join('\n');
 
     const inserted = await insertAlert({
@@ -212,11 +210,11 @@ export async function detectSpendSpike(userId: string): Promise<number> {
   if (spikeRatio < 2 || spend24h < parseFloat(row.materiality_usd ?? '50')) return 0;
 
   const context = isFinite(spikeRatio)
-    ? `${spikeRatio.toFixed(1)}× your prior 6-day avg of $${dailyAvg.toFixed(2)}/day`
-    : `no spend in the prior ${BASELINE_DAYS} days`;
+    ? `${spikeRatio.toFixed(1)}x your usual $${dailyAvg.toFixed(2)} a day over the previous ${BASELINE_DAYS} days`
+    : `with no spending in the previous ${BASELINE_DAYS} days`;
   const message = [
-    `⚠️ Spend spike`,
-    `$${spend24h.toFixed(2)} spent in the last 24h (${context})`,
+    `Spending is up`,
+    `You spent $${spend24h.toFixed(2)} in the last 24 hours, ${context}.`,
   ].join('\n');
 
   const inserted = await insertAlertWithCooldown({
@@ -275,9 +273,8 @@ export async function detectTreasuryFloor(userId: string): Promise<number> {
       : formatAddress(row.wallet_address);
 
     const message = [
-      `⚠️ Treasury floor`,
-      `${walletHint} balance: $${balance.toFixed(2)} USDC`,
-      `Below your $${threshold.toFixed(2)} threshold`,
+      `Treasury below your floor`,
+      `${walletHint} holds $${balance.toFixed(2)} USDC, under your $${threshold.toFixed(2)} threshold.`,
     ].join('\n');
 
     const inserted = await insertAlertWithCooldown(
@@ -344,8 +341,8 @@ export async function detectUnusualGas(userId: string): Promise<number> {
   if (spikeRatio < 5 || gas24h < 1) return 0; // ignore sub-$1 gas noise
 
   const message = [
-    `⛽ Unusual gas`,
-    `$${gas24h.toFixed(2)} in gas in the last 24h (${spikeRatio.toFixed(1)}× your prior 6-day avg of $${dailyAvg.toFixed(2)}/day)`,
+    `Gas is unusually high`,
+    `You paid $${gas24h.toFixed(2)} in gas in the last 24 hours, ${spikeRatio.toFixed(1)}x your usual $${dailyAvg.toFixed(2)} a day.`,
   ].join('\n');
 
   const inserted = await insertAlertWithCooldown({
@@ -373,10 +370,8 @@ export async function detectClassifierDegradation(userId: string): Promise<numbe
   if (total_high_confidence < 10 || rate < 0.05) return 0;
 
   const message = [
-    `🔴 Classifier degradation`,
-    `${count} high-confidence classifications were corrected`,
-    `Error rate: ${(rate * 100).toFixed(1)}% of ${total_high_confidence} high-confidence labels`,
-    `Run /quality for the full breakdown`,
+    `Classification quality dropped`,
+    `${count} of ${total_high_confidence} high-confidence labels were corrected (${(rate * 100).toFixed(1)}%). Run /quality for the breakdown.`,
   ].join('\n');
 
   const inserted = await insertAlert({

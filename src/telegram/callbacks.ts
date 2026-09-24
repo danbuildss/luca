@@ -17,8 +17,8 @@ import type { AuthedUser } from './auth.js';
 export function agentConfirmKeyboard(actionId: string) {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback('✅ Confirm', `agentok:${actionId}`),
-      Markup.button.callback('❌ Cancel', `agentno:${actionId}`),
+      Markup.button.callback('Confirm', `agentok:${actionId}`),
+      Markup.button.callback('Cancel', `agentno:${actionId}`),
     ],
   ]);
 }
@@ -102,15 +102,15 @@ async function handleLabelCallback(ctx: Context, user: AuthedUser, data: string)
       newLabel: labelValue as ClassificationLabel,
       reason: 'Telegram review',
     });
-    await ctx.answerCbQuery(`Labeled as ${labelValue} ✓`);
+    await ctx.answerCbQuery(`Labeled as ${labelValue}.`);
     await ctx.editMessageText(
       (ctx.callbackQuery?.message as { text?: string } | undefined)?.text
-        ? `${(ctx.callbackQuery!.message as { text: string }).text}\n\n✅ Labeled: ${labelValue}`
-        : `✅ Labeled: ${labelValue}`,
+        ? `${(ctx.callbackQuery!.message as { text: string }).text}\n\nLabeled as ${labelValue}.`
+        : `Labeled as ${labelValue}.`,
     );
     if (result.wasCorrection) {
       await ctx.reply(
-        '🔬 Why was it wrong?',
+        'What did I get wrong? This helps me improve.',
         FAILURE_REASON_KEYBOARD(result.correctionId),
       );
     }
@@ -184,10 +184,10 @@ async function handleAlertLabelShortCallback(ctx: Context, user: AuthedUser, dat
       }),
       resolveAlert({ alertId, userId: user.userId, status: 'labeled' }),
     ]);
-    await ctx.answerCbQuery(`Labeled as ${labelValue} ✓ — future transfers auto-classify`);
+    await ctx.answerCbQuery(`Labeled as ${labelValue}. Future transfers from this address will be labeled the same way.`);
     await ctx.editMessageReplyMarkup(undefined);
     if (result.wasCorrection) {
-      await ctx.reply('🔬 Why was it wrong?', FAILURE_REASON_KEYBOARD(result.correctionId));
+      await ctx.reply('What did I get wrong? This helps me improve.', FAILURE_REASON_KEYBOARD(result.correctionId));
     }
   } catch (err) {
     if (err instanceof EventNotFoundError) {
@@ -219,10 +219,10 @@ async function handleAlertLabelCallback(ctx: Context, user: AuthedUser, data: st
       }),
       resolveAlert({ alertId, userId: user.userId, status: 'labeled' }),
     ]);
-    await ctx.answerCbQuery(`Labeled as ${labelValue} ✓ — future transfers auto-classify`);
+    await ctx.answerCbQuery(`Labeled as ${labelValue}. Future transfers from this address will be labeled the same way.`);
     await ctx.editMessageReplyMarkup(undefined);
     if (result.wasCorrection) {
-      await ctx.reply('🔬 Why was it wrong?', FAILURE_REASON_KEYBOARD(result.correctionId));
+      await ctx.reply('What did I get wrong? This helps me improve.', FAILURE_REASON_KEYBOARD(result.correctionId));
     }
   } catch (err) {
     if (err instanceof EventNotFoundError) {
@@ -245,7 +245,7 @@ async function handleGoldSetLabelCallback(ctx: Context, user: AuthedUser, data: 
   }
 
   await addGoldTransaction(user.userId, eventId, labelValue);
-  await ctx.answerCbQuery(`Gold set: ${labelValue} ✓`);
+  await ctx.answerCbQuery(`Gold set: ${labelValue}`);
   try {
     await ctx.editMessageReplyMarkup(undefined);
   } catch { /* already edited */ }
@@ -279,7 +279,7 @@ async function handleFailureReasonCallback(ctx: Context, user: AuthedUser, data:
   }
 
   await setFailureReason(correctionId, user.userId, reason as FailureReason);
-  await ctx.answerCbQuery('Tagged ✓');
+  await ctx.answerCbQuery('Noted, thank you.');
   try { await ctx.editMessageReplyMarkup(undefined); } catch { /* already edited */ }
 }
 
@@ -321,7 +321,7 @@ async function handleAgentActionCallback(
 
   if (!confirm) {
     await ctx.answerCbQuery('Cancelled');
-    try { await ctx.editMessageText(`❌ Cancelled: ${desc}`); } catch { /* already edited */ }
+    try { await ctx.editMessageText(`Cancelled, nothing was changed: ${desc}`); } catch { /* already edited */ }
     await recordAgentOutcome(user.userId, `(Operator cancelled the proposed action: ${desc})`);
     return;
   }
@@ -345,8 +345,8 @@ async function handleAgentActionCallback(
   }
 
   const text = errorMsg
-    ? `⚠️ Couldn't complete: ${desc}\n${errorMsg}`
-    : `✅ Done: ${desc}`;
+    ? `I could not complete this: ${desc}\n${errorMsg}`
+    : `Done: ${desc}`;
   try {
     await ctx.editMessageText(text);
   } catch {

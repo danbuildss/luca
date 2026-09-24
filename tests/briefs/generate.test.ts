@@ -124,8 +124,8 @@ describe('generateDailyBrief', () => {
     );
 
     const brief = await generateDailyBrief('user-1');
-    expect(brief).toContain('5 unknowns');
-    expect(brief).toContain('/review');
+    expect(brief).toContain('5 unknown transfers need context');
+    expect(brief).not.toContain('/review');
   });
 
   it('omits unknown nudge when no unknowns', async () => {

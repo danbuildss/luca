@@ -1,6 +1,6 @@
 import { Telegraf } from 'telegraf';
 import { config, requireProductionConfig } from '../../src/config.js';
-import { closeDb } from '../../src/db.js';
+import { closeDb, query } from '../../src/db.js';
 import { logger } from '../../src/logger.js';
 import type { AuthedUser } from '../../src/telegram/auth.js';
 import { resolveTelegramUser, inviteUsername, revokeUsername } from '../../src/telegram/onboarding.js';
@@ -42,11 +42,13 @@ const NOT_INVITED_MSG =
 const REVOKED_MSG =
   'Your Luca beta access has been turned off. Message @danbuildss if you think this is a mistake.';
 const WELCOME_MSG = [
-  "👋 Welcome to Luca, you're in.",
+  "Welcome to Luca. You're in.",
   '',
-  "Send me the Base wallet address you want me to watch (0x…) and I'll start keeping your books.",
-  'Type /start any time to see what I can do.',
+  "Send me the Base wallet address you'd like me to watch and I'll start keeping your books.",
+  'After that, just ask me anything: how the month went, what you hold, or what a payment was for.',
 ].join('\n');
+
+const ADMIN_ONLY_MSG = 'That one is for admins only.';
 
 async function requireUser(ctx: Parameters<typeof handleSummary>[0]): Promise<AuthedUser | null> {
   const from = ctx.from;
@@ -68,23 +70,17 @@ async function requireUser(ctx: Parameters<typeof handleSummary>[0]): Promise<Au
 bot.command('start', async (ctx) => {
   const user = await requireUser(ctx);
   if (!user) return;
-  const helpLines = [
-    `👋 Hi! I'm Luca, your on-chain financial agent.\n`,
-    `/summary — P&L for the last 30 days`,
-    `/review  — Label unknown transactions`,
-    `/balance — Current wallet balances`,
-    `/brief   — On-demand daily or weekly brief`,
-    `/quality — Classification quality report`,
-    `/goldset — Label transactions for regression testing`,
+  const lines = [
+    "Hi, I'm Luca. I keep the books on your on-chain wallets.",
+    '',
+    'Just talk to me. Ask how the last month looked, what you hold, or what a payment was for,',
+    "and tell me when I've labeled something wrong. If you haven't yet, send me the wallet address",
+    "you'd like me to watch.",
   ];
   if (user.role === 'admin') {
-    helpLines.push(
-      `/ops     — Founder ops console`,
-      `/invite @user — Invite a beta tester`,
-      `/revoke @user — Remove a tester's access`,
-    );
+    lines.push('', 'Admin: /ops, /invite @user, /revoke @user, /quality, /goldset');
   }
-  await ctx.reply(helpLines.join('\n'));
+  await ctx.reply(lines.join('\n'));
 });
 
 bot.command('summary', async (ctx) => {
@@ -146,6 +142,7 @@ bot.command('brief', async (ctx) => {
 bot.command('quality', async (ctx) => {
   const user = await requireUser(ctx);
   if (!user) return;
+  if (user.role !== 'admin') { await ctx.reply(ADMIN_ONLY_MSG); return; }
   void touchUserActivity(user.userId);
   await handleQuality(ctx, user);
 });
@@ -153,6 +150,7 @@ bot.command('quality', async (ctx) => {
 bot.command('goldset', async (ctx) => {
   const user = await requireUser(ctx);
   if (!user) return;
+  if (user.role !== 'admin') { await ctx.reply(ADMIN_ONLY_MSG); return; }
   void touchUserActivity(user.userId);
   await handleGoldSet(ctx, user);
 });
@@ -160,23 +158,23 @@ bot.command('goldset', async (ctx) => {
 bot.command('invite', async (ctx) => {
   const user = await requireUser(ctx);
   if (!user) return;
-  if (user.role !== 'admin') { await ctx.reply('⛔ Admin only.'); return; }
+  if (user.role !== 'admin') { await ctx.reply(ADMIN_ONLY_MSG); return; }
   const arg = ctx.message.text.split(/\s+/)[1];
   const outcome = await inviteUsername(arg, `admin:${user.telegramId}`);
   const name = `@${(arg ?? '').replace(/^@/, '')}`;
   if (outcome === 'invalid') {
     await ctx.reply('Usage: /invite @username');
   } else if (outcome === 'reactivated') {
-    await ctx.reply(`✅ ${name}'s invite is active. They can message Luca now.`);
+    await ctx.reply(`${name}'s invite is active again. They can message Luca now.`);
   } else {
-    await ctx.reply(`✅ ${name} is invited. They can message Luca now.`);
+    await ctx.reply(`${name} is invited. They can message Luca now.`);
   }
 });
 
 bot.command('revoke', async (ctx) => {
   const user = await requireUser(ctx);
   if (!user) return;
-  if (user.role !== 'admin') { await ctx.reply('⛔ Admin only.'); return; }
+  if (user.role !== 'admin') { await ctx.reply(ADMIN_ONLY_MSG); return; }
   const arg = ctx.message.text.split(/\s+/)[1];
   const outcome = await revokeUsername(arg, `admin:${user.telegramId}`);
   const name = `@${(arg ?? '').replace(/^@/, '')}`;
@@ -184,7 +182,7 @@ bot.command('revoke', async (ctx) => {
     invalid: 'Usage: /revoke @username',
     not_found: `No invite or user found for ${name}.`,
     admin: "Admins can't be revoked.",
-    revoked: `⛔ ${name}'s access is revoked.`,
+    revoked: `${name}'s access is revoked.`,
   } as const;
   await ctx.reply(replies[outcome]);
 });
@@ -221,10 +219,10 @@ bot.command('label', async (ctx) => {
       newLabel: labelValue as import('../../src/types/index.js').ClassificationLabel,
       reason: 'Telegram /label command',
     });
-    await ctx.reply(`✅ Labeled as ${labelValue}`);
+    await ctx.reply(`Labeled as ${labelValue}.`);
   } catch (err) {
     if (err instanceof EventNotFoundError) {
-      await ctx.reply('Event not found.');
+      await ctx.reply('I could not find that transaction.');
     } else {
       throw err;
     }
@@ -268,13 +266,13 @@ bot.on('text', async (ctx) => {
     for (const action of pendingActions) {
       const kb = agentConfirmKeyboard(action.id);
       await ctx.reply(
-        `Confirm action?\n${describePendingAction(action.toolName, action.args)}\n\n(expires in 10 minutes)`,
+        `Please confirm this change:\n${describePendingAction(action.toolName, action.args)}\n\nThis request expires in 10 minutes.`,
         { reply_markup: kb.reply_markup },
       );
     }
   } catch (err) {
     logger.error({ err, userId: user.userId }, 'Agent run failed');
-    await ctx.reply("Something went wrong — I'll look into it.");
+    await ctx.reply('Something went wrong on my side. Please try again in a moment.');
   } finally {
     agentLimiter.release(user.userId);
   }
@@ -369,17 +367,17 @@ function scheduleHealthPoll() {
 // ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
-async function start() {
-  const commands = [
-    { command: 'summary',  description: 'P&L for the last 30 days' },
-    { command: 'balance',  description: 'Current wallet balances' },
-    { command: 'brief',    description: 'On-demand financial brief' },
-    { command: 'review',   description: 'Label unknown transactions' },
-    { command: 'quality',  description: 'Classification quality report' },
-    { command: 'goldset',  description: 'Label transactions for the test set' },
-  ];
+// Testers chat with Luca and see no command menu. Admins get their tools in their own
+// chat only. /summary, /balance, /brief and /review still work if typed.
+const ADMIN_COMMANDS = [
+  { command: 'ops',     description: 'Ops console' },
+  { command: 'invite',  description: 'Invite a beta tester: /invite @username' },
+  { command: 'revoke',  description: 'Remove a tester: /revoke @username' },
+  { command: 'quality', description: 'Classification quality report' },
+  { command: 'goldset', description: 'Label transactions for the test set' },
+];
 
-  // Delete commands for every scope that old bots may have set them on
+async function configureCommandMenus(): Promise<void> {
   for (const scope of [
     { type: 'default' as const },
     { type: 'all_private_chats' as const },
@@ -388,7 +386,22 @@ async function start() {
     try { await bot.telegram.deleteMyCommands({ scope }); } catch { /* scope may not exist */ }
   }
 
-  await bot.telegram.setMyCommands(commands);
+  const admins = await query<{ telegram_id: string }>(
+    `SELECT telegram_id::text AS telegram_id FROM users WHERE role = 'admin'`,
+  );
+  for (const admin of admins.rows) {
+    try {
+      await bot.telegram.setMyCommands(ADMIN_COMMANDS, {
+        scope: { type: 'chat', chat_id: Number(admin.telegram_id) },
+      });
+    } catch (err) {
+      logger.warn({ err }, 'Could not set admin command menu');
+    }
+  }
+}
+
+async function start() {
+  await configureCommandMenus();
 
   scheduleAlertPoll();
   scheduleHealthPoll();

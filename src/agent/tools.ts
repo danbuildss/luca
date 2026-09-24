@@ -2,6 +2,7 @@ import type { ChatCompletionTool } from 'openai/resources/chat/completions.js';
 import { query } from '../db.js';
 import { getPnlSummary, getBooksSummary, getBooksEvents } from '../books/query.js';
 import { getValuedBalances } from '../books/balances.js';
+import { getOverview } from '../books/overview.js';
 import { getEventsForReview, getEventWithClassification, resolveEventRef } from '../corrections/store.js';
 import { applyCorrection } from '../corrections/handler.js';
 import { ClassificationLabel, CLASSIFICATION_LABELS, WALLET_ROLES, SUPPORTED_CHAINS } from '../types/index.js';
@@ -17,6 +18,20 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
       name: 'get_cash_position',
       description: 'Get the current ETH, USDC and BNKR balances across all registered wallets, each valued in USD at live prices, plus the total. Use this to answer "how much do we have?" or "what is our cash position?"',
       parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_overview',
+      description: 'The full picture for a period: transaction count, cash, revenue, expenses, gas, internal transfers, unknown amounts, and what needs attention (transfers needing context, first-time payees, spending vs usual). Use this for "what does the last month look like?", "how are we doing?" or any general overview.',
+      parameters: {
+        type: 'object',
+        properties: {
+          period_days: { type: 'number', description: 'Number of days to look back. Default 30.' },
+        },
+        required: [],
+      },
     },
   },
   {
@@ -284,6 +299,11 @@ export async function executeTool(
       };
     }
 
+    case 'get_overview': {
+      const periodDays = (args.period_days as number | undefined) ?? 30;
+      return await getOverview(userId, periodDays);
+    }
+
     case 'get_books_summary': {
       const periodDays = (args.period_days as number | undefined) ?? 30;
       const [pnl, breakdown] = await Promise.all([
@@ -395,9 +415,8 @@ export async function executeTool(
 
     case 'get_financial_brief': {
       const periodDays = (args.period_days as number | undefined) ?? 1;
-      const [pnl, unknowns, alerts] = await Promise.all([
-        getPnlSummary(userId, periodDays),
-        getEventsForReview({ userId, label: 'unknown', limit: 5 }),
+      const [overview, alerts] = await Promise.all([
+        getOverview(userId, periodDays),
         query<{ type: string; message: string; created_at: Date }>(
           `SELECT type, message, created_at
            FROM alerts
@@ -407,33 +426,7 @@ export async function executeTool(
           [userId],
         ),
       ]);
-      // Sum the latest USDC snapshot of EACH active wallet (not just the newest row overall).
-      const cashRes = await query<{
-        total: string;
-        wallet_count: number;
-      }>(
-        `SELECT COALESCE(SUM(latest.balance), 0)::text AS total,
-                COUNT(*)::int AS wallet_count
-         FROM (
-           SELECT DISTINCT ON (bs.wallet_id) bs.balance
-           FROM balance_snapshots bs
-           JOIN wallets w ON w.id = bs.wallet_id
-           WHERE bs.user_id = $1 AND w.user_id = $1 AND bs.asset = 'USDC' AND w.active = true
-           ORDER BY bs.wallet_id, bs.snapshot_at DESC
-         ) latest`,
-        [userId],
-      );
-      const cashRow = cashRes.rows[0];
-      const valued = await getValuedBalances(userId);
-      return {
-        period_days: periodDays,
-        cash_usdc: cashRow && cashRow.wallet_count > 0 ? cashRow.total : null,
-        holdings_usd: valued.total_usd,
-        holdings_incomplete: valued.total_incomplete,
-        pnl,
-        unknown_count: unknowns.length,
-        recent_alerts: alerts.rows,
-      };
+      return { ...overview, recent_alerts: alerts.rows };
     }
 
     case 'get_alerts': {
