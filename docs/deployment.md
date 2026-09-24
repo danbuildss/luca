@@ -7,7 +7,7 @@
 - Postgres (local or Docker)
 - Telegram Bot Token (from @BotFather)
 - Alchemy API key (Base RPC + Transfers API)
-- OpenAI or Anthropic API key (for Hermes)
+- OpenAI or Anthropic API key (for the Luca agent)
 
 ### Setup
 

@@ -1,5 +1,7 @@
 # NOTES.md — Luca Project Memory
 
+> **Runtime update (2026-09-24):** The Hermes runtime was removed. Luca runs as its own Telegram bot, worker and API on the VPS (`luca-telegram`, `luca-worker`, `luca-api`), with its agent in `src/agent/`. Sections below that describe Hermes as Luca's runtime are historical.
+
 Read this first every session. Never ask the owner to re-explain anything here.
 
 ---

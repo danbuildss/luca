@@ -8,7 +8,7 @@ set -euo pipefail
 
 APP_DIR="/opt/luca"
 BRANCH="${BRANCH:-main}"
-SERVICES="luca-worker luca-api"
+SERVICES="luca-worker luca-api luca-telegram"
 
 cd "$APP_DIR"
 

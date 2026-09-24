@@ -1,5 +1,7 @@
 # LUCA — Master Product & Engineering Direction
 
+> **Runtime update (2026-09-24):** The Hermes runtime was removed. Luca runs as its own Telegram bot, worker and API on the VPS (`luca-telegram`, `luca-worker`, `luca-api`), with its agent in `src/agent/`. Sections below that describe Hermes as Luca's runtime are historical.
+
 ## 1. What Luca Is
 
 Luca is a **private financial agent for on-chain operators**.

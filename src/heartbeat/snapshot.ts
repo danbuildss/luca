@@ -1,6 +1,5 @@
 import { query } from '../db.js';
 import { getPnlSummary } from '../books/query.js';
-import { getBankrPortfolio } from '../bankr/portfolio.js';
 import { logger } from '../logger.js';
 
 export async function takeHeartbeatSnapshot(userId: string): Promise<void> {
@@ -37,20 +36,10 @@ export async function takeHeartbeatSnapshot(userId: string): Promise<void> {
 
   const pnl = await getPnlSummary(userId, 7);
 
-  let bankrTotalUsd: number | null = null;
-  try {
-    const bankr = await getBankrPortfolio(userId);
-    if (bankr.available) {
-      bankrTotalUsd = bankr.totalUsd;
-    }
-  } catch (err) {
-    logger.warn({ err, userId }, 'Bankr portfolio fetch failed in heartbeat');
-  }
-
   await query(
     `INSERT INTO financial_heartbeat_snapshots
-       (user_id, snapshot_date, total_balance_usdc, net_pnl_7d, revenue_7d, expenses_7d, unknown_count_7d, bankr_total_usd)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       (user_id, snapshot_date, total_balance_usdc, net_pnl_7d, revenue_7d, expenses_7d, unknown_count_7d)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      ON CONFLICT (user_id, snapshot_date) DO NOTHING`,
     [
       userId, today,
@@ -59,7 +48,6 @@ export async function takeHeartbeatSnapshot(userId: string): Promise<void> {
       pnl.revenue_usdc,
       pnl.expenses_usdc,
       pnl.unknown_count,
-      bankrTotalUsd,
     ],
   );
 
