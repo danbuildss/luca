@@ -97,15 +97,26 @@ export type PnlSummary = {
 // labelled 'in' (vendor refund) reduces expenses/gas. Refunds net the same way: one sent
 // reduces revenue, one received reduces expenses. Internal transfers, treasury moves and
 // swaps are not in P&L (a swap's gas is).
-export async function getPnlSummary(userId: string, periodDays: number): Promise<PnlSummary> {
-  const REVENUE = `CASE
-    WHEN c.label::text = ANY($3::text[]) THEN CASE WHEN ne.direction = 'out' THEN -${USD_COALESCE} ELSE ${USD_COALESCE} END
+// Label lists inlined as SQL literals (constants, never user input)
+const labels = (list: readonly string[]): string => list.map((l) => `'${l}'`).join(', ');
+
+// Each transfer's signed contribution to a P&L figure (NULL when it is not part of it).
+// Shared by the totals and by the per-transaction breakdown, so the two always agree.
+export const REVENUE_SQL = `CASE
+    WHEN c.label IN (${labels(BRIEF_CATEGORIES.revenue)}) THEN CASE WHEN ne.direction = 'out' THEN -${USD_COALESCE} ELSE ${USD_COALESCE} END
     WHEN c.label = 'refund' AND ne.direction = 'out' THEN -${USD_COALESCE}
   END`;
-  const EXPENSES = `CASE
-    WHEN c.label::text = ANY($4::text[]) THEN CASE WHEN ne.direction = 'in' THEN -${USD_COALESCE} ELSE ${USD_COALESCE} END
+export const EXPENSES_SQL = `CASE
+    WHEN c.label IN (${labels(BRIEF_CATEGORIES.expenses)}) THEN CASE WHEN ne.direction = 'in' THEN -${USD_COALESCE} ELSE ${USD_COALESCE} END
     WHEN c.label = 'refund' AND ne.direction = 'in' THEN -${USD_COALESCE}
   END`;
+export const GAS_SQL = `CASE
+    WHEN c.label IN (${labels(BRIEF_CATEGORIES.gas)}) THEN CASE WHEN ne.direction = 'in' THEN -${USD_COALESCE} ELSE ${USD_COALESCE} END
+  END`;
+
+export async function getPnlSummary(userId: string, periodDays: number): Promise<PnlSummary> {
+  const REVENUE = REVENUE_SQL;
+  const EXPENSES = EXPENSES_SQL;
   const res = await query<{
     revenue_usdc: string | null;
     expenses_usdc: string | null;
@@ -120,30 +131,20 @@ export async function getPnlSummary(userId: string, periodDays: number): Promise
     `SELECT
        SUM(${REVENUE})::text AS revenue_usdc,
        SUM(${EXPENSES})::text AS expenses_usdc,
-       SUM(CASE WHEN c.label::text = ANY($5::text[])
-                THEN CASE WHEN ne.direction = 'in' THEN -${USD_COALESCE} ELSE ${USD_COALESCE} END
-           END)::text AS gas_usdc,
+       SUM(${GAS_SQL})::text AS gas_usdc,
        SUM(${REVENUE}) FILTER (WHERE c.status = 'provisional')::text AS revenue_provisional_usdc,
        SUM(${EXPENSES}) FILTER (WHERE c.status = 'provisional')::text AS expenses_provisional_usdc,
        (COUNT(*) FILTER (WHERE c.status = 'provisional'))::int AS provisional_count,
-       (COUNT(*) FILTER (WHERE c.label::text = ANY($6::text[]) AND c.source IS DISTINCT FROM 'failure'))::int AS unknown_count,
+       (COUNT(*) FILTER (WHERE c.label = 'unknown' AND c.source IS DISTINCT FROM 'failure'))::int AS unknown_count,
        (COUNT(*) FILTER (WHERE ${USD_COALESCE} IS NULL AND c.source IS DISTINCT FROM 'failure'
-                           AND c.label::text <> ALL($7::text[])))::int AS unpriced_count,
+                           AND c.label NOT IN (${labels([...BRIEF_CATEGORIES.internal, ...BRIEF_CATEGORIES.conversion])})))::int AS unpriced_count,
        (COUNT(*) FILTER (WHERE c.id IS NULL OR c.source = 'failure'))::int AS pending_count
      FROM normalized_events ne
      LEFT JOIN classifications c ON c.event_id = ne.id AND c.superseded_at IS NULL
      WHERE ne.user_id = $1
        AND ne.supported IS TRUE
        AND ne.block_time >= NOW() - INTERVAL '1 day' * $2`,
-    [
-      userId,
-      periodDays,
-      BRIEF_CATEGORIES.revenue,
-      BRIEF_CATEGORIES.expenses,
-      BRIEF_CATEGORIES.gas,
-      BRIEF_CATEGORIES.unknown,
-      [...BRIEF_CATEGORIES.internal, ...BRIEF_CATEGORIES.conversion],
-    ],
+    [userId, periodDays],
   );
 
   const row = res.rows[0];

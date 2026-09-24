@@ -2,7 +2,8 @@ import { config, requireProductionConfig } from '../../src/config.js';
 import { closeDb } from '../../src/db.js';
 import { logger } from '../../src/logger.js';
 import { getActiveWatchJobs, syncWallet } from '../../src/ingestion/ingest.js';
-import { repriceMissing } from '../../src/ingestion/reprice.js';
+import { repriceMissing, upgradePrices, priceSwaps } from '../../src/ingestion/reprice.js';
+import { checkUsdcPeg } from '../../src/pricing/peg.js';
 import { reconcileDueWallets } from '../../src/ledger/reconcile.js';
 import { classifyAllUsers } from '../../src/classification/engine.js';
 import { getDistinctUserIds } from '../../src/classification/store.js';
@@ -48,8 +49,14 @@ async function runCycle(): Promise<void> {
   }
 
   if (!shuttingDown) {
-    await repriceMissing().catch((err: unknown) => logger.error({ err }, 'Re-pricing failed'));
+    await repriceMissing(50, apiKey).catch((err: unknown) => logger.error({ err }, 'Re-pricing failed'));
     await classifyAllUsers();
+    // After classification: swaps are known, so BNKR in a swap takes the traded price
+    await priceSwaps().catch((err: unknown) => logger.error({ err }, 'Swap pricing failed'));
+    if (apiKey) {
+      await upgradePrices(apiKey).catch((err: unknown) => logger.error({ err }, 'On-chain re-pricing failed'));
+      await checkUsdcPeg(apiKey).catch((err: unknown) => logger.error({ err }, 'USDC peg check failed'));
+    }
   }
 
   if (!shuttingDown) {

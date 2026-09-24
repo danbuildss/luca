@@ -3,6 +3,8 @@ import { query } from '../db.js';
 import { getPnlSummary, getBooksSummary, getBooksEvents } from '../books/query.js';
 import { getValuedBalances } from '../books/balances.js';
 import { getOverview } from '../books/overview.js';
+import { getFigureBreakdown, FIGURES, type Figure } from '../books/breakdown.js';
+import { getPreviousAnswers } from './traces.js';
 import { getLedgerStatus } from '../ledger/status.js';
 import { getEventsForReview, getEventWithClassification, resolveEventRef } from '../corrections/store.js';
 import { applyCorrection, describeRuleOutcome } from '../corrections/handler.js';
@@ -48,6 +50,33 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
             description: 'Number of days to look back. Default 30.',
           },
         },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_figure_breakdown',
+      description: 'Every transaction behind one figure (revenue, expenses, gas, internal, swaps, unknown, provisional or unpriced) for a period: date, amount, USD contribution, where its price came from, label, status and a BaseScan link. The rows add up exactly to the figure. Use this for "where does that number come from?", "show me those" or to check a total.',
+      parameters: {
+        type: 'object',
+        properties: {
+          figure: { type: 'string', enum: [...FIGURES], description: 'Which figure to break down.' },
+          period_days: { type: 'number', description: 'Same period as the answer being explained. Default 30.' },
+        },
+        required: ['figure'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_previous_answers',
+      description: 'Your last few answers to this operator, each with the question and the exact tool calls (periods, filters) behind it. Use it for follow-ups like "where does that come from?" or "show me those", so you break down exactly the figures you gave.',
+      parameters: {
+        type: 'object',
+        properties: { limit: { type: 'number', description: 'How many answers, newest first. Default 3.' } },
         required: [],
       },
     },
@@ -314,6 +343,17 @@ export async function executeTool(
         getLedgerStatus(userId),
       ]);
       return { pnl, breakdown, ledger };
+    }
+
+    case 'get_figure_breakdown': {
+      const figure = String(args.figure ?? '') as Figure;
+      if (!(FIGURES as readonly string[]).includes(figure)) return { error: `Unknown figure: ${figure}` };
+      const periodDays = (args.period_days as number | undefined) ?? 30;
+      return await getFigureBreakdown(userId, figure, periodDays);
+    }
+
+    case 'get_previous_answers': {
+      return { answers: await getPreviousAnswers(userId, (args.limit as number | undefined) ?? 3) };
     }
 
     case 'get_recent_activity': {

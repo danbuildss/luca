@@ -45,6 +45,8 @@ export type EventRow = {
   usd_value: number | null;
   price_source: string | null;
   price_at: Date | null;
+  // Where the USD value came from, in words (set when priced)
+  price_ref?: string | null;
   direction: 'in' | 'out';
 };
 
