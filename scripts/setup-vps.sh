@@ -28,7 +28,7 @@ apt-get install -y -q postgresql-16 postgresql-client-16
 systemctl enable --now postgresql
 
 echo "==> [5/10] Create app user with home directory"
-# Hermes needs /home/luca — create as a normal (non-system) user with a home dir.
+# Create the app user as a normal (non-system) user with a home dir.
 if id -u "$APP_USER" &>/dev/null; then
   echo "    User $APP_USER already exists"
   # Ensure home dir exists and is owned correctly
@@ -75,8 +75,7 @@ ufw --force enable
 echo "==> [9/10] Systemd services"
 cp "$APP_DIR/deploy/luca-worker.service" /etc/systemd/system/
 cp "$APP_DIR/deploy/luca-api.service"    /etc/systemd/system/
-# luca-telegram.service is kept but NOT enabled — Hermes replaces it
-cp "$APP_DIR/deploy/luca-telegram.service" /etc/systemd/system/ 2>/dev/null || true
+cp "$APP_DIR/deploy/luca-telegram.service" /etc/systemd/system/
 systemctl daemon-reload
 
 echo "==> [10/10] Nginx"
@@ -107,14 +106,10 @@ echo "       INSERT INTO users (telegram_id, timezone)"
 echo "         VALUES ('<your telegram id>', 'UTC')"
 echo "         ON CONFLICT (telegram_id) DO UPDATE SET timezone = EXCLUDED.timezone"
 echo "         RETURNING id;"
-echo "     That UUID becomes LUCA_USER_ID in Hermes .env."
 echo ""
 echo "  3. Build and start Luca Core:"
 echo "       bash $APP_DIR/scripts/deploy.sh"
 echo ""
 echo "  4. Verify the API is up:"
 echo "       curl http://127.0.0.1:3000/health"
-echo ""
-echo "  5. Then run Hermes setup:"
-echo "       bash $APP_DIR/scripts/setup-hermes.sh"
 echo "============================================================"

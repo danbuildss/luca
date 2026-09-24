@@ -328,53 +328,12 @@ app.get('/unknowns', async (req, reply) => {
 });
 
 // ---------------------------------------------------------------------------
-// Users: GET /users/resolve?telegram_id=<bigint>
-// Looks up user by Telegram ID; auto-creates on first call (upsert).
-// Returns { user_id, telegram_id, created }
-// Gated by beta_invites — 403 if telegram_id has no active invite.
-// ---------------------------------------------------------------------------
-const TELEGRAM_ID_RE = /^\d{1,20}$/;
-
-app.get('/users/resolve', async (req, reply) => {
-  const { telegram_id: rawId } = req.query as { telegram_id?: string };
-  if (!rawId || !TELEGRAM_ID_RE.test(rawId)) {
-    return reply.status(400).send({ error: 'telegram_id query param required (numeric)' });
-  }
-  const telegramId = BigInt(rawId);
-
-  // Beta gate: must have an active invite
-  const invite = await query<{ status: string }>(
-    `SELECT status FROM beta_invites WHERE telegram_id = $1`,
-    [telegramId],
-  );
-  if (invite.rows.length === 0 || invite.rows[0].status !== 'active') {
-    return reply.status(403).send({
-      error: 'not_invited',
-      message: 'Luca is in private beta. Request access to get an invite.',
-    });
-  }
-
-  const existing = await query<{ id: string }>(
-    'SELECT id FROM users WHERE telegram_id = $1',
-    [telegramId],
-  );
-  if (existing.rows.length > 0) {
-    return reply.send({ user_id: existing.rows[0].id, telegram_id: rawId, created: false });
-  }
-
-  // Auto-create user on first contact
-  const created = await query<{ id: string }>(
-    `INSERT INTO users (telegram_id) VALUES ($1) RETURNING id`,
-    [telegramId],
-  );
-  return reply.status(201).send({ user_id: created.rows[0].id, telegram_id: rawId, created: true });
-});
-
-// ---------------------------------------------------------------------------
 // Admin: POST /admin/invite  { telegram_id, telegram_username? }
 // Add a Telegram user to the beta invite list.
 // Requires x-admin-key header matching LUCA_ADMIN_KEY env var.
 // ---------------------------------------------------------------------------
+const TELEGRAM_ID_RE = /^\d{1,20}$/;
+
 function getAdminKey(req: { headers: Record<string, string | string[] | undefined> }): string | null {
   const raw = req.headers['x-admin-key'];
   if (!raw || typeof raw !== 'string') return null;

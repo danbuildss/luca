@@ -133,17 +133,15 @@ All tool calls are gated by `assertUserScoped(userId)` — cross-user access is 
 |---------|-------------|------|
 | `luca-worker` | `apps/worker/index.ts` | 60s poll: sync wallets → classify → take heartbeat snapshot → run alert detectors → deliver alerts + briefs |
 | `luca-telegram` | `apps/telegram/index.ts` | Telegraf bot, handles commands + free-text agent + alert polling |
-| `luca-api` | `apps/api/index.ts` | Fastify API, localhost:3000, used for MCP auth + user resolution |
+| `luca-api` | `apps/api/index.ts` | Fastify API, localhost:3000, used for MCP auth, the ops console and admin invites |
 
 ---
 
-## Hermes (historical — not part of production runtime)
+## Hermes (removed September 2026)
 
-The `hermes/` directory contains configuration files exported from an earlier Mac-based Hermes agent runtime: `SOUL.md`, `config.yaml`, `luca_core.py` plugin, memory files, cron definitions.
+Luca no longer uses the Hermes runtime. On 2026-09-24 the runtime pieces were deleted: `hermes/config.yaml`, `hermes/.env.example`, the `hermes/luca/plugins/luca_core.py` plugin, `scripts/setup-hermes.sh`, and the `GET /users/resolve` API endpoint that only the plugin called. The TypeScript Telegraf bot (`luca-telegram`) is Luca's only chat runtime and calls `runAgent()` directly.
 
-**Hermes is not running in production and is not wired into any production code path.** The TypeScript Telegraf bot replaced Hermes as the reasoning runtime. The `hermes/luca/plugins/luca_core.py` plugin would call the Luca API at `localhost:3000`, but that path is unused — the bot calls `runAgent()` directly.
-
-The `hermes/` directory is kept in the repo as historical reference and as a starting point if Luca ever moves back to a Hermes runtime in the future. It does not need to be deleted, but it should not be treated as live configuration.
+The Markdown files under `hermes/` (`SOUL.md`, `BOOTSTRAP.md`, `hermes/luca/*.md`, skills, cron and memory notes) are kept as Luca's written identity and operating reference. They are not loaded by any code; the agent's prompt is `prompts/system.md`.
 
 **LUCA.md sections 4–9** describe the intended Hermes architecture. The current production implementation fulfills the same goals (Luca Core deterministic, LLM reasoning separate, PostgreSQL as truth) through a different mechanism: an embedded TypeScript agentic loop rather than a separate Hermes process.
 
