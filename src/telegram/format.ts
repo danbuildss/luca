@@ -94,7 +94,8 @@ export async function sendMarkdownSafe<T>(
   const chunks = chunkMessage(body);
   let last: T | null = null;
   for (let i = 0; i < chunks.length; i++) {
-    const chunkExtra = i === chunks.length - 1 ? extra : {};
+    // No link preview cards: a list of BaseScan links would otherwise show a large one
+    const chunkExtra = { link_preview_options: { is_disabled: true }, ...(i === chunks.length - 1 ? extra : {}) };
     try {
       last = await send(chunks[i], { ...chunkExtra, parse_mode: 'Markdown' });
     } catch (err) {

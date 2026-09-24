@@ -40,7 +40,14 @@ describe('sendMarkdownSafe', () => {
     const res = await sendMarkdownSafe(send, 'bad _markdown', { reply_markup: { k: 1 } });
     expect(res).toEqual({ message_id: 1 });
     expect(calls).toHaveLength(2);
-    expect(calls[1].extra).toEqual({ reply_markup: { k: 1 } });
+    expect(calls[1].extra).toEqual({ reply_markup: { k: 1 }, link_preview_options: { is_disabled: true } });
+  });
+
+  it('never shows link preview cards, on any chunk', async () => {
+    const extras: Array<Record<string, unknown>> = [];
+    await sendMarkdownSafe((_t, x) => { extras.push(x); return Promise.resolve(null); }, `${'a'.repeat(4000)}\n${'b'.repeat(200)}`);
+    expect(extras).toHaveLength(2);
+    for (const x of extras) expect(x.link_preview_options).toEqual({ is_disabled: true });
   });
 
   it('sends a placeholder instead of an empty message', async () => {
