@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "Private financial agent for on-chain operators",
   "private": true,
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/danbuildss/luca.git"
+  },
   "type": "module",
   "scripts": {
     "dev": "concurrently \"npm run worker:dev\" \"npm run bot:dev\" \"npm run api:dev\"",

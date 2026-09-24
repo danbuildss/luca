@@ -2,84 +2,132 @@
 
 > Luca is the employee who keeps books on the wallets that work while you sleep.
 
-**Your financial employee on-chain.** Luca watches your wallets, keeps your books, remembers your financial context, and tells you what matters.
+Luca is an on-chain bookkeeping agent you talk to in Telegram. Give it your wallets on Base and it keeps your books: what came in, what went out, what it was for, and what it cost in gas. Ask it anything about your money in plain language and every figure it gives you can be traced back to the transactions on chain.
 
-Luca lives in chat — Telegram today, WhatsApp and iMessage next — with the same books and memory wherever you reach it. There's no dashboard or app to check: Luca messages you when something matters and gets better at understanding your operation over time.
+Website: [askluca.xyz](https://askluca.xyz) · Status: invite-only beta · License: [Apache-2.0](LICENSE)
 
-Website: [askluca.xyz](https://askluca.xyz)
+## What Luca does today
 
-## What Luca Does
+**Keeps complete books**
+- Watches your Base wallets every minute, for ETH, USDC and BNKR. Tokens are identified by contract address, so look-alike tokens and spam never enter the books.
+- Records every transfer with its exact on-chain amount, and the network fee of every transaction you send, including failed ones.
+- Double-checks USDC and BNKR against the token contracts' own transfer records and fills in anything the main data feed missed.
+- Keeps zero-value "address poisoning" transfers out of the books.
 
-- Attaches to 1–5 wallets on Base
-- Ingests and normalizes on-chain activity every 60 seconds
-- Classifies every event: revenue, expenses, internal transfer, gas, unknown
-- Remembers your corrections and applies them to future transactions
-- Sends a daily brief via Telegram
-- Alerts when something material changes (balance drop, spending spike, new counterparty)
-- Answers financial questions with evidence via the Telegram bot
+**Proves the books against the chain**
+- Every hour, for each wallet and asset, the balance the books add up to must equal the balance on chain, to the smallest unit.
+- When it does not, Luca finds the exact block where they diverge, re-reads it, and repairs the gap. If it cannot explain the difference, it says so plainly instead of showing numbers it cannot stand behind.
 
-## What Luca Does Not Do (v1)
+**Labels every transaction, carefully**
+- Looks at each transaction as a whole: network fees, moves between your own wallets and swaps (one asset converted into another, which is neither income nor spending) are recognised from the transaction itself.
+- Learns from your answers: tell it once what an address is and it labels that address's earlier and future transfers the same way. It never learns a rule from an exchange contract, and a correction that contradicts a rule switches the rule off.
+- Uses AI only as a last resort, and marks those labels as provisional until you or a rule confirms them. Totals show how much of them is a guess.
+- Asks about unknown transfers in groups ("4 outgoing USDC payments to 0xabc…, $1,240 total"), at most three questions a day; small ones wait for the daily brief.
 
-- Sign transactions
-- Move funds
-- Trade
+**Prices from the chain itself**
+- ETH at Chainlink's ETH/USD price at the transaction's block.
+- BNKR at the price you actually traded it at, or the Uniswap BNKR/WETH pool's 30-minute average at that block.
+- USDC at $1, with an alert if Chainlink shows it off its peg.
+- Every price source is checked on chain before it is used, and every transfer records where its price came from.
 
-## Stack
+**Answers in chat**
+- "What does the last month look like?", "Where does my gas come from?", "What was that $500 on Tuesday?"
+- Daily and weekly briefs, alerts on material changes, and a Confirm / Cancel step before anything is changed.
 
-- **Bot:** Telegraf (TypeScript)
-- **Agent reasoning:** OpenAI SDK → Bankr LLM gateway (configurable via `AGENT_BASE_URL`)
-- **Chain:** Base via Alchemy, Blockscout fallback
-- **Database:** Supabase (PostgreSQL)
-- **Runtime:** VPS (Ubuntu 24.04) — systemd services
+## What Luca does not do
 
-## Running Services
+Luca is read-only. It never signs transactions, moves funds, swaps, approves contracts, trades or bridges, and it never asks for or stores private keys or seed phrases. Each operator's data is scoped to them; one operator can never see another's.
+
+Luca is not tax, legal or investment advice. Today it covers Base only, and ETH, USDC and BNKR only.
+
+## How it runs
+
+Three services share one PostgreSQL database, which is the only source of financial truth:
 
 | Service | Entry point | Role |
 |---------|-------------|------|
-| `luca-worker` | `apps/worker/index.ts` | 60s cycle: sync → classify → alert → heartbeat |
-| `luca-telegram` | `apps/telegram/index.ts` | Telegram bot, free-text agent, commands |
-| `luca-api` | `apps/api/index.ts` | Fastify API, localhost:3000 |
+| `luca-worker` | `apps/worker/index.ts` | Every 60 s: sync wallets, prove balances, price, classify, ask, alert |
+| `luca-telegram` | `apps/telegram/index.ts` | Telegram bot: chat agent, questions, confirmations |
+| `luca-api` | `apps/api/index.ts` | Internal API (Fastify, bound to localhost) and ops page |
 
-## Environment Variables
+```
+Base (Alchemy, Blockscout, Chainlink, Uniswap)
+      ↓
+Ingestion ── raw evidence, gas, token-log cross-check
+      ↓
+Ledger ───── hourly balance proof against the chain
+      ↓
+Classification ── whole-transaction shapes → learned rules → AI (provisional)
+      ↓
+Books, questions, briefs, alerts ── Telegram
+```
 
-| Variable | Required | Purpose |
-|----------|----------|---------|
-| `DATABASE_URL` | ✓ | Supabase PostgreSQL connection string |
-| `TELEGRAM_BOT_TOKEN` | ✓ | Telegram bot token |
-| `ALCHEMY_API_KEY` | ✓ | Base RPC + transfer indexing |
-| `AGENT_LLM_KEY` | ✓ | LLM API key (Bankr or OpenAI) |
-| `AGENT_BASE_URL` | — | Bankr gateway base URL (omit for OpenAI direct) |
-| `AGENT_MODEL` | — | Model ID — default `gpt-4o` |
+More in [docs/architecture.md](docs/architecture.md) and [docs/operating-rules.md](docs/operating-rules.md).
 
-## Setup
+**Stack:** TypeScript on Node 20+, Telegraf, Fastify, PostgreSQL (Supabase in production), Alchemy for Base RPC and transfers, Blockscout as a fallback, OpenAI-compatible LLM APIs, Vitest.
+
+## Run it yourself
+
+You need Node 20+, PostgreSQL 16, an [Alchemy](https://www.alchemy.com) API key for Base, a Telegram bot token from [@BotFather](https://t.me/BotFather), and an OpenAI API key (or any OpenAI-compatible endpoint).
 
 ```bash
 git clone https://github.com/danbuildss/luca
 cd luca
-cp .env.example .env
-# fill in .env
-bun install
-bun run db:migrate
-bun run dev
+npm ci
+cp .env.example .env      # then fill it in
+npm run db:migrate        # applies every migration in migrations/ in order
+npm run dev               # worker, bot and API with reload
 ```
 
-## Project Structure
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `DATABASE_URL` | yes | PostgreSQL connection string |
+| `TELEGRAM_BOT_TOKEN` | yes | Telegram bot token |
+| `ALCHEMY_API_KEY` | yes | Base RPC, transfers, receipts, logs and on-chain prices |
+| `OPENAI_API_KEY` | yes | Classification model, and the agent unless `AGENT_LLM_KEY` is set |
+| `AGENT_LLM_KEY` / `AGENT_BASE_URL` / `AGENT_MODEL` | no | Use a different key, OpenAI-compatible endpoint or model for the chat agent |
+| `COINGECKO_API_KEY` / `COINGECKO_API_TIER` | no | Fallback prices; works without a key at a lower rate limit |
+| `LLM_DAILY_SPEND_CAP_USD` | no | Daily AI spend cap (default $1.00) |
+| `LUCA_ADMIN_KEY` | no | Admin key for invite management over the API |
+
+Production runs as systemd services on a Linux VPS; see [docs/deployment.md](docs/deployment.md).
+
+## Tests
+
+```bash
+npm run lint && npm run typecheck
+npx vitest run                                  # unit tests
+LUCA_INTEGRATION=1 npx vitest run               # plus integration tests against Postgres
+```
+
+Integration tests need a PostgreSQL at `postgresql://postgres:luca@localhost:5432/luca_test` (see [vitest.config.ts](vitest.config.ts)); they drop and recreate the schema of that test database only.
+
+## Project structure
 
 ```
 luca/
-├── LUCA.md              # Product constitution
-├── apps/
-│   ├── telegram/        # Telegram bot
-│   ├── api/             # REST API (Fastify, localhost:3000)
-│   └── worker/          # Sync + classification worker
+├── apps/            # worker, telegram bot, api
 ├── src/
-│   ├── agent/           # Agentic loop + tools
-│   ├── alerts/          # Alert engine and detectors
-│   ├── heartbeat/       # Financial heartbeat snapshots
-│   ├── classify/        # Classification engine
-│   └── ingest/          # Chain ingestion
-├── migrations/          # PostgreSQL migrations (run in order)
-├── prompts/             # System prompt
-├── scripts/             # Ops and audit SQL scripts
-└── docs/                # Architecture
+│   ├── ingestion/   # chain reads, normalization, gas, token-log cross-check, pricing at ingest
+│   ├── ledger/      # hourly balance proof and repair
+│   ├── classification/  # transaction shapes, rules, AI fallback
+│   ├── corrections/ # operator corrections and learned rules
+│   ├── pricing/     # Chainlink and Uniswap reads, USDC peg watch
+│   ├── books/       # P&L, overview, balances, per-figure breakdowns
+│   ├── alerts/      # grouped questions and alert detectors
+│   ├── agent/       # chat agent, tools, guardrails
+│   └── telegram/    # bot commands, callbacks, formatting
+├── migrations/      # PostgreSQL migrations, applied in order
+├── prompts/         # the agent's system prompt
+├── tests/           # unit and integration tests
+├── docs/            # architecture, deployment, operating rules
+└── landing/         # askluca.xyz
 ```
+
+## Contributing
+
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first, and report security issues privately as described in [SECURITY.md](SECURITY.md). Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## License
+
+Copyright 2026 Luca contributors. Licensed under the [Apache License, Version 2.0](LICENSE).
