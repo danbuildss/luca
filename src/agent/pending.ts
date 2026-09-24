@@ -84,8 +84,9 @@ function str(v: unknown): string | null {
 export function describePendingAction(toolName: string, args: Record<string, unknown>): string {
   switch (toolName) {
     case 'apply_correction': {
-      const eventId = str(args.event_id) ?? '?';
-      const parts = [`Relabel transaction ${eventId.slice(0, 8)}… as "${str(args.new_label) ?? '?'}"`];
+      const hash = str(args.tx_hash);
+      const target = hash ? `${hash.slice(0, 10)}…${hash.slice(-4)}` : `${(str(args.event_id) ?? '?').slice(0, 8)}…`;
+      const parts = [`Relabel transaction ${target} as "${str(args.new_label) ?? '?'}"`];
       const name = str(args.counterparty_name);
       if (name) parts.push(`and name the counterparty "${name.slice(0, 60)}"`);
       const reason = str(args.reason);

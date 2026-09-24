@@ -56,6 +56,15 @@ describe('describePendingAction', () => {
     expect(d).toContain('OpenAI');
   });
 
+  it('shows the transaction hash, not the internal id, once resolved', () => {
+    const d = describePendingAction('apply_correction', {
+      event_id: '12345678-aaaa', tx_hash: '0x619bde940b307b97fb2450376627e4627ca169bdd0049c685ca4df438cc7362b',
+      new_label: 'internal_transfer',
+    });
+    expect(d).toContain('0x619bde94…362b');
+    expect(d).not.toContain('12345678');
+  });
+
   it('describes a wallet registration with default chain', () => {
     expect(describePendingAction('register_wallet', { address: '0xabc' }))
       .toBe('Start tracking wallet 0xabc on base');
