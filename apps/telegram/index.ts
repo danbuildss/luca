@@ -352,7 +352,8 @@ function scheduleHealthPoll() {
       try {
         const userIds = await getDistinctUserIds();
         for (const userId of userIds) {
-          await detectWorkerStale(userId);
+          await detectWorkerStale(userId).catch((err: unknown) =>
+            logger.error({ err, userId }, 'Worker-stale check failed'));
         }
         // Worker stale alerts land in `alerts` table → delivered by deliverPendingAlerts in worker
         // But if the worker is down, we need to deliver them here instead.

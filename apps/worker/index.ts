@@ -49,13 +49,24 @@ async function runCycle(): Promise<void> {
 
   if (!shuttingDown) {
     const userIds = await getDistinctUserIds();
+    const steps: Array<[string, (userId: string) => Promise<unknown>]> = [
+      ['counterparty questions', detectUnknownCounterparties],
+      ['heartbeat snapshot', takeHeartbeatSnapshot],
+      ['alert detectors', runAlertDetectors],
+      ['stale wallets', detectStaleWallets],
+      ['disk pressure', detectDiskPressure],
+      ['alert delivery', deliverPendingAlerts],
+    ];
+    // Each step is isolated: one failing detector must not stop alert delivery
+    // for this user or skip the users after them.
     for (const userId of userIds) {
-      await detectUnknownCounterparties(userId);
-      await takeHeartbeatSnapshot(userId);
-      await runAlertDetectors(userId);
-      await detectStaleWallets(userId);
-      await detectDiskPressure(userId);
-      await deliverPendingAlerts(userId);
+      for (const [name, step] of steps) {
+        try {
+          await step(userId);
+        } catch (err: unknown) {
+          logger.error({ err, userId, step: name }, 'Per-user worker step failed');
+        }
+      }
     }
   }
 }
