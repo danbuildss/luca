@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+
+# Plain-language summary for AI assistants: https://askluca.xyz/llms.txt
+
+Sitemap: https://askluca.xyz/sitemap.xml

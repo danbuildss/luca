@@ -2,7 +2,11 @@
 
 > Luca is the employee who keeps books on the wallets that work while you sleep.
 
-Luca is a private financial agent for on-chain operators. It watches your Base wallets, classifies every transaction into books, remembers your corrections, and briefs you like an employee — not a dashboard.
+**Your financial employee on-chain.** Luca watches your wallets, keeps your books, remembers your financial context, and tells you what matters.
+
+Luca lives in chat — Telegram today, WhatsApp and iMessage next — with the same books and memory wherever you reach it. There's no dashboard or app to check: Luca messages you when something matters and gets better at understanding your operation over time.
+
+Website: [askluca.xyz](https://askluca.xyz)
 
 ## What Luca Does
 
@@ -19,8 +23,6 @@ Luca is a private financial agent for on-chain operators. It watches your Base w
 - Sign transactions
 - Move funds
 - Trade
-- Depend on Hermes or any external agent runtime
-- Maintain a public registry
 
 ## Stack
 
