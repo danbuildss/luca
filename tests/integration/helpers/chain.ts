@@ -132,7 +132,7 @@ export function sentTx(wallet: string, o: {
   chain.blockTxs.set(o.block, txs);
   if (o.inBlockscout ?? true) {
     chain.sent.push({
-      hash: h, block: o.block, timestamp: time(o.block), from: { hash: wallet }, to: { hash: to },
+      hash: h, block_number: o.block, timestamp: time(o.block), from: { hash: wallet }, to: { hash: to },
       value: '0', gas_used: gasUsed.toString(), gas_price: gasPrice.toString(),
       status: (o.status ?? 'success') === 'success' ? 'ok' : 'error',
     });
@@ -182,12 +182,23 @@ export function alchemyMock<T extends Record<string, unknown>>(orig: T): T {
   } as T;
 }
 
+// Blockscout's HTTP API as seen by axios.get, in the real API v2 shape (newest first,
+// block_number, pending transactions without a block), so the real fetchers are exercised.
+export function blockscoutHttp(url: string): Promise<{ data: unknown }> {
+  const u = new URL(url);
+  const m = /^\/api\/v2\/addresses\/(0x[0-9a-fA-F]{40})\/transactions$/.exec(u.pathname);
+  if (!m || u.searchParams.get('filter') !== 'from') return Promise.reject(new Error(`unexpected Blockscout call ${url}`));
+  const wallet = m[1].toLowerCase();
+  const mined = chain.sent
+    .filter((t) => t.from.hash.toLowerCase() === wallet)
+    .sort((a, b) => (b.block_number ?? 0) - (a.block_number ?? 0));
+  const pending = { ...mined[0], hash: '0xpending', block_number: null, status: null };
+  return Promise.resolve({ data: { items: mined.length ? [pending, ...mined] : [], next_page_params: null } });
+}
+
 export function blockscoutMock<T extends Record<string, unknown>>(orig: T): T {
   return {
     ...orig,
-    fetchSentTransactions: (wallet: string, from: number, to: number) =>
-      Promise.resolve(chain.sent.filter((t) =>
-        t.block >= from && t.block <= to && t.from.hash.toLowerCase() === wallet.toLowerCase())),
     // Fallback provider: sees token transfers and top-level ETH but, like the real
     // Blockscout fallback, no ETH received from contracts (internal transfers).
     fetchTokenTransfers: (wallet: string, from: number) => Promise.resolve(
@@ -207,7 +218,7 @@ export function blockscoutMock<T extends Record<string, unknown>>(orig: T): T {
       chain.feed
         .filter((t) => t.category === 'external' && parseInt(t.blockNum, 16) >= from && involves(t, wallet))
         .map((t) => ({
-          hash: t.hash, block: parseInt(t.blockNum, 16), timestamp: t.metadata.blockTimestamp,
+          hash: t.hash, block_number: parseInt(t.blockNum, 16), timestamp: t.metadata.blockTimestamp,
           from: { hash: t.from }, to: t.to ? { hash: t.to } : null,
           value: BigInt(t.rawContract.value ?? '0x0').toString(), gas_used: null, gas_price: null, status: 'ok',
         }))),

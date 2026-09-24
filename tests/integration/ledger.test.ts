@@ -7,6 +7,10 @@ vi.mock('../../src/ingestion/alchemy.js', async (importOriginal) =>
   (await import('./helpers/chain.js')).alchemyMock(await importOriginal<Record<string, unknown>>()));
 vi.mock('../../src/ingestion/blockscout.js', async (importOriginal) =>
   (await import('./helpers/chain.js')).blockscoutMock(await importOriginal<Record<string, unknown>>()));
+vi.mock('axios', async () => {
+  const { blockscoutHttp } = await import('./helpers/chain.js');
+  return { default: { get: blockscoutHttp, post: () => Promise.reject(new Error('unexpected axios.post')) } };
+});
 vi.mock('../../src/ingestion/price.js', () => ({
   enrichUsdValue: vi.fn(() => Promise.resolve({ usd_value: null, price_source: null, price_at: null })),
   getSpotPrices: vi.fn(() => Promise.resolve({ ETH: 4000, BNKR: 0.001 })),
@@ -21,6 +25,7 @@ vi.mock('../../src/classification/llm.js', () => ({
 
 import { describeDb, useIntegrationDb, seedUserWithWallet, sql, addr } from './helpers/db.js';
 import { chain, resetChain, usdcTransfer, ethTransfer, sentTx, spamTransfer, USDC } from './helpers/chain.js';
+import { MAX_REPAIRS_PER_ASSET } from '../../src/ledger/reconcile.js';
 import { syncWallet, getActiveWatchJobs } from '../../src/ingestion/ingest.js';
 import { reconcileWallet, getWalletsDueForReconciliation } from '../../src/ledger/reconcile.js';
 import { getLedgerStatus } from '../../src/ledger/status.js';
@@ -126,6 +131,24 @@ describeDb('ledger proof (integration)', () => {
       expect(run[0].log_gaps).toBe(1);
       expect((await reconcile(wallet.id)).find((o) => o.asset === 'USDC')?.status).toBe('ok');
     });
+
+    it('keeps zero-value transfers (address poisoning) out of the books and out of the gap count', async () => {
+      const { wallet } = await seedUserWithWallet();
+      const w = wallet.address;
+      usdcTransfer(w, { block: 900, from: addr(), to: w, raw: 1_000_000n });
+      const logOnly = usdcTransfer(w, { block: 930, from: w, to: addr(), raw: 0n, inFeed: false });
+      const inFeed = usdcTransfer(w, { block: 940, from: w, to: addr(), raw: 0n });
+
+      await sync(wallet.id);
+      expect(await sql(`SELECT 1 FROM normalized_events WHERE hash = $1`, [logOnly])).toHaveLength(0);
+      const fed = await sql<{ supported: boolean }>(`SELECT supported FROM normalized_events WHERE hash = $1`, [inFeed]);
+      expect(fed).toEqual([{ supported: false }]);
+      const run = await sql<{ log_gaps: number }>(
+        `SELECT log_gaps FROM sync_runs WHERE wallet_id = $1 AND provider = 'alchemy'`, [wallet.id],
+      );
+      expect(run[0].log_gaps).toBe(0);
+      expect((await reconcile(wallet.id)).map((o) => o.status)).toEqual(['ok', 'ok', 'ok']);
+    });
   });
 
   describe('balance check', () => {
@@ -177,6 +200,28 @@ describeDb('ledger proof (integration)', () => {
       const status = await getLedgerStatus(user.id);
       expect(status.status).toBe('incomplete');
       expect(status.wallets[0]).toMatchObject({ status: 'incomplete', incomplete_since_block: '960' });
+    });
+
+    it('after running out of repairs, reports the next real gap, not the end of the range', async () => {
+      const { wallet } = await seedUserWithWallet();
+      const w = wallet.address;
+      ethTransfer(w, { block: 900, from: addr(), to: w, wei: 10n ** 16n });
+      // More fees than one check may repair, none listed by Blockscout
+      const blocks = Array.from({ length: MAX_REPAIRS_PER_ASSET + 2 }, (_, i) => 910 + i);
+      for (const block of blocks) sentTx(w, { block, inBlockscout: false });
+      await sync(wallet.id);
+
+      const eth = (await reconcile(wallet.id)).find((o) => o.asset === 'ETH');
+      const next = blocks[MAX_REPAIRS_PER_ASSET];
+      expect(eth).toMatchObject({ status: 'drift', driftBlock: next });
+      const cp = await sql<{ block_number: string }>(
+        `SELECT block_number::text FROM ledger_checkpoints WHERE wallet_id = $1 AND asset = 'ETH'`, [wallet.id],
+      );
+      expect(cp[0].block_number).toBe(String(next - 1));
+
+      // The next check carries on from there and finishes the job
+      expect((await reconcile(wallet.id)).find((o) => o.asset === 'ETH')?.status).toBe('repaired');
+      expect((await jobRow(wallet.id)).ledger_status).toBe('complete');
     });
 
     it('ignores spam tokens entirely', async () => {
