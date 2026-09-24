@@ -162,8 +162,9 @@ async function insertEvent(txId: string, event: EventRow): Promise<void> {
     `INSERT INTO normalized_events
        (transaction_id, wallet_id, user_id, chain, hash, log_index, source_key, block_time,
         from_address, to_address, asset, amount, usd_value, price_source, price_at, direction,
-        token_address, supported, raw_amount, block_number)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+        token_address, supported, raw_amount, block_number, price_ref, price_checked_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,
+             CASE WHEN $14::text IS NULL THEN NULL ELSE NOW() END)
      ON CONFLICT (chain, hash, wallet_id, source_key) DO UPDATE
        SET token_address = CASE WHEN normalized_events.supported IS NULL
                                 THEN EXCLUDED.token_address ELSE normalized_events.token_address END,
@@ -181,7 +182,7 @@ async function insertEvent(txId: string, event: EventRow): Promise<void> {
       event.from_address, event.to_address, event.asset,
       event.amount, event.usd_value, event.price_source,
       event.price_at, event.direction,
-      event.token_address, event.supported, event.raw_amount, event.block_number,
+      event.token_address, event.supported, event.raw_amount, event.block_number, event.price_ref ?? null,
     ],
   );
 }
@@ -249,11 +250,14 @@ const TX_SQL = `
   ON CONFLICT (chain, hash, wallet_id) DO UPDATE SET chain = EXCLUDED.chain
   RETURNING id`;
 
-async function storeItem(tx: TxRow, event: EventRow): Promise<void> {
+async function storeItem(tx: TxRow, event: EventRow, apiKey: string | undefined): Promise<void> {
+  // Priced from the chain at the transfer's own block when Alchemy is available
   const price = await enrichUsdValue(
     { supported: event.supported, symbol: event.asset, tokenAddress: event.token_address },
     event.amount,
     event.block_time,
+    new Date(),
+    apiKey && event.block_number ? { apiKey, blockNumber: event.block_number } : undefined,
   );
   const enrichedEvent: EventRow = { ...event, ...price };
   const enrichedTx: TxRow = event.category === 'gas'
@@ -370,7 +374,7 @@ export async function ingestRange(
       } else {
         await insertRawTransfer(event, item.provider, syncRunId, tx.raw_payload, item.blockHash);
       }
-      await storeItem(tx, event);
+      await storeItem(tx, event, apiKey);
       ingested++;
     } catch (err) {
       failed++;

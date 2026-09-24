@@ -285,6 +285,11 @@ export async function getBlock(apiKey: string, blockNumber: number, withTransact
   };
 }
 
+// A read-only contract call at a block (or the latest one). Reverts throw RpcError.
+export async function ethCall(apiKey: string, to: string, data: string, block: number | 'latest'): Promise<string> {
+  return rpc<string>(apiKey, 'eth_call', [{ to, data }, block === 'latest' ? 'latest' : blockToHex(block)]);
+}
+
 export async function getEthBalanceAt(apiKey: string, walletAddress: string, blockNumber: number): Promise<bigint> {
   return big(await rpc<string>(apiKey, 'eth_getBalance', [walletAddress, blockToHex(blockNumber)]));
 }

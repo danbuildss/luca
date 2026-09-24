@@ -8,6 +8,8 @@ import {
 } from '../../ops/db.js';
 import { query } from '../../db.js';
 import { getLedgerHealth } from '../../ledger/status.js';
+import { getPriceSourceChecks } from '../../pricing/onchain.js';
+import { BASE_BNKR } from '../../ingestion/assets.js';
 import { escapeLegacyMarkdown, replyMarkdownSafe } from '../format.js';
 
 // Escape DB/user-controlled text for legacy Markdown (usernames often contain `_`).
@@ -38,7 +40,9 @@ function workerStatus(minutesStale: number | null): string {
 
 // /ops — system overview
 async function handleOpsOverview(ctx: Context): Promise<void> {
-  const [ov, ledger] = await Promise.all([getOpsOverview(), getLedgerHealth()]);
+  const [ov, ledger, sources, pricing] = await Promise.all([
+    getOpsOverview(), getLedgerHealth(), getPriceSourceChecks(), getPricingMix(),
+  ]);
 
   const lines = [
     `*Luca ops overview*`,
@@ -57,6 +61,12 @@ async function handleOpsOverview(ctx: Context): Promise<void> {
     `  Repairs 7d: ${ledger.repairs_7d}  |  Missed by feed, caught by logs 7d: ${ledger.log_gaps_7d}`,
     `  Blockscout ranges waiting for re-read: ${ledger.degraded_pending}`,
     ``,
+    `*Prices*`,
+    ...(sources.length > 0
+      ? sources.map((src) => `  ${md(src.name)}: ${src.status === 'ok' ? 'OK' : `NOT USED (${md(src.status)}: ${md(src.detail ?? '')})`}`)
+      : ['  On-chain sources not checked yet']),
+    `  ETH/BNKR transfers priced on chain: ${pricing.onchain} of ${pricing.total}  |  No price: ${pricing.unpriced}`,
+    ``,
     `*Quality*`,
     `  Unknown total: ${ov.total_unknown}  |  Unacked alerts: ${ov.unacked_alerts}`,
     `  Brief failures (24h): ${ov.briefs_failed_24h}`,
@@ -70,6 +80,19 @@ async function handleOpsOverview(ctx: Context): Promise<void> {
   ];
 
   await replyMarkdownSafe(ctx, lines.join('\n'));
+}
+
+// How many ETH and BNKR transfers have a price read on chain (or from the operator's swap)
+async function getPricingMix(): Promise<{ total: number; onchain: number; unpriced: number }> {
+  const res = await query<{ total: number; onchain: number; unpriced: number }>(
+    `SELECT COUNT(*)::int AS total,
+            (COUNT(*) FILTER (WHERE price_source IN ('chainlink', 'pool_twap', 'pool_spot', 'swap')))::int AS onchain,
+            (COUNT(*) FILTER (WHERE usd_value IS NULL))::int AS unpriced
+     FROM normalized_events
+     WHERE supported IS TRUE AND (token_address IS NULL OR token_address = $1) AND amount <> 0`,
+    [BASE_BNKR],
+  );
+  return res.rows[0] ?? { total: 0, onchain: 0, unpriced: 0 };
 }
 
 // /ops errors — sync failures, stale wallets, brief failures
