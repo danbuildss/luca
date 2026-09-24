@@ -47,5 +47,5 @@ LEFT JOIN financial_heartbeat_snapshots fh
        ON fh.user_id = u.id AND fh.snapshot_date = CURRENT_DATE
 CROSS JOIN (SELECT last_ping_at FROM worker_heartbeat WHERE id = 1) wh
 GROUP BY
-  u.id, u.telegram_id, u.username, u.role, u.created_at, u.activated_at,
+  u.id, u.telegram_id, u.telegram_username, u.role, u.created_at, u.activated_at,
   u.last_user_active_at, fh.total_balance_usdc, fh.unknown_count_7d, wh.last_ping_at;
