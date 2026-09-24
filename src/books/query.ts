@@ -76,36 +76,55 @@ export type PnlSummary = {
   unknown_count: number;
 };
 
+// Direction-aware P&L totals. Money flowing against a category's natural
+// direction nets it down: a revenue-labelled 'out' (customer refund) reduces
+// revenue, an expense/gas-labelled 'in' (vendor refund) reduces expenses/gas.
+// internal / treasury / refund labels are excluded from P&L.
 export async function getPnlSummary(userId: string, periodDays: number): Promise<PnlSummary> {
-  const rows = await getBooksSummary(userId, periodDays);
+  const res = await query<{
+    revenue_usdc: string | null;
+    expenses_usdc: string | null;
+    gas_usdc: string | null;
+    unknown_count: number | null;
+  }>(
+    `SELECT
+       SUM(CASE WHEN c.label::text = ANY($3::text[])
+                THEN CASE WHEN ne.direction = 'out' THEN -${USD_COALESCE} ELSE ${USD_COALESCE} END
+           END)::text AS revenue_usdc,
+       SUM(CASE WHEN c.label::text = ANY($4::text[])
+                THEN CASE WHEN ne.direction = 'in' THEN -${USD_COALESCE} ELSE ${USD_COALESCE} END
+           END)::text AS expenses_usdc,
+       SUM(CASE WHEN c.label::text = ANY($5::text[])
+                THEN CASE WHEN ne.direction = 'in' THEN -${USD_COALESCE} ELSE ${USD_COALESCE} END
+           END)::text AS gas_usdc,
+       (COUNT(*) FILTER (WHERE c.label::text = ANY($6::text[])))::int AS unknown_count
+     FROM classifications c
+     JOIN normalized_events ne ON ne.id = c.event_id
+     WHERE ne.user_id = $1
+       AND c.superseded_at IS NULL
+       AND ne.block_time >= NOW() - INTERVAL '1 day' * $2`,
+    [
+      userId,
+      periodDays,
+      BRIEF_CATEGORIES.revenue,
+      BRIEF_CATEGORIES.expenses,
+      BRIEF_CATEGORIES.gas,
+      BRIEF_CATEGORIES.unknown,
+    ],
+  );
 
-  let revenue = 0;
-  let expenses = 0;
-  let gas = 0;
-  let unknownCount = 0;
-
-  for (const row of rows) {
-    const amount = row.total_usdc != null ? parseFloat(row.total_usdc) : 0;
-    const label = row.label as ClassificationLabel;
-
-    if ((BRIEF_CATEGORIES.revenue as string[]).includes(label)) {
-      revenue += amount;
-    } else if ((BRIEF_CATEGORIES.expenses as string[]).includes(label)) {
-      expenses += amount;
-    } else if ((BRIEF_CATEGORIES.gas as string[]).includes(label)) {
-      gas += amount;
-    } else if ((BRIEF_CATEGORIES.unknown as string[]).includes(label)) {
-      unknownCount += row.event_count;
-    }
-    // internal / treasury / refund excluded from P&L
-  }
+  const row = res.rows[0];
+  const num = (v: string | null | undefined): number => (v != null ? parseFloat(v) || 0 : 0);
+  const revenue = num(row?.revenue_usdc);
+  const expenses = num(row?.expenses_usdc);
+  const gas = num(row?.gas_usdc);
 
   return {
     period_days: periodDays,
     revenue_usdc: revenue,
     expenses_usdc: expenses,
     gas_usdc: gas,
-    net_usdc: revenue - expenses,
-    unknown_count: unknownCount,
+    net_usdc: revenue - expenses - gas,
+    unknown_count: row?.unknown_count ?? 0,
   };
 }

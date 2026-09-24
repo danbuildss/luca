@@ -1,5 +1,6 @@
 import { query } from '../db.js';
 import { getPnlSummary } from '../books/query.js';
+import { escapeLegacyMarkdown } from '../telegram/format.js';
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -7,12 +8,37 @@ import { getPnlSummary } from '../books/query.js';
 
 function pct(current: number, prior: number): string {
   if (prior === 0) return current > 0 ? '+∞%' : '—';
-  const change = ((current - prior) / prior) * 100;
+  // abs() so a negative prior (e.g. net loss) doesn't flip the sign of the change
+  const change = ((current - prior) / Math.abs(prior)) * 100;
   return `${change >= 0 ? '+' : ''}${change.toFixed(0)}%`;
 }
 
+// Unsigned magnitude — callers prefix the sign for fixed-direction lines
 function usd(amount: number): string {
   return `$${Math.abs(amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+// Signed amount: "+$10.00" / "-$50.00". Values that round to zero get
+// `zeroSign` (cost lines pass '-' so an empty Expenses line reads "-$0.00").
+function signedUsd(amount: number, zeroSign: '+' | '-' = '+'): string {
+  const rounded = Math.round(amount * 100) / 100;
+  const sign = rounded > 0 ? '+' : rounded < 0 ? '-' : zeroSign;
+  return `${sign}${usd(rounded)}`;
+}
+
+// Format a date in the user's timezone; falls back to server time on a bad/absent zone
+function formatDate(date: Date, opts: Intl.DateTimeFormatOptions, timezone?: string): string {
+  try {
+    return date.toLocaleDateString('en-US', { ...opts, timeZone: timezone });
+  } catch {
+    return date.toLocaleDateString('en-US', opts);
+  }
+}
+
+function counterpartyLabel(cp: TopCounterparty): string {
+  const raw = cp.name ?? `${cp.address.slice(0, 6)}…${cp.address.slice(-4)}`;
+  // Pad before escaping so the backslashes don't eat into the column width
+  return escapeLegacyMarkdown(raw.slice(0, 20).padEnd(20));
 }
 
 type TopCounterparty = {
@@ -29,9 +55,15 @@ async function getTopCounterparties(userId: string, periodDays: number, limit = 
        SUM(COALESCE(ne.usd_value, CASE WHEN ne.asset = 'USDC' THEN ne.amount ELSE 0 END))::text AS total_usdc
      FROM classifications c
      JOIN normalized_events ne ON ne.id = c.event_id
-     LEFT JOIN counterparty_rules cr
-       ON cr.user_id = ne.user_id
-       AND cr.address = LOWER(CASE WHEN ne.direction = 'in' THEN ne.from_address ELSE ne.to_address END)
+     -- One rule per event: a same-direction rule wins over a legacy (NULL) one
+     LEFT JOIN LATERAL (
+       SELECT r.name FROM counterparty_rules r
+       WHERE r.user_id = ne.user_id
+         AND r.address = LOWER(CASE WHEN ne.direction = 'in' THEN ne.from_address ELSE ne.to_address END)
+         AND (r.direction = ne.direction OR r.direction IS NULL)
+       ORDER BY r.direction NULLS LAST
+       LIMIT 1
+     ) cr ON TRUE
      WHERE ne.user_id = $1
        AND c.superseded_at IS NULL
        AND c.label IN ('revenue', 'expense', 'x402_income', 'x402_spend')
@@ -62,7 +94,8 @@ async function getUnknownCount(userId: string, periodDays: number): Promise<numb
 // Daily brief
 // ---------------------------------------------------------------------------
 
-export async function generateDailyBrief(userId: string): Promise<string> {
+// `timezone` (IANA) localises the header date; omitted → server timezone
+export async function generateDailyBrief(userId: string, timezone?: string): Promise<string> {
   const [today, yesterday, unknownCount, topCounterparties] = await Promise.all([
     getPnlSummary(userId, 1),
     getPnlSummary(userId, 2),
@@ -77,18 +110,18 @@ export async function generateDailyBrief(userId: string): Promise<string> {
   const revChange = pct(today.revenue_usdc, priorRevenue);
   const expChange = pct(today.expenses_usdc, priorExpenses);
 
-  const dateStr = new Date().toLocaleDateString('en-US', {
+  const dateStr = formatDate(new Date(), {
     weekday: 'short', month: 'short', day: 'numeric',
-  });
+  }, timezone);
 
   const lines: string[] = [
     `📅 *Daily brief — ${dateStr}*`,
     ``,
-    `💰 Revenue      +${usd(today.revenue_usdc)}`,
-    `💸 Expenses     −${usd(today.expenses_usdc)}`,
-    `⛽ Gas          −${usd(today.gas_usdc)}`,
+    `💰 Revenue      ${signedUsd(today.revenue_usdc)}`,
+    `💸 Expenses     ${signedUsd(-today.expenses_usdc, '-')}`,
+    `⛽ Gas          ${signedUsd(-today.gas_usdc, '-')}`,
     `─────────────────────`,
-    `📈 Net          ${today.net_usdc >= 0 ? '+' : ''}${usd(today.net_usdc)}`,
+    `📈 Net          ${signedUsd(today.net_usdc)}`,
     ``,
     `📊 vs yesterday  ${revChange} revenue  •  ${expChange} expenses`,
   ];
@@ -96,8 +129,7 @@ export async function generateDailyBrief(userId: string): Promise<string> {
   if (topCounterparties.length > 0) {
     lines.push(``, `🔝 Top counterparties`);
     for (const cp of topCounterparties) {
-      const label = cp.name ?? `${cp.address.slice(0, 6)}…${cp.address.slice(-4)}`;
-      lines.push(`  ${label.slice(0, 20).padEnd(20)} ${usd(parseFloat(cp.total_usdc))}`);
+      lines.push(`  ${counterpartyLabel(cp)} ${usd(parseFloat(cp.total_usdc))}`);
     }
   }
 
@@ -112,7 +144,7 @@ export async function generateDailyBrief(userId: string): Promise<string> {
 // Weekly brief
 // ---------------------------------------------------------------------------
 
-export async function generateWeeklyBrief(userId: string): Promise<string> {
+export async function generateWeeklyBrief(userId: string, timezone?: string): Promise<string> {
   const [thisWeek, twoWeeks, unknownCount, topCounterparties] = await Promise.all([
     getPnlSummary(userId, 7),
     getPnlSummary(userId, 14),
@@ -129,23 +161,23 @@ export async function generateWeeklyBrief(userId: string): Promise<string> {
 
   const now = new Date();
   const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-  const weekRange = `${weekAgo.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}–${now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+  const dayOpts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' };
+  const weekRange = `${formatDate(weekAgo, dayOpts, timezone)}–${formatDate(now, dayOpts, timezone)}`;
 
   const lines: string[] = [
     `📅 *Week of ${weekRange}*`,
     ``,
-    `💰 Revenue      +${usd(thisWeek.revenue_usdc)}  (${revChange} vs prior week)`,
-    `💸 Expenses     −${usd(thisWeek.expenses_usdc)}  (${expChange} vs prior week)`,
-    `⛽ Gas          −${usd(thisWeek.gas_usdc)}`,
+    `💰 Revenue      ${signedUsd(thisWeek.revenue_usdc)}  (${revChange} vs prior week)`,
+    `💸 Expenses     ${signedUsd(-thisWeek.expenses_usdc, '-')}  (${expChange} vs prior week)`,
+    `⛽ Gas          ${signedUsd(-thisWeek.gas_usdc, '-')}`,
     `─────────────────────`,
-    `📈 Net          ${thisWeek.net_usdc >= 0 ? '+' : ''}${usd(thisWeek.net_usdc)}  (${netChange} vs prior week)`,
+    `📈 Net          ${signedUsd(thisWeek.net_usdc)}  (${netChange} vs prior week)`,
   ];
 
   if (topCounterparties.length > 0) {
     lines.push(``, `🔝 Top counterparties`);
     for (const cp of topCounterparties) {
-      const label = cp.name ?? `${cp.address.slice(0, 6)}…${cp.address.slice(-4)}`;
-      lines.push(`  ${label.slice(0, 20).padEnd(20)} ${usd(parseFloat(cp.total_usdc))}`);
+      lines.push(`  ${counterpartyLabel(cp)} ${usd(parseFloat(cp.total_usdc))}`);
     }
   }
 
