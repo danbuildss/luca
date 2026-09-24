@@ -56,7 +56,7 @@ export async function getOverview(userId: string, periodDays: number): Promise<O
     query<{ transaction_count: number; internal_usd: string | null; unknown_usd: string | null }>(
       `SELECT COUNT(DISTINCT ne.hash)::int AS transaction_count,
               SUM(${USD}) FILTER (WHERE c.label::text = ANY($3::text[]))::text AS internal_usd,
-              SUM(${USD}) FILTER (WHERE c.label::text = ANY($4::text[]))::text AS unknown_usd
+              SUM(${USD}) FILTER (WHERE c.label::text = ANY($4::text[]) AND c.source IS DISTINCT FROM 'failure')::text AS unknown_usd
        FROM normalized_events ne
        LEFT JOIN classifications c ON c.event_id = ne.id AND c.superseded_at IS NULL
        WHERE ne.user_id = $1 AND ne.supported IS TRUE
@@ -70,7 +70,7 @@ export async function getOverview(userId: string, periodDays: number): Promise<O
        FROM normalized_events ne
        JOIN classifications c ON c.event_id = ne.id AND c.superseded_at IS NULL
        WHERE ne.user_id = $1 AND ne.supported IS TRUE
-         AND c.label = 'unknown'
+         AND c.label = 'unknown' AND c.source IS DISTINCT FROM 'failure'
          AND ne.block_time >= NOW() - INTERVAL '1 day' * $2
        ORDER BY ${USD} DESC NULLS LAST, ne.block_time DESC
        LIMIT 3`,
@@ -96,7 +96,7 @@ export async function getOverview(userId: string, periodDays: number): Promise<O
          )
        ORDER BY ${USD} DESC NULLS LAST
        LIMIT 3`,
-      [userId, BRIEF_CATEGORIES.internal],
+      [userId, [...BRIEF_CATEGORIES.internal, ...BRIEF_CATEGORIES.conversion]],
     ),
     query<{ last_7d: string | null; prior_4w: string | null; has_history: boolean }>(
       `SELECT

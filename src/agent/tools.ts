@@ -5,7 +5,7 @@ import { getValuedBalances } from '../books/balances.js';
 import { getOverview } from '../books/overview.js';
 import { getLedgerStatus } from '../ledger/status.js';
 import { getEventsForReview, getEventWithClassification, resolveEventRef } from '../corrections/store.js';
-import { applyCorrection } from '../corrections/handler.js';
+import { applyCorrection, describeRuleOutcome } from '../corrections/handler.js';
 import { ClassificationLabel, CLASSIFICATION_LABELS, WALLET_ROLES, SUPPORTED_CHAINS } from '../types/index.js';
 
 // ---------------------------------------------------------------------------
@@ -39,7 +39,7 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
     type: 'function',
     function: {
       name: 'get_books_summary',
-      description: 'Get a P&L summary (revenue, expenses, gas, net) over a given period. Use this for financial overviews, trend questions, or runway analysis.',
+      description: 'Get a P&L summary (revenue, expenses, gas, net) over a given period, with the provisional (AI-guessed) part of revenue and expenses and the unknown, unpriced and pending counts. Use this for financial overviews, trend questions, or runway analysis.',
       parameters: {
         type: 'object',
         properties: {
@@ -124,7 +124,7 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
     type: 'function',
     function: {
       name: 'get_transaction',
-      description: 'Get full details for a specific transaction by its event ID. Use this to investigate a specific movement.',
+      description: 'Get full details for a specific transaction by its event ID: its label, status (confirmed, provisional or unknown), evidence, and the rule that labeled it. Use this to investigate a movement or to explain why it is labeled the way it is.',
       parameters: {
         type: 'object',
         properties: {
@@ -406,14 +406,14 @@ export async function executeTool(
       const ref = await resolveEventRef(userId, String(args.event_id ?? ''));
       if (ref.status !== 'found') return { error: 'Transaction not found' };
 
-      await applyCorrection({
+      const result = await applyCorrection({
         userId,
         eventId: ref.event.id,
         newLabel,
         reason,
         counterpartyName,
       });
-      return { success: true, event_id: ref.event.id, new_label: newLabel };
+      return { success: true, event_id: ref.event.id, new_label: newLabel, note: describeRuleOutcome(result.rule) };
     }
 
     case 'get_financial_brief': {

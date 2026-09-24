@@ -1,6 +1,9 @@
 import { pool } from '../db.js';
 import { ClassificationLabel } from '../types/index.js';
-import { getEventWithClassification, upsertCounterpartyRule } from './store.js';
+import {
+  getEventWithClassification, upsertCounterpartyRule, getActiveRule, disableRule, isSwapVenue,
+  relabelEvents, eventsForRule, eventsLabeledByRule,
+} from './store.js';
 
 export type FailureReason =
   | 'bad_rule'
@@ -18,9 +21,22 @@ export type ApplyCorrectionParams = {
   failureReason?: FailureReason;
 };
 
+// What the correction did to the rule for this address and direction.
+//   learned    - a rule now labels this address; `relabeled` earlier transfers were updated
+//   switched_off - it contradicted an active rule, which is now off; `sentBack` transfers
+//                  that rule had labeled are unknown again and will be asked about
+//   swap_venue - no rule: the address is an exchange contract
+//   none       - no rule (no counterparty, or the label was unknown)
+export type RuleOutcome =
+  | { kind: 'learned'; relabeled: number }
+  | { kind: 'switched_off'; sentBack: number }
+  | { kind: 'swap_venue' }
+  | { kind: 'none' };
+
 export type CorrectionResult = {
   correctionId: string;
   wasCorrection: boolean; // true when old label existed and differed from new label
+  rule: RuleOutcome;
 };
 
 export class EventNotFoundError extends Error {
@@ -40,6 +56,16 @@ export async function applyCorrection(params: ApplyCorrectionParams): Promise<Co
   const oldConfidence = event.current_confidence ?? null;
   const evidence = `User correction: ${params.reason ?? 'manual label'}`;
   const wasCorrection = oldLabel !== null && oldLabel !== params.newLabel;
+
+  // Decide what happens to the address's rule before writing anything
+  const activeRule = counterparty ? await getActiveRule(params.userId, counterparty, event.direction) : null;
+  const plan: 'learn' | 'switch_off' | 'swap_venue' | 'none' =
+    !counterparty ? 'none'
+    : activeRule && activeRule.label !== params.newLabel ? 'switch_off'
+    : params.newLabel === ClassificationLabel.UNKNOWN ? 'none'
+    : activeRule ? 'learn'
+    : await isSwapVenue(params.userId, counterparty) ? 'swap_venue'
+    : 'learn';
 
   const client = await pool.connect();
   let correctionId: string;
@@ -66,7 +92,7 @@ export async function applyCorrection(params: ApplyCorrectionParams): Promise<Co
       [params.eventId, params.userId, params.newLabel, evidence],
     );
 
-    const createdRule = counterparty !== null && counterparty !== undefined;
+    const createdRule = plan === 'learn';
     const corrRes = await client.query<{ id: string }>(
       `INSERT INTO corrections
          (user_id, type, event_id, counterparty_address, old_label, new_label, reason,
@@ -89,18 +115,64 @@ export async function applyCorrection(params: ApplyCorrectionParams): Promise<Co
     client.release();
   }
 
-  // Upsert rule outside the transaction — idempotent, OK if it fails after commit.
-  // The rule is scoped to the event's direction: labelling a customer's payment as
-  // revenue must not auto-label a refund we later send them.
-  if (counterparty) {
-    await upsertCounterpartyRule({
+  // Rule changes happen after the correction is committed. The rule is scoped to the
+  // event's direction: labelling a customer's payment as revenue must not auto-label a
+  // refund we later send them.
+  let rule: RuleOutcome = { kind: 'none' };
+  if (counterparty && plan === 'learn') {
+    const ruleId = await upsertCounterpartyRule({
       userId: params.userId,
       address: counterparty,
       label: params.newLabel,
       name: params.counterpartyName ?? null,
       direction: event.direction,
     });
+    // One answer labels them all: earlier transfers to or from this address too
+    const earlier = await eventsForRule(params.userId, counterparty, event.direction, params.newLabel, params.eventId);
+    const relabeled = await relabelEvents(params.userId, earlier, {
+      label: params.newLabel,
+      confidence: 1.0,
+      method: 'counterparty',
+      evidence: `Counterparty "${params.counterpartyName ?? `${counterparty.slice(0, 10)}…`}" matches a rule learned from your answer`,
+      shape: 'single',
+      rule_id: ruleId,
+      source: null,
+    });
+    rule = { kind: 'learned', relabeled };
+  } else if (counterparty && plan === 'switch_off' && activeRule) {
+    await disableRule(activeRule.id, params.userId, `Contradicted by a correction to ${params.newLabel}`);
+    const labeled = await eventsLabeledByRule(params.userId, activeRule.id, counterparty, event.direction, params.eventId);
+    const sentBack = await relabelEvents(params.userId, labeled, {
+      label: ClassificationLabel.UNKNOWN,
+      confidence: 0,
+      method: 'counterparty',
+      evidence: `The rule for this address was switched off after you relabeled a transfer as ${params.newLabel}; needs your answer`,
+      shape: 'single',
+      rule_id: null,
+      source: null,
+    });
+    rule = { kind: 'switched_off', sentBack };
+  } else if (plan === 'swap_venue') {
+    rule = { kind: 'swap_venue' };
   }
 
-  return { correctionId, wasCorrection };
+  return { correctionId, wasCorrection, rule };
+}
+
+// One sentence for the operator on what happened beyond the transfer itself.
+export function describeRuleOutcome(rule: RuleOutcome): string | null {
+  switch (rule.kind) {
+    case 'learned':
+      return rule.relabeled > 0
+        ? `Also relabeled ${rule.relabeled} earlier ${rule.relabeled === 1 ? 'transfer' : 'transfers'} with this address, and future ones will be labeled the same way.`
+        : 'Future transfers with this address will be labeled the same way.';
+    case 'switched_off':
+      return rule.sentBack > 0
+        ? `That contradicts the rule I had for this address, so I switched it off. ${rule.sentBack} other ${rule.sentBack === 1 ? 'transfer it labeled needs' : 'transfers it labeled need'} your answer; I will ask about them together.`
+        : 'That contradicts the rule I had for this address, so I switched it off.';
+    case 'swap_venue':
+      return 'I did not make a rule for this address because it is an exchange contract.';
+    case 'none':
+      return null;
+  }
 }

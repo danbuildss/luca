@@ -56,7 +56,7 @@ import {
 import { syncWallet, getActiveWatchJobs, OVERLAP_BLOCKS } from '../../src/ingestion/ingest.js';
 import { getPnlSummary } from '../../src/books/query.js';
 import { getEventsForReview } from '../../src/corrections/store.js';
-import { detectUnknownCounterparties } from '../../src/alerts/counterparty.js';
+import { refreshQuestionGroups, getQuestionsToSend } from '../../src/alerts/questions.js';
 
 let seq = 0;
 function transfer(wallet: string, overrides: Partial<AlchemyTransfer> & { block: number }): AlchemyTransfer {
@@ -225,36 +225,22 @@ describeDb('asset identity and sync (integration)', () => {
     });
   });
 
-  describe('counterparty questions', () => {
+  describe('questions', () => {
+    async function questionsFor(userId: string) {
+      await refreshQuestionGroups(userId);
+      return (await getQuestionsToSend()).filter((q) => q.user_id === userId);
+    }
+
     it('asks about an unpriced ETH transfer', async () => {
       const { user, wallet } = await seedUserWithWallet();
       await insertClassifiedEvent({ wallet, direction: 'in', asset: 'ETH', amount: 0.5, label: 'unknown' });
-      expect(await detectUnknownCounterparties(user.id)).toHaveLength(1);
+      expect(await questionsFor(user.id)).toHaveLength(1);
     });
 
     it('never asks about spam tokens, whatever their stated value', async () => {
       const { user, wallet } = await seedUserWithWallet();
       await insertClassifiedEvent({ wallet, direction: 'in', asset: 'USDC', tokenAddress: FAKE, supported: false, amount: 9999, usdValue: 9999, label: 'unknown' });
-      expect(await detectUnknownCounterparties(user.id)).toHaveLength(0);
-    });
-
-    it('asks again about a skipped counterparty only for transfers that arrive after the skip', async () => {
-      const { user, wallet } = await seedUserWithWallet();
-      const cp = addr();
-      await insertClassifiedEvent({ wallet, direction: 'in', counterparty: cp, amount: 50, label: 'unknown' });
-      await sql(
-        `INSERT INTO pending_counterparty_alerts (user_id, counterparty_address, watched_wallet_address, status, resolved_at, telegram_message_id)
-         VALUES ($1, $2, $3, 'skipped', NOW() + INTERVAL '1 minute', 42)`,
-        [user.id, cp, wallet.address],
-      );
-      expect(await detectUnknownCounterparties(user.id)).toHaveLength(0);
-
-      await sql(`UPDATE pending_counterparty_alerts SET resolved_at = NOW() - INTERVAL '1 hour' WHERE user_id = $1`, [user.id]);
-      expect(await detectUnknownCounterparties(user.id)).toHaveLength(1);
-      const [row] = await sql<{ status: string; telegram_message_id: string | null }>(
-        `SELECT status, telegram_message_id FROM pending_counterparty_alerts WHERE user_id = $1`, [user.id],
-      );
-      expect(row).toEqual({ status: 'pending', telegram_message_id: null });
+      expect(await questionsFor(user.id)).toHaveLength(0);
     });
   });
 

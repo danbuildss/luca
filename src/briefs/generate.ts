@@ -1,7 +1,8 @@
 import { query } from '../db.js';
 import { getPnlSummary } from '../books/query.js';
-import { escapeLegacyMarkdown, figuresBlock } from '../telegram/format.js';
+import { escapeLegacyMarkdown, figuresBlock, provisionalNote } from '../telegram/format.js';
 import { usdValueSql } from '../ingestion/assets.js';
+import { getOpenUnknowns, PING_MIN_USD, type OpenUnknowns } from '../alerts/questions.js';
 
 // Unpriced rows count as 0 so totals and ORDER BY never see NULL
 const USD_OR_ZERO = `COALESCE(${usdValueSql('ne')}, 0)`;
@@ -81,27 +82,13 @@ async function getTopCounterparties(userId: string, periodDays: number, limit = 
   return res.rows;
 }
 
-async function getUnknownCount(userId: string, periodDays: number): Promise<number> {
-  const res = await query<{ cnt: string }>(
-    `SELECT COUNT(*)::text AS cnt
-     FROM classifications c
-     JOIN normalized_events ne ON ne.id = c.event_id
-     WHERE ne.user_id = $1
-       AND ne.supported IS TRUE
-       AND c.superseded_at IS NULL
-       AND c.label = 'unknown'
-       AND ne.block_time >= NOW() - INTERVAL '1 day' * $2`,
-    [userId, periodDays],
-  );
-  return parseInt(res.rows[0]?.cnt ?? '0', 10);
-}
-
 // Counterparty names are user-set, so they stay outside the monospace block where
 // Markdown escaping applies.
 function appendCounterpartiesAndUnknowns(
   lines: string[],
   topCounterparties: TopCounterparty[],
-  unknownCount: number,
+  open: OpenUnknowns,
+  provisionalCount: number,
 ): void {
   if (topCounterparties.length > 0) {
     lines.push(``, `Top counterparties`);
@@ -109,13 +96,19 @@ function appendCounterpartiesAndUnknowns(
       lines.push(`- ${counterpartyLabel(cp)} ${usd(parseFloat(cp.total_usdc))}`);
     }
   }
-  if (unknownCount > 0) {
-    const one = unknownCount === 1;
-    lines.push(
-      ``,
-      `${unknownCount} unknown ${one ? 'transfer needs' : 'transfers need'} context. Reply here and tell me what ${one ? 'it was' : 'they were'}.`,
-    );
+  const notes: string[] = [];
+  if (open.count > 0) {
+    const one = open.count === 1;
+    // Small ones never get their own question; this line is where they show up
+    const small = open.small_count > 0
+      ? ` ${open.small_count === open.count ? (one ? 'It is' : 'They are all') : `${open.small_count} of them are`} under ${usd(PING_MIN_USD)} (${usd(open.small_usd)} in total), so I have not pinged you about ${open.small_count === 1 ? 'it' : 'them'}.`
+      : '';
+    notes.push(`${open.count} ${one ? 'transfer needs' : 'transfers need'} context.${small} Reply here and tell me what ${one ? 'it was' : 'they were'}.`);
   }
+  if (provisionalCount > 0) {
+    notes.push(`${provisionalCount} ${provisionalCount === 1 ? 'label is' : 'labels are'} my best guess, not confirmed by you or a rule.`);
+  }
+  if (notes.length > 0) lines.push(``, ...notes);
 }
 
 // ---------------------------------------------------------------------------
@@ -124,10 +117,10 @@ function appendCounterpartiesAndUnknowns(
 
 // `timezone` (IANA) localises the header date; omitted → server timezone
 export async function generateDailyBrief(userId: string, timezone?: string): Promise<string> {
-  const [today, yesterday, unknownCount, topCounterparties] = await Promise.all([
+  const [today, yesterday, open, topCounterparties] = await Promise.all([
     getPnlSummary(userId, 1),
     getPnlSummary(userId, 2),
-    getUnknownCount(userId, 1),
+    getOpenUnknowns(userId),
     getTopCounterparties(userId, 1, 3),
   ]);
 
@@ -146,16 +139,16 @@ export async function generateDailyBrief(userId: string, timezone?: string): Pro
     `*Daily brief, ${dateStr}*`,
     ``,
     figuresBlock([
-      ['Revenue', signedUsd(today.revenue_usdc)],
-      ['Expenses', signedUsd(-today.expenses_usdc, '-')],
-      ['Gas', signedUsd(-today.gas_usdc, '-')],
-      ['Net', signedUsd(today.net_usdc)],
+      ['Revenue', signedUsd(today.revenue_usdc), provisionalNote(today.revenue_provisional_usdc)],
+      ['Expenses', signedUsd(-today.expenses_usdc, '-'), provisionalNote(today.expenses_provisional_usdc)],
+      ['Gas', signedUsd(-today.gas_usdc, '-'), ''],
+      ['Net', signedUsd(today.net_usdc), ''],
     ]),
     ``,
     `Compared with yesterday: ${revChange} revenue, ${expChange} expenses.`,
   ];
 
-  appendCounterpartiesAndUnknowns(lines, topCounterparties, unknownCount);
+  appendCounterpartiesAndUnknowns(lines, topCounterparties, open, today.provisional_count);
   return lines.join('\n');
 }
 
@@ -164,10 +157,10 @@ export async function generateDailyBrief(userId: string, timezone?: string): Pro
 // ---------------------------------------------------------------------------
 
 export async function generateWeeklyBrief(userId: string, timezone?: string): Promise<string> {
-  const [thisWeek, twoWeeks, unknownCount, topCounterparties] = await Promise.all([
+  const [thisWeek, twoWeeks, open, topCounterparties] = await Promise.all([
     getPnlSummary(userId, 7),
     getPnlSummary(userId, 14),
-    getUnknownCount(userId, 7),
+    getOpenUnknowns(userId),
     getTopCounterparties(userId, 7, 5),
   ]);
 
@@ -194,6 +187,6 @@ export async function generateWeeklyBrief(userId: string, timezone?: string): Pr
     ]),
   ];
 
-  appendCounterpartiesAndUnknowns(lines, topCounterparties, unknownCount);
+  appendCounterpartiesAndUnknowns(lines, topCounterparties, open, thisWeek.provisional_count);
   return lines.join('\n');
 }

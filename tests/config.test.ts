@@ -45,9 +45,9 @@ describe('config validation', () => {
 });
 
 describe('classification labels', () => {
-  it('canonical 9-label set is complete', async () => {
+  it('canonical 10-label set is complete', async () => {
     const { CLASSIFICATION_LABELS } = await import('../src/types/index.js');
-    expect(CLASSIFICATION_LABELS).toHaveLength(9);
+    expect(CLASSIFICATION_LABELS).toHaveLength(10);
     expect(CLASSIFICATION_LABELS).toContain('revenue');
     expect(CLASSIFICATION_LABELS).toContain('expense');
     expect(CLASSIFICATION_LABELS).toContain('internal_transfer');
@@ -56,6 +56,7 @@ describe('classification labels', () => {
     expect(CLASSIFICATION_LABELS).toContain('x402_income');
     expect(CLASSIFICATION_LABELS).toContain('x402_spend');
     expect(CLASSIFICATION_LABELS).toContain('refund');
+    expect(CLASSIFICATION_LABELS).toContain('swap');
     expect(CLASSIFICATION_LABELS).toContain('unknown');
   });
 
@@ -65,7 +66,7 @@ describe('classification labels', () => {
     expect(enumValues.sort()).toEqual([...CLASSIFICATION_LABELS].sort());
   });
 
-  it('brief categories cover all 9 labels with no overlap', async () => {
+  it('brief categories cover every label with no overlap', async () => {
     const { BRIEF_CATEGORIES, CLASSIFICATION_LABELS } = await import('../src/types/index.js');
     const allCovered = Object.values(BRIEF_CATEGORIES).flat();
     const unique = new Set(allCovered);
@@ -75,5 +76,12 @@ describe('classification labels', () => {
     }
     // No label appears in more than one category
     expect(unique.size).toBe(allCovered.length);
+  });
+
+  it('the AI can never choose gas, internal transfer or swap', async () => {
+    const { MODEL_LABELS } = await import('../src/types/index.js');
+    for (const label of ['gas', 'internal_transfer', 'swap']) {
+      expect(MODEL_LABELS).not.toContain(label);
+    }
   });
 });

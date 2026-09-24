@@ -43,6 +43,7 @@ export function classifyByCounterparty(
     label: rule.label,
     confidence: rule.confidence,
     method: 'counterparty',
-    evidence: `Counterparty "${name}" matches saved rule (source: user correction)`,
+    evidence: `Counterparty "${name}" matches a rule learned from your answer`,
+    rule_id: rule.id ?? null,
   };
 }

@@ -131,3 +131,17 @@ describe('parseLlmClassificationResponse', () => {
     expect(r.results.has(A)).toBe(true);
   });
 });
+
+describe('parseLlmClassificationResponse — labels the AI may choose', () => {
+  it('rejects gas, internal transfer and swap from the AI; those come from the transaction itself', async () => {
+    const { MODEL_LABELS } = await import('../../src/types/index.js');
+    const text = JSON.stringify({ results: [
+      { id: 'a', label: 'gas', confidence: 0.9, evidence: 'small ETH' },
+      { id: 'b', label: 'swap', confidence: 0.9, evidence: 'x' },
+      { id: 'c', label: 'expense', confidence: 0.8, evidence: 'vendor' },
+    ] });
+    const r = parseLlmClassificationResponse(text, ['a', 'b', 'c'], MODEL_LABELS);
+    expect([...r.results.keys()]).toEqual(['c']);
+    expect(r.invalidIds).toEqual(['a', 'b']);
+  });
+});

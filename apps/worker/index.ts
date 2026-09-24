@@ -6,7 +6,7 @@ import { repriceMissing } from '../../src/ingestion/reprice.js';
 import { reconcileDueWallets } from '../../src/ledger/reconcile.js';
 import { classifyAllUsers } from '../../src/classification/engine.js';
 import { getDistinctUserIds } from '../../src/classification/store.js';
-import { detectUnknownCounterparties } from '../../src/alerts/counterparty.js';
+import { refreshQuestionGroups } from '../../src/alerts/questions.js';
 import { runAlertDetectors } from '../../src/alerts/engine.js';
 import { deliverPendingAlerts } from '../../src/alerts/deliver.js';
 import { startBriefScheduler } from '../../src/briefs/scheduler.js';
@@ -55,7 +55,7 @@ async function runCycle(): Promise<void> {
   if (!shuttingDown) {
     const userIds = await getDistinctUserIds();
     const steps: Array<[string, (userId: string) => Promise<unknown>]> = [
-      ['counterparty questions', detectUnknownCounterparties],
+      ['questions', refreshQuestionGroups],
       ['heartbeat snapshot', takeHeartbeatSnapshot],
       ['alert detectors', runAlertDetectors],
       ['stale wallets', detectStaleWallets],
