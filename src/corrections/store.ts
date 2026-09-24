@@ -31,22 +31,25 @@ export async function getEventWithClassification(
   return res.rows[0] ?? null;
 }
 
+// direction: the event direction the rule applies to ('in' | 'out').
+// Omitted/null = legacy any-direction rule (e.g. a counterparty-level label).
 export async function upsertCounterpartyRule(params: {
   userId: string;
   address: string;
   label: ClassificationLabel;
   name: string | null;
+  direction?: 'in' | 'out' | null;
 }): Promise<void> {
   await query(
-    `INSERT INTO counterparty_rules (user_id, address, label, name, confidence, source)
-     VALUES ($1, $2, $3, $4, 1.0, 'user')
-     ON CONFLICT (user_id, address) DO UPDATE
+    `INSERT INTO counterparty_rules (user_id, address, label, name, confidence, source, direction)
+     VALUES ($1, $2, $3, $4, 1.0, 'user', $5::text)
+     ON CONFLICT (user_id, address, (COALESCE(direction, '*'))) DO UPDATE
        SET label      = EXCLUDED.label,
            name       = COALESCE(EXCLUDED.name, counterparty_rules.name),
            confidence = 1.0,
            source     = 'user',
            updated_at = NOW()`,
-    [params.userId, params.address.toLowerCase(), params.label, params.name],
+    [params.userId, params.address.toLowerCase(), params.label, params.name, params.direction ?? null],
   );
 }
 

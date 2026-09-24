@@ -25,6 +25,8 @@ export type EventRow = {
   chain: string;
   hash: string;
   log_index: number | null;
+  // Stable per-transfer discriminator within (chain, hash, wallet_id) — see buildSourceKey
+  source_key: string;
   block_time: Date;
   from_address: string;
   to_address: string | null;
@@ -36,12 +38,67 @@ export type EventRow = {
   direction: 'in' | 'out';
 };
 
+// Parse a non-negative integer written as hex ("0x1f") or decimal ("31").
+export function parseIndex(raw: string | null | undefined): number | null {
+  if (raw === null || raw === undefined) return null;
+  const s = raw.trim().toLowerCase();
+  if (/^0x[0-9a-f]+$/.test(s)) return parseInt(s.slice(2), 16);
+  if (/^[0-9]+$/.test(s)) return parseInt(s, 10);
+  return null;
+}
+
+export type ParsedUniqueId = {
+  kind: 'log' | 'external' | 'internal' | 'unknown';
+  index: number | null;
+};
+
+// Alchemy uniqueId formats seen / tolerated:
+//   "<hash>:log:<n>"        ERC-20 (n hex or decimal)
+//   "<hash>:<n>"            ERC-20, legacy/short form (n hex "0x0a" or decimal)
+//   "<hash>:external"       native top-level transfer
+//   "<hash>:internal"       internal transfer
+//   "<hash>:internal:<n>"   internal transfer with trace position
+export function parseUniqueId(uniqueId: string): ParsedUniqueId {
+  const parts = (uniqueId ?? '').split(':');
+  const tag = parts[1]?.trim().toLowerCase();
+  if (!tag) return { kind: 'unknown', index: null };
+  if (tag === 'log') return { kind: 'log', index: parseIndex(parts[2]) };
+  if (tag === 'external') return { kind: 'external', index: parseIndex(parts[2]) };
+  if (tag === 'internal') return { kind: 'internal', index: parseIndex(parts[2]) };
+  const idx = parseIndex(tag);
+  return idx === null ? { kind: 'unknown', index: null } : { kind: 'log', index: idx };
+}
+
 export function parseLogIndex(uniqueId: string): number | null {
-  const parts = uniqueId.split(':');
-  const suffix = parts[1];
-  if (!suffix || suffix === 'external' || suffix === 'internal') return null;
-  const parsed = parseInt(suffix, 16);
-  return isNaN(parsed) ? null : parsed;
+  const parsed = parseUniqueId(uniqueId);
+  return parsed.kind === 'log' ? parsed.index : null;
+}
+
+// Stable per-transfer discriminator within (chain, hash, wallet_id).
+// Must be identical across providers and re-syncs for the same transfer.
+export function buildSourceKey(params: {
+  kind: 'log' | 'external' | 'internal' | 'unknown';
+  logIndex: number | null;
+  internalIndex?: number | null;
+  from: string;
+  to: string | null;
+  rawValue: string | number | null;
+  uniqueId?: string;
+}): string {
+  if (params.logIndex !== null) return `log:${params.logIndex}`;
+  if (params.kind === 'external') return 'external';
+  const fingerprint = [
+    params.from.toLowerCase(),
+    (params.to ?? '').toLowerCase(),
+    String(params.rawValue ?? '').toLowerCase(),
+  ].join(':');
+  if (params.kind === 'internal') {
+    return params.internalIndex !== null && params.internalIndex !== undefined
+      ? `internal:${params.internalIndex}`
+      : `internal:${fingerprint}`;
+  }
+  // Token transfer without a log index, or unrecognised uniqueId
+  return params.uniqueId ? `uid:${params.uniqueId.toLowerCase()}` : `transfer:${fingerprint}`;
 }
 
 function toTxType(category: AlchemyTransfer['category']): TxRow['tx_type'] {
@@ -60,6 +117,23 @@ export function normalizeTransfer(
 
   const blockTime = new Date(t.metadata.blockTimestamp);
   const blockNumber = parseInt(t.blockNum, 16);
+
+  const parsedId = parseUniqueId(t.uniqueId);
+  const logIndex =
+    t.category === 'external' || t.category === 'internal' ? null : parseLogIndex(t.uniqueId);
+  const sourceKey = buildSourceKey({
+    kind:
+      t.category === 'external' ? 'external'
+      : t.category === 'internal' ? 'internal'
+      : logIndex !== null ? 'log'
+      : 'unknown',
+    logIndex,
+    internalIndex: parsedId.kind === 'internal' ? parsedId.index : null,
+    from: t.from,
+    to: t.to,
+    rawValue: t.rawContract?.value ?? t.value,
+    uniqueId: t.uniqueId,
+  });
 
   const tx: TxRow = {
     wallet_id: walletId,
@@ -85,7 +159,8 @@ export function normalizeTransfer(
     user_id: userId,
     chain: 'base',
     hash: t.hash,
-    log_index: parseLogIndex(t.uniqueId),
+    log_index: logIndex,
+    source_key: sourceKey,
     block_time: blockTime,
     from_address: t.from,
     to_address: t.to,

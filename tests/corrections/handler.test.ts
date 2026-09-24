@@ -25,8 +25,9 @@ describe('applyCorrection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Reset pool.connect mock with fresh client each test
+    // (the corrections INSERT ... RETURNING id needs a row)
     const client = {
-      query: vi.fn().mockResolvedValue({ rows: [] }),
+      query: vi.fn().mockResolvedValue({ rows: [{ id: 'corr-1' }] }),
       release: vi.fn(),
     };
     (db.pool.connect as ReturnType<typeof vi.fn>).mockResolvedValue(client);
@@ -91,6 +92,53 @@ describe('applyCorrection', () => {
 
     expect(store.upsertCounterpartyRule).toHaveBeenCalledWith(
       expect.objectContaining({ address: '0xVENDOR', label: 'expense' }),
+    );
+  });
+
+  it('records the event direction on the learned rule', async () => {
+    (store.getEventWithClassification as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'evt-4',
+      direction: 'in',
+      from_address: '0xCUSTOMER',
+      to_address: '0xMYWALLET',
+      asset: 'USDC',
+      amount: 100,
+      current_label: null,
+    });
+
+    await applyCorrection({ userId: 'user-1', eventId: 'evt-4', newLabel: 'revenue' });
+
+    expect(store.upsertCounterpartyRule).toHaveBeenCalledWith(
+      expect.objectContaining({ address: '0xCUSTOMER', label: 'revenue', direction: 'in' }),
+    );
+  });
+
+  it('stores the corrected classification as user-sourced, under the event lock', async () => {
+    (store.getEventWithClassification as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'evt-5',
+      direction: 'out',
+      from_address: '0xMYWALLET',
+      to_address: '0xVENDOR',
+      asset: 'USDC',
+      amount: 10,
+      current_label: 'revenue',
+    });
+    const client = {
+      query: vi.fn().mockResolvedValue({ rows: [{ id: 'corr-1' }] }),
+      release: vi.fn(),
+    };
+    (db.pool.connect as ReturnType<typeof vi.fn>).mockResolvedValue(client);
+
+    await applyCorrection({ userId: 'user-1', eventId: 'evt-5', newLabel: 'refund' });
+
+    const sqls = client.query.mock.calls.map((c: unknown[]) => String(c[0]));
+    const lockIdx = sqls.findIndex((s) => /FROM normalized_events[\s\S]*FOR UPDATE/.test(s));
+    const insertIdx = sqls.findIndex((s) => s.includes('INSERT INTO classifications'));
+    expect(lockIdx).toBeGreaterThan(-1);
+    expect(insertIdx).toBeGreaterThan(lockIdx);
+    expect(sqls[insertIdx]).toContain("'user'");
+    expect(store.upsertCounterpartyRule).toHaveBeenCalledWith(
+      expect.objectContaining({ address: '0xVENDOR', label: 'refund', direction: 'out' }),
     );
   });
 

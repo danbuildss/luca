@@ -46,15 +46,23 @@ export async function applyCorrection(params: ApplyCorrectionParams): Promise<Co
   try {
     await client.query('BEGIN');
 
+    // Same lock the classifier's save path takes — serialises a correction with an
+    // in-flight automated save so neither silently overwrites the other.
+    await client.query(
+      `SELECT id FROM normalized_events WHERE id = $1 FOR UPDATE`,
+      [params.eventId],
+    );
+
     await client.query(
       `UPDATE classifications SET superseded_at = NOW()
        WHERE event_id = $1 AND superseded_at IS NULL`,
       [params.eventId],
     );
 
+    // source = 'user' marks this as a correction; automated classifiers never supersede it
     await client.query(
-      `INSERT INTO classifications (event_id, user_id, label, confidence, method, evidence)
-       VALUES ($1, $2, $3, 1.0, 'counterparty', $4)`,
+      `INSERT INTO classifications (event_id, user_id, label, confidence, method, evidence, source)
+       VALUES ($1, $2, $3, 1.0, 'counterparty', $4, 'user')`,
       [params.eventId, params.userId, params.newLabel, evidence],
     );
 
@@ -81,13 +89,16 @@ export async function applyCorrection(params: ApplyCorrectionParams): Promise<Co
     client.release();
   }
 
-  // Upsert rule outside the transaction — idempotent, OK if it fails after commit
+  // Upsert rule outside the transaction — idempotent, OK if it fails after commit.
+  // The rule is scoped to the event's direction: labelling a customer's payment as
+  // revenue must not auto-label a refund we later send them.
   if (counterparty) {
     await upsertCounterpartyRule({
       userId: params.userId,
       address: counterparty,
       label: params.newLabel,
       name: params.counterpartyName ?? null,
+      direction: event.direction,
     });
   }
 

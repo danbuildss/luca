@@ -1,6 +1,7 @@
 import axios from 'axios';
 import pRetry from 'p-retry';
 import { logger } from '../logger.js';
+import { buildSourceKey, parseIndex } from './normalize.js';
 import type { TxRow, EventRow } from './normalize.js';
 
 const BASE_URL = 'https://base.blockscout.com/api/v2';
@@ -92,6 +93,16 @@ export async function fetchTokenTransfers(
   return all;
 }
 
+// Only successful, value-bearing native txs are economic transfers. Failed/reverted
+// (status 'error') and pending (status null) txs moved no ETH.
+export function isIngestibleNativeTx(fromBlockNumber: number): (t: BlockscoutTx) => boolean {
+  return (t) =>
+    t.block >= fromBlockNumber &&
+    t.status === 'ok' &&
+    Boolean(t.value) &&
+    t.value !== '0';
+}
+
 export async function fetchNativeTransactions(
   walletAddress: string,
   fromBlockNumber: number,
@@ -106,7 +117,7 @@ export async function fetchNativeTransactions(
     });
 
     const page = await get<PagedResponse<BlockscoutTx>>(url);
-    const relevant = page.items.filter((t) => t.block >= fromBlockNumber && t.value !== '0');
+    const relevant = page.items.filter(isIngestibleNativeTx(fromBlockNumber));
     all.push(...relevant);
 
     const oldest = page.items.at(-1);
@@ -157,8 +168,16 @@ export function normalizeTokenTransfer(
 
   const decimals = t.total.decimals ? parseInt(t.total.decimals, 10) : 18;
   const amount = Number(BigInt(t.total.value)) / 10 ** decimals;
-  const logIndex = t.log_index !== null ? parseInt(t.log_index, 10) : null;
+  const logIndex =
+    t.log_index !== null && t.log_index !== undefined ? parseIndex(String(t.log_index)) : null;
   const blockTime = new Date(t.timestamp);
+  const sourceKey = buildSourceKey({
+    kind: logIndex !== null ? 'log' : 'unknown',
+    logIndex,
+    from: t.from.hash,
+    to: t.to?.hash ?? null,
+    rawValue: t.total.value,
+  });
 
   const tx: TxRow = {
     wallet_id: walletId,
@@ -185,6 +204,7 @@ export function normalizeTokenTransfer(
     chain: 'base',
     hash: t.tx_hash,
     log_index: logIndex,
+    source_key: sourceKey,
     block_time: blockTime,
     from_address: t.from.hash,
     to_address: t.to?.hash ?? null,
@@ -238,6 +258,7 @@ export function normalizeNativeTx(
     chain: 'base',
     hash: t.hash,
     log_index: null, // native ETH transfers don't have a log index
+    source_key: 'external', // one top-level native transfer per tx — matches Alchemy's key
     block_time: blockTime,
     from_address: t.from.hash,
     to_address: t.to?.hash ?? null,

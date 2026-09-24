@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   normalizeTokenTransfer,
   normalizeNativeTx,
+  isIngestibleNativeTx,
   type BlockscoutTokenTransfer,
   type BlockscoutTx,
 } from '../../src/ingestion/blockscout.js';
@@ -139,5 +140,51 @@ describe('normalizeNativeTx', () => {
     const { tx } = normalizeNativeTx(t, WALLET, WALLET_ID, USER_ID);
     expect(tx.gas_used).toBeNull();
     expect(tx.gas_price).toBeNull();
+  });
+
+  it('uses source_key "external" (same as Alchemy native transfers)', () => {
+    const { event } = normalizeNativeTx(makeNativeTx(), WALLET, WALLET_ID, USER_ID);
+    expect(event.source_key).toBe('external');
+  });
+});
+
+describe('source_key for token transfers', () => {
+  it('keys by log index, matching the Alchemy key for the same transfer', () => {
+    const { event } = normalizeTokenTransfer(makeTokenTransfer({ log_index: '10' }), WALLET, WALLET_ID, USER_ID);
+    expect(event.source_key).toBe('log:10');
+  });
+
+  it('falls back to a transfer fingerprint when log_index is absent', () => {
+    const a = normalizeTokenTransfer(makeTokenTransfer({ log_index: null }), WALLET, WALLET_ID, USER_ID);
+    const b = normalizeTokenTransfer(
+      makeTokenTransfer({ log_index: null, total: { decimals: '6', value: '1' } }),
+      WALLET, WALLET_ID, USER_ID,
+    );
+    expect(a.event.source_key).toMatch(/^transfer:/);
+    expect(a.event.source_key).not.toBe(b.event.source_key);
+  });
+});
+
+describe('isIngestibleNativeTx', () => {
+  const keep = isIngestibleNativeTx(12_000_000);
+
+  it('keeps successful value-bearing txs in range', () => {
+    expect(keep(makeNativeTx())).toBe(true);
+  });
+
+  it('skips failed/reverted txs', () => {
+    expect(keep(makeNativeTx({ status: 'error' }))).toBe(false);
+  });
+
+  it('skips pending txs with no status', () => {
+    expect(keep(makeNativeTx({ status: null as unknown as string }))).toBe(false);
+  });
+
+  it('skips zero-value txs', () => {
+    expect(keep(makeNativeTx({ value: '0' }))).toBe(false);
+  });
+
+  it('skips txs before the start block', () => {
+    expect(keep(makeNativeTx({ block: 11_999_999 }))).toBe(false);
   });
 });

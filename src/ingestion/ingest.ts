@@ -97,6 +97,58 @@ async function insertOrGetTxId(
   }
 }
 
+// Rows ingested before migration 011 without a log index were keyed 'legacy' (one slot
+// per tx). When we see the same transfer again, re-key that row instead of inserting a
+// duplicate. Matches on counterparties + asset + amount so a different transfer in the
+// same tx is inserted as its own row.
+async function claimLegacyEvent(event: EventRow): Promise<boolean> {
+  const res = await query(
+    `UPDATE normalized_events
+     SET source_key = $5::text, log_index = COALESCE($6::integer, log_index)
+     WHERE id = (
+       SELECT id FROM normalized_events
+       WHERE chain = $1::text AND hash = $2::text AND wallet_id = $3::uuid
+         AND source_key = 'legacy'
+         AND LOWER(from_address) = LOWER($4::text)
+         AND LOWER(COALESCE(to_address, '')) = LOWER(COALESCE($7::text, ''))
+         AND asset IS NOT DISTINCT FROM $8::text
+         AND (
+           (amount IS NULL AND $9::numeric IS NULL)
+           OR ABS(amount - $9::numeric) <= 1e-9 * GREATEST(1, ABS($9::numeric))
+         )
+       LIMIT 1
+     )
+     AND NOT EXISTS (
+       SELECT 1 FROM normalized_events
+       WHERE chain = $1::text AND hash = $2::text AND wallet_id = $3::uuid
+         AND source_key = $5::text
+     )`,
+    [
+      event.chain, event.hash, event.wallet_id, event.from_address,
+      event.source_key, event.log_index, event.to_address, event.asset, event.amount,
+    ],
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
+async function insertEvent(txId: string, event: EventRow): Promise<void> {
+  if (await claimLegacyEvent(event)) return;
+  await query(
+    `INSERT INTO normalized_events
+       (transaction_id, wallet_id, user_id, chain, hash, log_index, source_key, block_time,
+        from_address, to_address, asset, amount, usd_value, price_source, price_at, direction)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+     ON CONFLICT (chain, hash, wallet_id, source_key) DO NOTHING`,
+    [
+      txId, event.wallet_id, event.user_id, event.chain,
+      event.hash, event.log_index, event.source_key, event.block_time,
+      event.from_address, event.to_address, event.asset,
+      event.amount, event.usd_value, event.price_source,
+      event.price_at, event.direction,
+    ],
+  );
+}
+
 export async function syncWallet(job: WatchJobRow, apiKey: string | undefined): Promise<void> {
   const { wallet_id, user_id, wallet_address, last_block } = job;
 
@@ -195,20 +247,7 @@ export async function syncWallet(job: WatchJobRow, apiKey: string | undefined): 
 
         const txId = await insertOrGetTxId(wallet_id, enrichedTx.hash, enrichedTx.chain, txSql, txParams);
 
-        await query(
-          `INSERT INTO normalized_events
-             (transaction_id, wallet_id, user_id, chain, hash, log_index, block_time,
-              from_address, to_address, asset, amount, usd_value, price_source, price_at, direction)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-           ON CONFLICT (chain, hash, wallet_id, COALESCE(log_index, -1)) DO NOTHING`,
-          [
-            txId, enrichedEvent.wallet_id, enrichedEvent.user_id, enrichedEvent.chain,
-            enrichedEvent.hash, enrichedEvent.log_index, enrichedEvent.block_time,
-            enrichedEvent.from_address, enrichedEvent.to_address, enrichedEvent.asset,
-            enrichedEvent.amount, enrichedEvent.usd_value, enrichedEvent.price_source,
-            enrichedEvent.price_at, enrichedEvent.direction,
-          ],
-        );
+        await insertEvent(txId, enrichedEvent);
 
         ingested++;
       } catch (err) {

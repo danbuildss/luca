@@ -2,11 +2,14 @@ import OpenAI from 'openai';
 import { query } from '../db.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
-import { ClassificationLabel, CLASSIFICATION_LABELS } from '../types/index.js';
-import type { ClassificationResult, UnclassifiedEvent } from './types.js';
+import type { ClassificationFailure, ClassificationResult, UnclassifiedEvent } from './types.js';
+import { parseLlmClassificationResponse } from './llmParse.js';
 
 const LLM_MODEL = 'gpt-4o-mini';
 const LLM_BATCH_SIZE = 20;
+// ~20 items × (UUID + label + confidence + one-sentence evidence) ≈ 2k tokens; leave headroom
+// so the JSON is never truncated mid-array.
+const LLM_MAX_OUTPUT_TOKENS = 4096;
 // gpt-4o-mini pricing (per token)
 const INPUT_COST_PER_TOKEN = 0.15 / 1_000_000;
 const OUTPUT_COST_PER_TOKEN = 0.60 / 1_000_000;
@@ -23,8 +26,9 @@ Classify each transaction into exactly one of these labels:
 - refund: return of a prior payment
 - unknown: cannot determine purpose with reasonable confidence
 
-Return a JSON array — one object per input transaction, in the same order:
-[{"id":"<id>","label":"<label>","confidence":<0.0-1.0>,"evidence":"<one concise sentence>"}]`;
+Return a JSON object with a "results" array — one object per input transaction, in the same order,
+copying each "id" exactly:
+{"results":[{"id":"<id>","label":"<label>","confidence":<0.0-1.0>,"evidence":"<one concise sentence>"}]}`;
 
 type LlmEventInput = {
   id: string;
@@ -36,11 +40,10 @@ type LlmEventInput = {
   block_time: string;
 };
 
-type LlmResponseItem = {
-  id: string;
-  label: string;
-  confidence: number;
-  evidence: string;
+export type LlmClassificationOutcome = {
+  results: Map<string, ClassificationResult>;
+  // Events that could not be classified — saved as retryable failure placeholders
+  failures: Map<string, ClassificationFailure>;
 };
 
 async function getDailySpendUsd(): Promise<number> {
@@ -66,26 +69,56 @@ async function logSpend(params: {
   );
 }
 
-export async function classifyWithLlm(
+function markFailed(
+  failures: Map<string, ClassificationFailure>,
+  ids: Iterable<string>,
+  failure: ClassificationFailure,
+): void {
+  for (const id of ids) failures.set(id, failure);
+}
+
+// Permanent request rejections (4xx other than 429) count toward the attempt cap so a
+// poison event can't retry forever; transient errors (network, 429, 5xx) don't.
+function isPermanentApiError(err: unknown): boolean {
+  const status = (err as { status?: unknown } | null)?.status;
+  return typeof status === 'number' && status >= 400 && status < 500 && status !== 429;
+}
+
+export async function classifyWithLlmDetailed(
   events: UnclassifiedEvent[],
   userId: string,
-): Promise<Map<string, ClassificationResult>> {
-  if (!config.OPENAI_API_KEY || events.length === 0) return new Map();
+): Promise<LlmClassificationOutcome> {
+  const results = new Map<string, ClassificationResult>();
+  const failures = new Map<string, ClassificationFailure>();
+  if (events.length === 0) return { results, failures };
 
-  const dailySpend = await getDailySpendUsd();
-  if (dailySpend >= config.LLM_DAILY_SPEND_CAP_USD) {
-    logger.warn(
-      { dailySpend, cap: config.LLM_DAILY_SPEND_CAP_USD },
-      'LLM daily spend cap reached — skipping',
-    );
-    return new Map();
+  if (!config.OPENAI_API_KEY) {
+    markFailed(failures, events.map((e) => e.id), {
+      countsAsAttempt: false,
+      reason: 'No rule matched and LLM unavailable (no API key)',
+    });
+    return { results, failures };
   }
 
   const openai = new OpenAI({ apiKey: config.OPENAI_API_KEY });
-  const results = new Map<string, ClassificationResult>();
 
   for (let i = 0; i < events.length; i += LLM_BATCH_SIZE) {
     const batch = events.slice(i, i + LLM_BATCH_SIZE);
+    const batchIds = batch.map((e) => e.id);
+
+    const dailySpend = await getDailySpendUsd();
+    if (dailySpend >= config.LLM_DAILY_SPEND_CAP_USD) {
+      logger.warn(
+        { dailySpend, cap: config.LLM_DAILY_SPEND_CAP_USD },
+        'LLM daily spend cap reached — skipping',
+      );
+      markFailed(failures, events.slice(i).map((e) => e.id), {
+        countsAsAttempt: false,
+        reason: 'No rule matched and LLM daily spend cap reached',
+      });
+      break;
+    }
+
     const payload: LlmEventInput[] = batch.map((e) => ({
       id: e.id,
       direction: e.direction,
@@ -96,60 +129,75 @@ export async function classifyWithLlm(
       block_time: e.block_time.toISOString(),
     }));
 
-    try {
-      const response = await openai.chat.completions.create({
+    const response = await openai.chat.completions
+      .create({
         model: LLM_MODEL,
-        max_tokens: 1024,
+        max_tokens: LLM_MAX_OUTPUT_TOKENS,
+        response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: JSON.stringify(payload, null, 2) },
+          { role: 'user', content: JSON.stringify(payload) },
         ],
+      })
+      .catch((err: unknown) => {
+        logger.error({ err, batchStart: i }, 'LLM classification batch failed');
+        markFailed(failures, batchIds, {
+          countsAsAttempt: isPermanentApiError(err),
+          reason: 'LLM request failed',
+        });
+        return null;
       });
+    if (!response) continue;
 
+    try {
       const inputTokens = response.usage?.prompt_tokens ?? 0;
       const outputTokens = response.usage?.completion_tokens ?? 0;
       const costUsd = inputTokens * INPUT_COST_PER_TOKEN + outputTokens * OUTPUT_COST_PER_TOKEN;
-
       await logSpend({ userId, model: LLM_MODEL, inputTokens, outputTokens, costUsd });
-
-      const text = response.choices[0]?.message?.content ?? '';
-      if (!text) {
-        logger.warn('LLM returned empty content for classification batch');
-        continue;
-      }
-
-      let parsed: LlmResponseItem[];
-      try {
-        const raw = text
-          .replace(/^```(?:json)?\n?/, '')
-          .replace(/\n?```$/, '')
-          .trim();
-        parsed = JSON.parse(raw) as LlmResponseItem[];
-      } catch {
-        logger.warn({ text }, 'LLM response is not valid JSON');
-        continue;
-      }
-
-      for (const item of parsed) {
-        const label: ClassificationLabel = (CLASSIFICATION_LABELS as readonly string[]).includes(item.label)
-          ? (item.label as ClassificationLabel)
-          : ClassificationLabel.UNKNOWN;
-        results.set(item.id, {
-          label,
-          confidence: Math.min(1, Math.max(0, item.confidence ?? 0.5)),
-          method: 'model',
-          evidence: item.evidence ?? 'LLM classification',
-        });
-      }
-
-      logger.debug(
-        { batch: i / LLM_BATCH_SIZE + 1, size: batch.length, costUsd },
-        'LLM classification batch complete',
-      );
     } catch (err) {
-      logger.error({ err, batchStart: i }, 'LLM classification batch failed');
+      logger.error({ err }, 'Failed to log LLM spend');
     }
+
+    const choice = response.choices[0];
+    const text = choice?.message?.content ?? '';
+    if (choice?.finish_reason === 'length') {
+      logger.warn({ batchStart: i, size: batch.length }, 'LLM classification output truncated');
+    }
+    if (!text) {
+      logger.warn('LLM returned empty content for classification batch');
+      markFailed(failures, batchIds, { countsAsAttempt: true, reason: 'LLM returned empty output' });
+      continue;
+    }
+
+    const parsed = parseLlmClassificationResponse(text, batchIds);
+    if (parsed.malformed) {
+      logger.warn({ text: text.slice(0, 500) }, 'LLM response is not valid JSON');
+    } else if (parsed.invalidIds.length > 0) {
+      logger.warn(
+        { batchStart: i, invalid: parsed.invalidIds.length },
+        'LLM response missing or invalid for some items',
+      );
+    }
+    for (const [id, result] of parsed.results) results.set(id, result);
+    markFailed(failures, parsed.invalidIds, {
+      countsAsAttempt: true,
+      reason: parsed.malformed ? 'LLM output was not valid JSON' : 'LLM output missing or invalid for this item',
+    });
+
+    logger.debug(
+      { batch: i / LLM_BATCH_SIZE + 1, size: batch.length, ok: parsed.results.size },
+      'LLM classification batch complete',
+    );
   }
 
+  return { results, failures };
+}
+
+// Backward-compatible wrapper: successful classifications only.
+export async function classifyWithLlm(
+  events: UnclassifiedEvent[],
+  userId: string,
+): Promise<Map<string, ClassificationResult>> {
+  const { results } = await classifyWithLlmDetailed(events, userId);
   return results;
 }

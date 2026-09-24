@@ -4,7 +4,7 @@ import { logger } from '../logger.js';
 
 export type AlchemyTransfer = {
   blockNum: string;         // hex block number
-  uniqueId: string;         // "hash:logIndex" for erc20, "hash:external" for native
+  uniqueId: string;         // e.g. "hash:log:5" for erc20, "hash:external" / "hash:internal[:n]" for native — see parseUniqueId
   hash: string;
   from: string;
   to: string | null;
