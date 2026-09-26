@@ -17,6 +17,7 @@ import { replyMarkdownSafe } from '../../src/telegram/format.js';
 import { UserRateLimiter, singleFlight } from '../../src/telegram/ratelimit.js';
 import { describePendingAction } from '../../src/agent/pending.js';
 import { generateDailyBrief, generateWeeklyBrief } from '../../src/briefs/generate.js';
+import { launchWithRetry } from '../../src/telegram/launch.js';
 import { saveBrief, markBriefSent } from '../../src/briefs/store.js';
 import { runAgent } from '../../src/agent/run.js';
 import { detectWorkerStale } from '../../src/health/detectors.js';
@@ -411,12 +412,33 @@ async function start() {
     logger.info('Bot starting in polling mode (switch to webhook in production)');
   }
 
-  await bot.launch();
-  logger.info('Luca Telegram bot started');
+  // Survives another copy of the bot polling with the same token (see src/telegram/launch.ts)
+  await launchWithRetry({
+    launch: () => bot.launch(() => logger.info('Luca Telegram bot connecting')),
+    notifyAdmins: async (text) => {
+      const admins = await query<{ telegram_id: string }>(
+        `SELECT telegram_id::text AS telegram_id FROM users WHERE role = 'admin'`,
+      );
+      for (const admin of admins.rows) {
+        await bot.telegram.sendMessage(Number(admin.telegram_id), text);
+      }
+    },
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    schedule: (fn, ms) => {
+      const timer = setTimeout(fn, ms);
+      return () => clearTimeout(timer);
+    },
+    now: () => Date.now(),
+    log: logger,
+    stopping: () => shuttingDown,
+  });
 }
+
+let shuttingDown = false;
 
 process.on('SIGTERM', () => {
   void (async () => {
+    shuttingDown = true;
     logger.info('SIGTERM received — bot shutting down');
     if (alertTimer) clearTimeout(alertTimer);
     if (healthTimer) clearTimeout(healthTimer);
@@ -428,6 +450,7 @@ process.on('SIGTERM', () => {
 
 process.on('SIGINT', () => {
   void (async () => {
+    shuttingDown = true;
     if (alertTimer) clearTimeout(alertTimer);
     if (healthTimer) clearTimeout(healthTimer);
     bot.stop('SIGINT');
