@@ -235,8 +235,8 @@ app.post('/wallets', async (req, reply) => {
   }
 
   const chain = body.chain ?? 'base';
-  if (!['base', 'solana'].includes(chain)) {
-    return reply.status(400).send({ error: 'chain must be base or solana' });
+  if (chain !== 'base') {
+    return reply.status(400).send({ error: 'Luca only tracks wallets on Base' });
   }
 
   // Basic address validation for Base (EVM) addresses

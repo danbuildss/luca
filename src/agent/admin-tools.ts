@@ -2,13 +2,16 @@ import type { ChatCompletionTool } from 'openai/resources/chat/completions.js';
 import { query } from '../db.js';
 import { logger } from '../logger.js';
 import { getAiCost, getInviteStats, getUserStats, getWalletHealth } from '../ops/metrics.js';
+import { traceTransaction } from '../ledger/trace.js';
+import { config } from '../config.js';
 
 // Founder questions ("how many invites are pending?", "who has not activated?",
 // "which wallets are stale?", "what did AI cost this week?") answered from the same
 // definitions /ops uses. Offered to the model only in an admin's chat, and every call
 // re-checks the caller's role in the database, so an operator can never reach them.
-// They return counts, handles and sync state only: never another user's balances,
-// transactions or books.
+// Most return counts, handles and sync state only. admin_trace_transaction is the one
+// exception: to diagnose a missing transaction it shows how that single transaction was
+// recorded (wallet, label, amount) for the wallets it touches. Never balances or books.
 
 export const ADMIN_TOOL_DEFINITIONS: ChatCompletionTool[] = [
   {
@@ -47,6 +50,19 @@ export const ADMIN_TOOL_DEFINITIONS: ChatCompletionTool[] = [
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'admin_trace_transaction',
+      description:
+        'Admin only. Follow one Base transaction through every layer Luca keeps (chain, transfer feed, raw record, normalized event, asset identity, classification, price, books) for every Luca wallet it touches, and name the layer where a movement was lost. Use when asked whether Luca saw a transaction or why it is missing.',
+      parameters: {
+        type: 'object',
+        properties: { hash: { type: 'string', description: 'The full transaction hash (0x followed by 64 hex characters).' } },
+        required: ['hash'],
+      },
+    },
+  },
 ];
 
 const ADMIN_TOOL_NAMES = new Set(
@@ -62,7 +78,11 @@ async function isAdmin(userId: string): Promise<boolean> {
   return res.rows[0]?.role === 'admin';
 }
 
-export async function executeAdminTool(userId: string, toolName: string): Promise<Record<string, unknown>> {
+export async function executeAdminTool(
+  userId: string,
+  toolName: string,
+  args: Record<string, unknown> = {},
+): Promise<Record<string, unknown>> {
   if (!(await isAdmin(userId))) {
     logger.warn({ userId, toolName }, 'Admin tool refused for a non-admin');
     return { error: 'Not available.' };
@@ -76,6 +96,11 @@ export async function executeAdminTool(userId: string, toolName: string): Promis
       return await getWalletHealth();
     case 'admin_get_ai_cost':
       return await getAiCost();
+    case 'admin_trace_transaction': {
+      const hash = typeof args.hash === 'string' ? args.hash.trim() : '';
+      if (!/^0x[0-9a-fA-F]{64}$/.test(hash)) return { error: 'Give the full transaction hash: 0x followed by 64 hex characters.' };
+      return await traceTransaction(hash, config.ALCHEMY_API_KEY);
+    }
     default:
       return { error: `Unknown tool: ${toolName}` };
   }

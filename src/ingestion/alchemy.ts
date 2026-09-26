@@ -215,6 +215,23 @@ export async function getTransactionReceipt(apiKey: string, hash: string): Promi
   return r ? parseReceipt(r) : null;
 }
 
+// The transaction itself: who sent it, to whom, and the ETH it carried at the top level.
+export type ChainTx = { hash: string; from: string; to: string | null; value: bigint; blockNumber: number | null };
+
+export async function getTransaction(apiKey: string, hash: string): Promise<ChainTx | null> {
+  const t = await rpc<{ hash: string; from: string; to: string | null; value: string; blockNumber: string | null } | null>(
+    apiKey, 'eth_getTransactionByHash', [hash],
+  );
+  if (!t) return null;
+  return {
+    hash: t.hash,
+    from: t.from,
+    to: t.to,
+    value: big(t.value),
+    blockNumber: t.blockNumber ? parseInt(t.blockNumber, 16) : null,
+  };
+}
+
 export type RpcLog = {
   address: string;
   topics: string[];

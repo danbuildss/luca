@@ -145,6 +145,20 @@ function involves(t: AlchemyTransfer, wallet: string): boolean {
   return t.from.toLowerCase() === w || (t.to ?? '').toLowerCase() === w;
 }
 
+// A transaction the wallet only received in has no receipt in the simulation; the chain
+// still has one, paid by the external sender (fee 0 here, so no gas for our wallet).
+function transferReceipt(h: string): RpcReceipt | undefined {
+  const t = chain.feed.find((x) => x.hash === h);
+  const l = chain.logs.find((x) => x.transactionHash === h);
+  if (!t && !l) return undefined;
+  const block = t ? t.blockNum : l!.blockNumber;
+  return {
+    transactionHash: h, blockNumber: block, blockHash: `0xb${parseInt(block, 16)}`, status: '0x1',
+    from: t?.from ?? '0x9999999999999999999999999999999999999999', to: t?.to ?? null,
+    gasUsed: '0x0', effectiveGasPrice: '0x0', l1Fee: '0x0',
+  };
+}
+
 // Module factories for vi.mock — wire the simulation into the real ingestion code.
 export function alchemyMock<T extends Record<string, unknown>>(orig: T): T {
   const parseReceipt = orig.parseReceipt as typeof ParseReceipt;
@@ -169,8 +183,21 @@ export function alchemyMock<T extends Record<string, unknown>>(orig: T): T {
           && filter.topics.every((t, i) => t === null || l.topics[i] === t);
       })),
     getTransactionReceipt: (_k: string, h: string) => {
-      const r = chain.receipts.get(h);
+      const r = chain.receipts.get(h) ?? transferReceipt(h);
       return Promise.resolve(r ? parseReceipt(r) : null);
+    },
+    getTransaction: (_k: string, h: string) => {
+      const sent = chain.receipts.get(h);
+      const ext = chain.feed.find((t) => t.hash === h && t.category === 'external');
+      const any = sent ?? transferReceipt(h);
+      if (!any) return Promise.resolve(null);
+      return Promise.resolve({
+        hash: h,
+        from: ext?.from ?? any.from,
+        to: ext?.to ?? any.to,
+        value: ext ? BigInt(ext.rawContract.value ?? '0x0') : 0n,
+        blockNumber: parseInt(any.blockNumber, 16),
+      });
     },
     getBlock: (_k: string, n: number) =>
       Promise.resolve({ number: n, timestamp: TS0 + n, transactions: chain.blockTxs.get(n) ?? [] }),

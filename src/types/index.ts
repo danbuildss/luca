@@ -38,7 +38,9 @@ export const CLASSIFICATION_METHODS = [
 
 export type ClassificationMethod = (typeof CLASSIFICATION_METHODS)[number];
 
-export const SUPPORTED_CHAINS = ['base', 'solana'] as const;
+// Luca books Base only (roadmap: no other chains until explicitly approved). The wallets
+// table still allows 'solana' for old rows; nothing new is registered there.
+export const SUPPORTED_CHAINS = ['base'] as const;
 export type Chain = (typeof SUPPORTED_CHAINS)[number];
 
 export const WALLET_ROLES = ['operations', 'treasury', 'revenue', 'expenses', 'agent', 'personal'] as const;

@@ -358,6 +358,12 @@ export async function ingestRange(
     degraded = true; // no receipts, logs or block reads without Alchemy
   }
 
+  // A failed transaction moves nothing but its fee. Should a provider still report a
+  // transfer in one of this wallet's failed transactions, it is kept as evidence only.
+  const failedTxs = new Set(
+    items.filter((i) => i.receipt?.status === 'failed').map((i) => i.tx.hash.toLowerCase()),
+  );
+
   let ingested = 0;
   let failed = 0;
   for (const item of items) {
@@ -367,6 +373,7 @@ export async function ingestRange(
     // A transfer of zero moves no money: kept as evidence, never in the books. Most are
     // address-poisoning spam made to look like a payment from this wallet.
     if (event.raw_amount === '0') event.supported = false;
+    if (!item.receipt && failedTxs.has(tx.hash.toLowerCase())) event.supported = false;
     try {
       if (item.receipt) {
         await insertRawReceipt(w.wallet_id, item.receipt);

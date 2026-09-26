@@ -240,7 +240,7 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
         properties: {
           address: {
             type: 'string',
-            description: 'The wallet address (0x... for Base/EVM, base58 for Solana).',
+            description: 'The Base wallet address (0x followed by 40 hex characters).',
           },
           chain: {
             type: 'string',
@@ -278,6 +278,15 @@ export async function prepareWriteAction(
   toolName: string,
   args: Record<string, unknown>,
 ): Promise<PreparedWrite> {
+  // Checked before the Confirm button is shown, so the operator never confirms a wallet
+  // Luca cannot track
+  if (toolName === 'register_wallet') {
+    if ((args.chain ?? 'base') !== 'base') return { ok: false, error: 'Luca only tracks wallets on Base.' };
+    if (!/^0x[0-9a-fA-F]{40}$/.test(argText(args.address))) {
+      return { ok: false, error: 'That is not a Base wallet address (0x followed by 40 hex characters).' };
+    }
+    return { ok: true, args };
+  }
   if (toolName !== 'apply_correction') return { ok: true, args };
 
   if (!(CLASSIFICATION_LABELS as ReadonlyArray<string>).includes(String(args.new_label))) {
@@ -504,7 +513,10 @@ export async function executeTool(
       const role = (args.role as string | undefined) ?? null;
 
       const BASE_ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
-      if (chain === 'base' && !BASE_ADDR_RE.test(args.address as string)) {
+      if (chain !== 'base') {
+        return { error: 'Luca only tracks wallets on Base.' };
+      }
+      if (!BASE_ADDR_RE.test(args.address as string)) {
         return { error: 'Invalid Base address format — must be 0x + 40 hex chars' };
       }
 
