@@ -22,7 +22,7 @@ vi.mock('../../src/ingestion/price.js', () => ({
 }));
 
 import { describeDb, useIntegrationDb, seedUserWithWallet, insertUser, insertClassification, sql, addr } from './helpers/db.js';
-import { chain, resetChain, usdcTransfer, sentTx } from './helpers/chain.js';
+import { chain, resetChain, usdcTransfer, ethTransfer, sentTx } from './helpers/chain.js';
 import { syncWallet, getActiveWatchJobs } from '../../src/ingestion/ingest.js';
 import { recoverAudits, setAuditNotifier } from '../../src/ledger/audit-runs.js';
 import { executeTool } from '../../src/agent/tools.js';
@@ -225,6 +225,55 @@ describeDb('books check from chat (integration)', () => {
       await insertClassification({ eventId: ev[0].id, userId: user.id, label: 'expense', method: 'counterparty' });
       expect(await executeTool(user.id, 'check_books_complete', {})).toMatchObject({ status: 'started' });
       await finished(2);
+    });
+  });
+
+  describe('native ETH discovery', () => {
+    it('an inbound ETH payment Alchemy missed is found through Blockscout and reported', async () => {
+      const { wallet } = await seedUserWithWallet({ timezone: 'UTC' });
+      const w = wallet.address;
+      // Alchemy's feed never reports it; token logs cannot (it is ETH) and the sent list
+      // cannot (the wallet received it). Only Blockscout's transaction list has it.
+      const eth = ethTransfer(w, { block: 900, from: addr(), to: w, wei: 10n ** 16n, inFeed: false });
+      await sync(wallet.id);
+      expect((await sql<{ n: number }>(`SELECT COUNT(*)::int AS n FROM normalized_events WHERE hash = $1`, [eth]))[0].n).toBe(0);
+
+      await executeTool(wallet.userId, 'check_books_complete', {});
+      const text = await finished();
+      record('Inbound ETH missed by Alchemy, found via Blockscout', text);
+      expect(text).toContain('1 transaction, 1 supported financial movement');
+      expect(text).toContain(`0.01 ETH in (${eth.slice(0, 6)}…${eth.slice(-4)}): my data provider never delivered it, so it's missing from your books.`);
+      expect(text).not.toContain('Every supported movement reached');
+    });
+
+    it('an inbound ETH payment both sources report is counted once', async () => {
+      const { user, wallet } = await seedUserWithWallet({ timezone: 'UTC' });
+      const w = wallet.address;
+      const eth = ethTransfer(w, { block: 900, from: addr(), to: w, wei: 10n ** 16n });
+      await sync(wallet.id);
+      await label(user.id, eth);
+      await sql(`UPDATE normalized_events SET usd_value = 40 WHERE hash = $1`, [eth]);
+
+      await executeTool(user.id, 'check_books_complete', {});
+      const text = await finished();
+      expect(text).toContain('1 transaction, 1 supported financial movement.');
+      expect(text).toContain('Every supported movement reached your books.');
+    });
+
+    it('a failed, zero-value transaction the wallet sent is still found for its fee', async () => {
+      const { wallet } = await seedUserWithWallet({ timezone: 'UTC' });
+      await sync(wallet.id);
+      // After Luca's last sync: nothing stored. It moved no ETH, so neither Alchemy's feed
+      // nor Blockscout's native list has it; only the sent list does.
+      chain.tip = 1400;
+      const { hash } = sentTx(wallet.address, { block: 1200, status: 'failed', gasUsed: 50_000n, gasPrice: 2_000_000n });
+      expect(chain.feed.some((t) => t.hash === hash)).toBe(false);
+      expect(chain.native.some((t) => t.hash === hash)).toBe(false);
+
+      await executeTool(wallet.userId, 'check_books_complete', {});
+      const text = await finished();
+      record('Failed zero-value sent transaction found for its fee', text);
+      expect(text).toContain(`network fee of 0.0000001 ETH (${hash.slice(0, 6)}…${hash.slice(-4)}): I haven't synced it yet`);
     });
   });
 

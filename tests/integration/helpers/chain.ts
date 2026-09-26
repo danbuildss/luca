@@ -19,6 +19,9 @@ export const chain = {
   logs: [] as RpcLog[],
   sent: [] as BlockscoutTx[],
   receipts: new Map<string, RpcReceipt>(),
+  // Top-level ETH transfers as Blockscout's transaction list sees them, independent of
+  // what Alchemy's transfer feed reports
+  native: [] as Array<{ hash: string; block: number; from: string; to: string; wei: bigint }>,
   blockTxs: new Map<number, Array<{ hash: string; from: string; to: string | null }>>(),
   truth: [] as Truth[],
   feedDown: false,
@@ -39,6 +42,7 @@ export function resetChain(): void {
   chain.logs = [];
   chain.sent = [];
   chain.receipts = new Map();
+  chain.native = [];
   chain.blockTxs = new Map();
   chain.truth = [];
   chain.feedDown = false;
@@ -94,11 +98,16 @@ export function spamTransfer(wallet: string, o: { block: number; from: string; r
 
 // Native ETH moving in or out. category 'internal' = received from a contract call.
 export function ethTransfer(wallet: string, o: {
-  block: number; from: string; to: string; wei: bigint; category?: 'external' | 'internal'; inFeed?: boolean; txHash?: string;
+  block: number; from: string; to: string; wei: bigint; category?: 'external' | 'internal'; inFeed?: boolean;
+  inBlockscout?: boolean; txHash?: string;
 }): string {
   const h = o.txHash ?? hash();
   const category = o.category ?? 'external';
   move(wallet, null, o.block, o.from, o.to, o.wei);
+  // Blockscout lists top-level transactions only: never ETH a contract sent internally
+  if (category === 'external' && (o.inBlockscout ?? true)) {
+    chain.native.push({ hash: h, block: o.block, from: o.from, to: o.to, wei: o.wei });
+  }
   if (o.inFeed ?? true) {
     chain.feed.push({
       blockNum: hex(o.block), uniqueId: category === 'external' ? `${h}:external` : `${h}:internal:0`, hash: h,
@@ -150,11 +159,12 @@ function involves(t: AlchemyTransfer, wallet: string): boolean {
 function transferReceipt(h: string): RpcReceipt | undefined {
   const t = chain.feed.find((x) => x.hash === h);
   const l = chain.logs.find((x) => x.transactionHash === h);
-  if (!t && !l) return undefined;
-  const block = t ? t.blockNum : l!.blockNumber;
+  const n = chain.native.find((x) => x.hash === h);
+  if (!t && !l && !n) return undefined;
+  const block = t ? t.blockNum : l ? l.blockNumber : `0x${n!.block.toString(16)}`;
   return {
     transactionHash: h, blockNumber: block, blockHash: `0xb${parseInt(block, 16)}`, status: '0x1',
-    from: t?.from ?? '0x9999999999999999999999999999999999999999', to: t?.to ?? null,
+    from: t?.from ?? n?.from ?? '0x9999999999999999999999999999999999999999', to: t?.to ?? n?.to ?? null,
     gasUsed: '0x0', effectiveGasPrice: '0x0', l1Fee: '0x0',
   };
 }
@@ -188,14 +198,14 @@ export function alchemyMock<T extends Record<string, unknown>>(orig: T): T {
     },
     getTransaction: (_k: string, h: string) => {
       const sent = chain.receipts.get(h);
-      const ext = chain.feed.find((t) => t.hash === h && t.category === 'external');
+      const ext = chain.native.find((t) => t.hash === h);
       const any = sent ?? transferReceipt(h);
       if (!any) return Promise.resolve(null);
       return Promise.resolve({
         hash: h,
         from: ext?.from ?? any.from,
         to: ext?.to ?? any.to,
-        value: ext ? BigInt(ext.rawContract.value ?? '0x0') : 0n,
+        value: ext?.wei ?? 0n,
         blockNumber: parseInt(any.blockNumber, 16),
       });
     },
@@ -241,13 +251,14 @@ export function blockscoutMock<T extends Record<string, unknown>>(orig: T): T {
           timestamp: t.metadata.blockTimestamp,
           log_index: t.uniqueId.split(':').at(-1) ?? null,
         }))),
+    // Successful, value-bearing top-level ETH transactions in or out, from its own list
     fetchNativeTransactions: (wallet: string, from: number) => Promise.resolve(
-      chain.feed
-        .filter((t) => t.category === 'external' && parseInt(t.blockNum, 16) >= from && involves(t, wallet))
+      chain.native
+        .filter((t) => t.block >= from && [t.from.toLowerCase(), t.to.toLowerCase()].includes(wallet.toLowerCase()))
         .map((t) => ({
-          hash: t.hash, block_number: parseInt(t.blockNum, 16), timestamp: t.metadata.blockTimestamp,
-          from: { hash: t.from }, to: t.to ? { hash: t.to } : null,
-          value: BigInt(t.rawContract.value ?? '0x0').toString(), gas_used: null, gas_price: null, status: 'ok',
+          hash: t.hash, block_number: t.block, timestamp: time(t.block),
+          from: { hash: t.from }, to: { hash: t.to },
+          value: t.wei.toString(), gas_used: null, gas_price: null, status: 'ok',
         }))),
   };
 }
