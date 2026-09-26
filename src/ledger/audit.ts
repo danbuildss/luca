@@ -1,7 +1,7 @@
 import { query } from '../db.js';
 import { fetchAllTransfers, blockToHex, getCurrentBlock, RpcError } from '../ingestion/alchemy.js';
 import { fetchSupportedTokenLogs } from '../ingestion/logs.js';
-import { fetchSentTransactions } from '../ingestion/blockscout.js';
+import { fetchSentTransactions, fetchNativeTransactions, minedBlock } from '../ingestion/blockscout.js';
 import { traceTransaction, type TraceLayer, type TraceResult } from './trace.js';
 
 // Real-wallet check for the roadmap's Phase 1 gate: every transaction any source knows
@@ -17,6 +17,8 @@ export const BLOCKS_PER_DAY = 43_200;
 // every 60 seconds to 10 blocks short of the tip, so anything older than 5 minutes that
 // is not in the books is a real miss, not a sync that simply has not run yet. Base
 // reorgs are far shallower than this.
+// This is a policy, not a protocol guarantee: it could later follow Base's own "safe"
+// head (eth_getBlockByNumber('safe')) instead of a fixed margin.
 export const AUDIT_SAFE_MARGIN_BLOCKS = 150;
 
 export async function safeBlock(apiKey: string): Promise<number> {
@@ -107,11 +109,20 @@ export async function auditRange(
 ): Promise<WalletAudit> {
   const { wallet_id, address: wallet, from_block: fromBlock, to_block: toBlock } = range;
 
-  // Every source's view of the wallet's history over the range. These calls only talk to
-  // the providers, so any failure here means a provider did not answer.
-  const [feed, logs, sent] = await Promise.all([
+  // Every source's view of the wallet's history over the range, each independent of the
+  // others so one provider's miss is another's find:
+  //   Alchemy's transfer feed    ETH (top-level and contract-sent), USDC, BNKR
+  //   token Transfer logs        USDC and BNKR, read from the contracts
+  //   Blockscout native list     top-level ETH in or out (an inbound payment Alchemy
+  //                              missed would otherwise go unseen)
+  //   Blockscout sent list       everything the wallet sent, failed and zero-value included (fees)
+  // ETH a contract sends inside a transaction appears only in Alchemy's feed; the hourly
+  // balance check is what catches a miss there. These calls only talk to the providers,
+  // so any failure here means a provider did not answer.
+  const [feed, logs, native, sent] = await Promise.all([
     fetchAllTransfers(apiKey, wallet, blockToHex(fromBlock), blockToHex(toBlock)),
     fetchSupportedTokenLogs(apiKey, wallet, fromBlock, toBlock),
+    fetchNativeTransactions(wallet, fromBlock),
     fetchSentTransactions(wallet, fromBlock, toBlock),
   ]).catch((err: unknown) => { throw new ProviderUnavailableError(err); });
   const stored = await query<{ hash: string }>(
@@ -125,6 +136,8 @@ export async function auditRange(
   const hashes = [...new Set([
     ...feed.map((t) => t.hash.toLowerCase()),
     ...logs.filter((l) => l.raw > 0n).map((l) => l.hash.toLowerCase()),
+    // Blockscout's native list runs to the latest block; keep only this range
+    ...native.filter((t) => minedBlock(t) <= toBlock).map((t) => t.hash.toLowerCase()),
     ...sent.map((t) => t.hash.toLowerCase()),
     ...stored.rows.map((r) => r.hash),
   ])].sort();
