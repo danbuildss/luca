@@ -6,6 +6,7 @@ import {
   insertAlert, sql, type WalletFx,
 } from './helpers/db.js';
 import { detectLargeMovements, detectSpendSpike } from '../../src/alerts/detectors.js';
+import { runAlertDetectors } from '../../src/alerts/engine.js';
 
 async function alertsOf(userId: string, type: string) {
   return sql<{ dedup_key: string; evidence: Record<string, unknown> }>(
@@ -111,6 +112,41 @@ describeDb('alert detectors (integration)', () => {
       await insertAlert({ userId: user.id, type: 'spend_spike', createdAt: '23 hours' });
 
       expect(await detectSpendSpike(user.id)).toBe(0);
+    });
+
+    it('is verified when every expense behind it is confirmed', async () => {
+      const { user, wallet } = await seedUserWithWallet({ materialityUsd: 1 });
+      await seedBaseline(wallet);
+      await insertClassifiedEvent({ wallet, direction: 'out', label: 'expense', amount: 50, usdValue: 50, at: '1 hour', method: 'counterparty' });
+      expect(await detectSpendSpike(user.id)).toBe(1);
+      const [a] = await sql<{ certainty: string }>('SELECT certainty FROM alerts WHERE user_id = $1', [user.id]);
+      expect(a.certainty).toBe('verified');
+    });
+
+    it('is suspected, and says so, when part of the spend is labeled by the AI', async () => {
+      const { user, wallet } = await seedUserWithWallet({ materialityUsd: 1 });
+      await seedBaseline(wallet);
+      await insertClassifiedEvent({ wallet, direction: 'out', label: 'expense', amount: 20, usdValue: 20, at: '1 hour', method: 'counterparty' });
+      await insertClassifiedEvent({ wallet, direction: 'out', label: 'expense', amount: 30, usdValue: 30, at: '2 hours', method: 'model', confidence: 0.7 });
+      expect(await detectSpendSpike(user.id)).toBe(1);
+      const [a] = await sql<{ certainty: string; message: string }>('SELECT certainty, message FROM alerts WHERE user_id = $1', [user.id]);
+      expect(a.certainty).toBe('suspected');
+      expect(a.message).toContain('By my count');
+      expect(a.message).toContain('$30.00 of that is labeled by my best guess');
+    });
+
+    it('is not evaluated while a wallet is behind on syncing', async () => {
+      const { user, wallet } = await seedUserWithWallet({ materialityUsd: 1 });
+      await seedBaseline(wallet);
+      await insertClassifiedEvent({ wallet, direction: 'out', label: 'expense', amount: 100, usdValue: 100, at: '1 hour' });
+      await sql(`UPDATE watch_jobs SET last_synced_at = NOW() - INTERVAL '6 hours' WHERE wallet_id = $1`, [wallet.id]);
+
+      await runAlertDetectors(user.id);
+      expect(await alertsOf(user.id, 'spend_spike')).toHaveLength(0);
+
+      await sql(`UPDATE watch_jobs SET last_synced_at = NOW() WHERE wallet_id = $1`, [wallet.id]);
+      await runAlertDetectors(user.id);
+      expect(await alertsOf(user.id, 'spend_spike')).toHaveLength(1);
     });
 
     it('cooldown is per user', async () => {

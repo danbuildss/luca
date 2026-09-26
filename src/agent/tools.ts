@@ -460,8 +460,8 @@ export async function executeTool(
       const periodDays = (args.period_days as number | undefined) ?? 1;
       const [overview, alerts] = await Promise.all([
         getOverview(userId, periodDays),
-        query<{ type: string; message: string; created_at: Date }>(
-          `SELECT type, message, created_at
+        query<{ type: string; message: string; certainty: string | null; created_at: Date }>(
+          `SELECT type, message, certainty, created_at
            FROM alerts
            WHERE user_id = $1 AND created_at >= NOW() - INTERVAL '24 hours'
            ORDER BY created_at DESC
@@ -478,10 +478,11 @@ export async function executeTool(
         id: string;
         type: string;
         message: string;
+        certainty: string | null;
         created_at: Date;
         sent_at: Date | null;
       }>(
-        `SELECT id, type, message, created_at, sent_at
+        `SELECT id, type, message, certainty, created_at, sent_at
          FROM alerts
          WHERE user_id = $1
          ORDER BY created_at DESC
