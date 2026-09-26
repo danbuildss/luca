@@ -9,6 +9,9 @@ import { getLedgerStatus } from '../ledger/status.js';
 import { getEventsForReview, getEventWithClassification, resolveEventRef } from '../corrections/store.js';
 import { applyCorrection, describeRuleOutcome } from '../corrections/handler.js';
 import { ClassificationLabel, CLASSIFICATION_LABELS, WALLET_ROLES, SUPPORTED_CHAINS } from '../types/index.js';
+import { requestAudit, auditRequestForModel, movementStatus, amountText, isMissing } from '../ledger/audit-runs.js';
+import { traceTransaction } from '../ledger/trace.js';
+import { config } from '../config.js';
 
 // ---------------------------------------------------------------------------
 // Tool definitions (OpenAI function calling schema)
@@ -233,6 +236,32 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
   {
     type: 'function',
     function: {
+      name: 'check_books_complete',
+      description: "Check that everything the chain shows for the operator's own wallets reached their books: nothing missing, nothing stuck unlabeled or unpriced. Use for \"are my books complete?\", \"are you missing anything?\", \"check my wallets\", \"did you catch everything yesterday?\" (days: 1). The check runs in the background and its result is sent as its own message; a recent result is returned directly when the books have not changed.",
+      parameters: {
+        type: 'object',
+        properties: {
+          days: { type: 'number', description: 'Only check the last N days, e.g. 1 for "yesterday". Omit to check everything Luca has tracked.' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'check_transaction',
+      description: "Check whether one transaction reached the operator's books and how it is recorded, or where it got lost. Use for \"did you see transaction 0x…?\" or \"why isn't this payment in my books?\". Only the operator's own wallets are shown.",
+      parameters: {
+        type: 'object',
+        properties: { hash: { type: 'string', description: 'The full transaction hash (0x followed by 64 hex characters).' } },
+        required: ['hash'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'register_wallet',
       description: "Register a new wallet for tracking. Use this when the operator gives you a wallet address and asks you to watch it or start tracking it. This is a write operation.",
       parameters: {
@@ -240,7 +269,7 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
         properties: {
           address: {
             type: 'string',
-            description: 'The wallet address (0x... for Base/EVM, base58 for Solana).',
+            description: 'The Base wallet address (0x followed by 40 hex characters).',
           },
           chain: {
             type: 'string',
@@ -278,6 +307,15 @@ export async function prepareWriteAction(
   toolName: string,
   args: Record<string, unknown>,
 ): Promise<PreparedWrite> {
+  // Checked before the Confirm button is shown, so the operator never confirms a wallet
+  // Luca cannot track
+  if (toolName === 'register_wallet') {
+    if ((args.chain ?? 'base') !== 'base') return { ok: false, error: 'Luca only tracks wallets on Base.' };
+    if (!/^0x[0-9a-fA-F]{40}$/.test(argText(args.address))) {
+      return { ok: false, error: 'That is not a Base wallet address (0x followed by 40 hex characters).' };
+    }
+    return { ok: true, args };
+  }
   if (toolName !== 'apply_correction') return { ok: true, args };
 
   if (!(CLASSIFICATION_LABELS as ReadonlyArray<string>).includes(String(args.new_label))) {
@@ -504,7 +542,10 @@ export async function executeTool(
       const role = (args.role as string | undefined) ?? null;
 
       const BASE_ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
-      if (chain === 'base' && !BASE_ADDR_RE.test(args.address as string)) {
+      if (chain !== 'base') {
+        return { error: 'Luca only tracks wallets on Base.' };
+      }
+      if (!BASE_ADDR_RE.test(args.address as string)) {
         return { error: 'Invalid Base address format — must be 0x + 40 hex chars' };
       }
 
@@ -534,6 +575,39 @@ export async function executeTool(
       }
 
       return { success: true, wallet_id: walletId, address, chain, label, role };
+    }
+
+    case 'check_books_complete': {
+      const days = typeof args.days === 'number' ? args.days : null;
+      return auditRequestForModel(await requestAudit({ userId, requestedBy: userId, days }));
+    }
+
+    case 'check_transaction': {
+      const hash = argText(args.hash).trim();
+      if (!/^0x[0-9a-fA-F]{64}$/.test(hash)) return { error: 'Ask the operator for the full transaction hash: 0x followed by 64 hex characters.' };
+      const trace = await traceTransaction(hash, config.ALCHEMY_API_KEY);
+      const own = await query<{ id: string }>(`SELECT id FROM wallets WHERE user_id = $1`, [userId]);
+      const mine = new Set(own.rows.map((r) => r.id));
+      // Only the operator's own wallets: say nothing about anyone else's
+      const movements = trace.movements.filter((m) => m.wallet_id && mine.has(m.wallet_id));
+      if (movements.length === 0) {
+        return { found: false, note: "This transaction does not involve any of the operator's wallets, or it does not exist on Base." };
+      }
+      return {
+        found: true,
+        failed_on_chain: trace.status === 'failed',
+        chain_checked: trace.checked_chain,
+        movements: movements.map((m) => ({
+          wallet: `${m.wallet.slice(0, 6)}…${m.wallet.slice(-4)}`,
+          what: m.source_key === 'gas' ? 'network fee' : m.source_key,
+          amount: amountText(m),
+          direction: m.direction,
+          usd_value: m.usd_value,
+          label: m.label,
+          status: movementStatus(m),
+          missing: isMissing(m.lost_at),
+        })),
+      };
     }
 
     default:

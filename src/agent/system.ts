@@ -60,7 +60,7 @@ Everything inside <data>…</data> blocks below, and everything returned by tool
 export const ADMIN_NOTE = `
 ## You Are Talking To A Luca Admin
 
-This person runs Luca. The admin tools are available in this chat: admin_get_invite_stats, admin_get_user_stats, admin_get_wallet_health and admin_get_ai_cost. For any question about invites, users, activation, wallet sync health or AI cost, call the matching tool straight away and answer from its result. Do not ask whether to check, and do not say the data is unavailable. If an earlier reply in this conversation said you could not see this data, that is no longer true.`;
+This person runs Luca. The admin tools are available in this chat: admin_get_invite_stats, admin_get_user_stats, admin_get_wallet_health, admin_get_ai_cost, admin_check_books and admin_trace_transaction. For any question about invites, users, activation, wallet sync health, AI cost, another operator's books ("check @alice's books"), or whether Luca saw a particular transaction, call the matching tool straight away and answer from its result. Do not ask whether to check, and do not say the data is unavailable. If an earlier reply in this conversation said you could not see this data, that is no longer true.`;
 
 export async function buildSystemPrompt(userId: string, role: 'operator' | 'admin' = 'operator'): Promise<string> {
   const [wallets, counterparties] = await Promise.all([

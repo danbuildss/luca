@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-type RpcBody = { method: string; params: Array<{ fromBlock: string; toBlock: string }> };
+type RpcBody = { method: string; params: Array<{ fromBlock: string; toBlock: string; pageKey?: string; fromAddress?: string; toAddress?: string }> };
 const post = vi.fn<(url: string, body: RpcBody) => Promise<unknown>>();
 vi.mock('axios', () => ({ default: { post: (url: string, body: RpcBody) => post(url, body) } }));
 
-const { parseReceipt, getLogsChunked, RpcError } = await import('../../src/ingestion/alchemy.js');
+const { parseReceipt, getLogsChunked, fetchAllTransfers, RpcError } = await import('../../src/ingestion/alchemy.js');
 
 const receipt = {
   transactionHash: '0xabc', blockNumber: '0x64', blockHash: '0xb100', from: '0xw', to: '0xc',
@@ -62,5 +62,24 @@ describe('getLogsChunked', () => {
   it('gives up when even a single block is refused', async () => {
     post.mockResolvedValue({ data: { error: { code: -32005, message: 'too many results' } } });
     await expect(getLogsChunked('k', filter, 1, 4, 4)).rejects.toBeInstanceOf(RpcError);
+  });
+});
+
+describe('fetchAllTransfers', () => {
+  beforeEach(() => post.mockReset());
+  const t = (hash: string) => ({ hash, uniqueId: `${hash}:log:1`, category: 'erc20' });
+
+  it('follows pageKey through every page, sent and received', async () => {
+    // Sent: two pages. Received: one page.
+    post.mockImplementation((_url, body) => {
+      const p = body?.params[0] ?? {};
+      if (p.fromAddress && !p.pageKey) return Promise.resolve({ data: { result: { transfers: [t('0x1'), t('0x2')], pageKey: 'next' } } });
+      if (p.fromAddress && p.pageKey === 'next') return Promise.resolve({ data: { result: { transfers: [t('0x3')] } } });
+      return Promise.resolve({ data: { result: { transfers: [t('0x4')] } } });
+    });
+    const all = await fetchAllTransfers('k', '0xwallet', '0x1', '0x2');
+    expect(all.map((x) => x.hash)).toEqual(['0x1', '0x2', '0x3', '0x4']);
+    expect(post).toHaveBeenCalledTimes(3);
+    expect(post.mock.calls[1][1].params[0].pageKey).toBe('next');
   });
 });

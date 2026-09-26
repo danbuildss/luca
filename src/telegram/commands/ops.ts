@@ -11,6 +11,8 @@ import { getLedgerHealth } from '../../ledger/status.js';
 import { getPriceSourceChecks } from '../../pricing/onchain.js';
 import { BASE_BNKR } from '../../ingestion/assets.js';
 import { escapeLegacyMarkdown, replyMarkdownSafe } from '../format.js';
+import { traceTransaction, describeTrace } from '../../ledger/trace.js';
+import { config } from '../../config.js';
 
 // Escape DB/user-controlled text for legacy Markdown (usernames often contain `_`).
 function md(value: string | number | null | undefined): string {
@@ -80,6 +82,7 @@ async function handleOpsOverview(ctx: Context): Promise<void> {
     ``,
     `_/ops @username — per-user view_`,
     `_/ops errors — current failures_`,
+    `_/ops trace 0x… — follow one transaction through every layer_`,
   ];
 
   await replyMarkdownSafe(ctx, lines.join('\n'));
@@ -228,6 +231,16 @@ async function handleOpsOperators(ctx: Context): Promise<void> {
   await replyMarkdownSafe(ctx, lines.join('\n'));
 }
 
+// /ops trace <hash> — follow one transaction through every layer
+async function handleOpsTrace(ctx: Context, hash: string | undefined): Promise<void> {
+  if (!hash || !/^0x[0-9a-fA-F]{64}$/.test(hash)) {
+    await ctx.reply('Usage: /ops trace 0x… (the full 66-character transaction hash)');
+    return;
+  }
+  const trace = await traceTransaction(hash, config.ALCHEMY_API_KEY);
+  await ctx.reply(describeTrace(trace).join('\n'));
+}
+
 export async function handleOps(ctx: Context, user: AuthedUser, args: string[]): Promise<void> {
   if (user.role !== 'admin') {
     await ctx.reply('That one is for admins only.');
@@ -236,7 +249,9 @@ export async function handleOps(ctx: Context, user: AuthedUser, args: string[]):
 
   const sub = args[0] ?? '';
 
-  if (sub === 'errors') {
+  if (sub === 'trace') {
+    await handleOpsTrace(ctx, args[1]);
+  } else if (sub === 'errors') {
     await handleOpsErrors(ctx);
   } else if (sub === 'operators' || sub === 'users') {
     await handleOpsOperators(ctx);
