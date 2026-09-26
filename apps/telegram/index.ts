@@ -260,7 +260,7 @@ bot.on('text', async (ctx) => {
     // Typing indicator while agent works
     await ctx.sendChatAction('typing');
 
-    const { text, pendingActions } = await runAgent({ userId: user.userId, userMessage });
+    const { text, pendingActions } = await runAgent({ userId: user.userId, userMessage, role: user.role });
     await replyMarkdownSafe(ctx, text);
 
     // Write actions the agent proposed — executed only after the user confirms.

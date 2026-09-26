@@ -22,8 +22,8 @@ export async function checkUsdcPeg(apiKey: string): Promise<number | null> {
   const shown = `$${price.toFixed(4)}`;
   for (const { user_id } of holders.rows) {
     await query(
-      `INSERT INTO alerts (user_id, type, message, evidence, dedup_key)
-       VALUES ($1, 'usdc_depeg', $2, $3, $4)
+      `INSERT INTO alerts (user_id, type, message, evidence, dedup_key, certainty)
+       VALUES ($1, 'usdc_depeg', $2, $3, $4, 'verified')
        ON CONFLICT (dedup_key) DO NOTHING`,
       [
         user_id,

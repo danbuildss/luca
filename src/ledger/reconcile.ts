@@ -245,8 +245,8 @@ async function markIncomplete(w: ReconcileWallet, apiKey: string, driftBlock: nu
 
   const when = since ? since.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : `block ${driftBlock}`;
   await query(
-    `INSERT INTO alerts (user_id, type, message, evidence, dedup_key)
-     VALUES ($1, 'ledger_incomplete', $2, $3, $4)
+    `INSERT INTO alerts (user_id, type, message, evidence, dedup_key, certainty)
+     VALUES ($1, 'ledger_incomplete', $2, $3, $4, 'data_issue')
      ON CONFLICT (dedup_key) DO NOTHING`,
     [
       w.user_id,

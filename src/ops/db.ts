@@ -1,5 +1,9 @@
 import { query } from '../db.js';
 import { logger } from '../logger.js';
+import {
+  getInviteStats, getUserStats, getWalletHealth, STALE_HOURS,
+  type InviteStats, type UserStats, type WalletHealth,
+} from './metrics.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -33,6 +37,7 @@ export type OpsOperatorRow = {
 // ---------------------------------------------------------------------------
 
 export async function getOpsOverview(): Promise<{
+  // Flat fields kept for the ops web page; they come from the same shared metrics
   total_operators: number;
   activated_operators: number;
   active_24h: number;
@@ -40,6 +45,9 @@ export async function getOpsOverview(): Promise<{
   total_wallets: number;
   stale_wallets: number;
   error_wallets: number;
+  users: UserStats;
+  invites: InviteStats;
+  wallets: WalletHealth;
   worker_last_ping: Date | null;
   worker_loop_count: number;
   worker_minutes_stale: number | null;
@@ -50,22 +58,10 @@ export async function getOpsOverview(): Promise<{
   llm_cost_7d: number;
   total_unknown: number;
 }> {
-  const [ops, worker, ingested, alerts, briefs, cost, unknown] = await Promise.all([
-    query<{
-      total: string; activated: string; active_24h: string; active_7d: string;
-      total_wallets: string; stale_wallets: string; error_wallets: string;
-    }>(`
-      SELECT
-        COUNT(*)::text AS total,
-        COUNT(*) FILTER (WHERE u.activated_at IS NOT NULL)::text AS activated,
-        COUNT(*) FILTER (WHERE u.last_user_active_at > NOW() - INTERVAL '24 hours')::text AS active_24h,
-        COUNT(*) FILTER (WHERE u.last_user_active_at > NOW() - INTERVAL '7 days')::text AS active_7d,
-        (SELECT COUNT(*)::text FROM wallets WHERE active = TRUE) AS total_wallets,
-        (SELECT COUNT(*)::text FROM watch_jobs WHERE status = 'active'
-          AND last_synced_at < NOW() - INTERVAL '4 hours') AS stale_wallets,
-        (SELECT COUNT(*)::text FROM watch_jobs WHERE status = 'error') AS error_wallets
-      FROM users u
-    `),
+  const [users, invites, wallets, worker, ingested, alerts, briefs, cost, unknown] = await Promise.all([
+    getUserStats(),
+    getInviteStats(),
+    getWalletHealth(),
 
     query<{ last_ping_at: Date; loop_count: string }>(
       `SELECT last_ping_at, loop_count FROM worker_heartbeat WHERE id = 1`,
@@ -95,22 +91,28 @@ export async function getOpsOverview(): Promise<{
        FROM llm_spend_log`,
     ),
 
+    // Unknowns an operator could be asked about: supported events on active wallets
     query<{ count: string }>(
-      `SELECT COUNT(*)::text AS count FROM classifications
-       WHERE label = 'unknown' AND superseded_at IS NULL`,
+      `SELECT COUNT(*)::text AS count
+       FROM classifications c
+       JOIN normalized_events ne ON ne.id = c.event_id AND ne.supported IS TRUE
+       JOIN wallets w ON w.id = ne.wallet_id AND w.active = TRUE
+       WHERE c.label = 'unknown' AND c.superseded_at IS NULL`,
     ),
   ]);
 
   const w = worker.rows[0];
-  const opsRow = ops.rows[0];
   return {
-    total_operators: parseInt(opsRow?.total ?? '0'),
-    activated_operators: parseInt(opsRow?.activated ?? '0'),
-    active_24h: parseInt(opsRow?.active_24h ?? '0'),
-    active_7d: parseInt(opsRow?.active_7d ?? '0'),
-    total_wallets: parseInt(opsRow?.total_wallets ?? '0'),
-    stale_wallets: parseInt(opsRow?.stale_wallets ?? '0'),
-    error_wallets: parseInt(opsRow?.error_wallets ?? '0'),
+    total_operators: users.total,
+    activated_operators: users.activated,
+    active_24h: users.active_24h,
+    active_7d: users.active_7d,
+    total_wallets: wallets.monitored,
+    stale_wallets: wallets.stale,
+    error_wallets: wallets.error,
+    users,
+    invites,
+    wallets,
     worker_last_ping: w?.last_ping_at ?? null,
     worker_loop_count: Number(w?.loop_count ?? 0),
     worker_minutes_stale: w ? (Date.now() - new Date(w.last_ping_at).getTime()) / 60000 : null,
@@ -342,19 +344,21 @@ export async function getOpsErrors(): Promise<{
        FROM watch_jobs wj
        JOIN wallets w ON w.id = wj.wallet_id
        JOIN users u ON u.id = w.user_id
-       WHERE wj.status = 'error'
+       WHERE wj.status = 'error' AND w.active = TRUE
        ORDER BY wj.updated_at DESC`,
     ),
 
     query<{ username: string | null; address: string; hours_stale: string; last_synced_at: Date | null }>(
+      // Same definition as the overview's Stale count (src/ops/metrics.ts)
       `SELECT u.telegram_username AS username, w.address, wj.last_synced_at,
-              EXTRACT(EPOCH FROM (NOW() - COALESCE(wj.last_synced_at, NOW() - INTERVAL '48 hours'))) / 3600 AS hours_stale
-       FROM watch_jobs wj
-       JOIN wallets w ON w.id = wj.wallet_id
+              EXTRACT(EPOCH FROM (NOW() - COALESCE(wj.last_synced_at, w.created_at))) / 3600 AS hours_stale
+       FROM wallets w
        JOIN users u ON u.id = w.user_id
-       WHERE wj.status = 'active'
-         AND COALESCE(wj.last_synced_at, NOW() - INTERVAL '48 hours') < NOW() - INTERVAL '4 hours'
+       LEFT JOIN watch_jobs wj ON wj.wallet_id = w.id
+       WHERE w.active = TRUE AND wj.status IS DISTINCT FROM 'error'
+         AND (wj.last_synced_at IS NULL OR wj.last_synced_at < NOW() - ($1::int * INTERVAL '1 hour'))
        ORDER BY hours_stale DESC`,
+      [STALE_HOURS],
     ),
 
     query<{ username: string | null; type: string; created_at: Date }>(

@@ -11,9 +11,14 @@ type AlertType =
   | 'unusual_gas'
   | 'classifier_degradation';
 
+// verified: complete data; suspected: a real signal on partial data (e.g. AI-guessed
+// labels); data_issue: about Luca's data, never a financial claim
+type Certainty = 'verified' | 'suspected' | 'data_issue';
+
 type NewAlert = {
   userId: string;
   type: AlertType;
+  certainty: Certainty;
   message: string;
   evidence: Record<string, unknown>;
   dedupKey: string;
@@ -22,11 +27,11 @@ type NewAlert = {
 // Returns true when a new alert row was inserted (false = dedup hit, already exists)
 async function insertAlert(alert: NewAlert): Promise<boolean> {
   const res = await query<{ id: string }>(
-    `INSERT INTO alerts (user_id, type, message, evidence, dedup_key)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO alerts (user_id, type, message, evidence, dedup_key, certainty)
+     VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT (dedup_key) DO NOTHING
      RETURNING id`,
-    [alert.userId, alert.type, alert.message, JSON.stringify(alert.evidence), alert.dedupKey],
+    [alert.userId, alert.type, alert.message, JSON.stringify(alert.evidence), alert.dedupKey, alert.certainty],
   );
   return res.rows.length > 0;
 }
@@ -44,8 +49,8 @@ async function insertAlertWithCooldown(
   scope?: { evidenceKey: string; value: string },
 ): Promise<boolean> {
   const res = await query<{ id: string }>(
-    `INSERT INTO alerts (user_id, type, message, evidence, dedup_key)
-     SELECT $1::uuid, $2::text, $3::text, $4::jsonb, $5::text
+    `INSERT INTO alerts (user_id, type, message, evidence, dedup_key, certainty)
+     SELECT $1::uuid, $2::text, $3::text, $4::jsonb, $5::text, $9::text
      WHERE NOT EXISTS (
        SELECT 1 FROM alerts a
        WHERE a.user_id = $1::uuid
@@ -64,6 +69,7 @@ async function insertAlertWithCooldown(
       ALERT_COOLDOWN_HOURS,
       scope?.evidenceKey ?? null,
       scope?.value ?? null,
+      alert.certainty,
     ],
   );
   return res.rows.length > 0;
@@ -143,6 +149,7 @@ export async function detectLargeMovements(userId: string): Promise<number> {
     const inserted = await insertAlert({
       userId,
       type,
+      certainty: 'verified',
       message,
       evidence: {
         event_id: row.event_id,
@@ -171,6 +178,7 @@ export async function detectSpendSpike(userId: string): Promise<number> {
   const res = await query<{
     spend_24h: string | null;
     spend_baseline: string | null;
+    provisional_24h: string | null;
     materiality_usd: string | null;
     has_history: boolean | null;
   }>(
@@ -181,6 +189,9 @@ export async function detectSpendSpike(userId: string): Promise<number> {
        SUM(CASE WHEN ne.block_time < NOW() - INTERVAL '1 day'
                 THEN ${USD}
                 ELSE 0 END)::text AS spend_baseline,
+       SUM(CASE WHEN ne.block_time >= NOW() - INTERVAL '1 day' AND c.status = 'provisional'
+                THEN ${USD}
+                ELSE 0 END)::text AS provisional_24h,
        MAX(u.materiality_usd)::text AS materiality_usd,
        (SELECT MIN(e.block_time) <= NOW() - INTERVAL '7 days'
           FROM normalized_events e WHERE e.user_id = $1 AND e.supported IS TRUE) AS has_history
@@ -212,14 +223,22 @@ export async function detectSpendSpike(userId: string): Promise<number> {
   const context = isFinite(spikeRatio)
     ? `${spikeRatio.toFixed(1)}x your usual $${dailyAvg.toFixed(2)} a day over the previous ${BASELINE_DAYS} days`
     : `with no spending in the previous ${BASELINE_DAYS} days`;
-  const message = [
-    `Spending is up`,
-    `You spent $${spend24h.toFixed(2)} in the last 24 hours, ${context}.`,
-  ].join('\n');
+  // Spending that includes AI-guessed labels is a suspected spike, worded as a question
+  const guessed = parseFloat(row.provisional_24h ?? '0');
+  const message = guessed > 0
+    ? [
+        `Spending looks up`,
+        `By my count you spent $${spend24h.toFixed(2)} in the last 24 hours, ${context}. $${guessed.toFixed(2)} of that is labeled by my best guess; can you confirm those are expenses?`,
+      ].join('\n')
+    : [
+        `Spending is up`,
+        `You spent $${spend24h.toFixed(2)} in the last 24 hours, ${context}.`,
+      ].join('\n');
 
   const inserted = await insertAlertWithCooldown({
     userId,
     type: 'spend_spike',
+    certainty: guessed > 0 ? 'suspected' : 'verified',
     message,
     evidence: {
       spend_24h: spend24h,
@@ -247,13 +266,14 @@ export async function detectTreasuryFloor(userId: string): Promise<number> {
     wallet_label: string | null;
     balance: string;
     materiality_usd: string;
+    snapshot_at: Date;
   }>(
     `SELECT DISTINCT ON (bs.wallet_id)
        w.id AS wallet_id, w.address AS wallet_address, w.label AS wallet_label,
-       bs.balance::text,
+       bs.balance::text, bs.snapshot_at,
        u.materiality_usd::text
      FROM balance_snapshots bs
-     JOIN wallets w ON w.id = bs.wallet_id
+     JOIN wallets w ON w.id = bs.wallet_id AND w.active = TRUE
      JOIN wallet_roles wr ON wr.wallet_id = w.id AND wr.role = 'treasury'
      JOIN users u ON u.id = bs.user_id
      WHERE bs.user_id = $1 AND bs.asset = 'USDC'
@@ -263,6 +283,8 @@ export async function detectTreasuryFloor(userId: string): Promise<number> {
 
   let count = 0;
   for (const row of res.rows) {
+    // A balance older than 2 hours proves nothing about now (wallet_stale covers that)
+    if (Date.now() - new Date(row.snapshot_at).getTime() > 2 * 60 * 60 * 1000) continue;
     const balance = parseFloat(row.balance);
     const threshold = parseFloat(row.materiality_usd);
     if (balance >= threshold) continue;
@@ -281,6 +303,7 @@ export async function detectTreasuryFloor(userId: string): Promise<number> {
       {
         userId,
         type: 'treasury_floor',
+        certainty: 'verified',
         message,
         evidence: { wallet_id: row.wallet_id, balance, threshold },
         dedupKey,
@@ -348,6 +371,7 @@ export async function detectUnusualGas(userId: string): Promise<number> {
   const inserted = await insertAlertWithCooldown({
     userId,
     type: 'unusual_gas',
+    certainty: 'verified',
     message,
     evidence: { gas_24h: gas24h, daily_avg: dailyAvg, spike_ratio: spikeRatio, baseline_days: BASELINE_DAYS },
     dedupKey,
@@ -377,6 +401,7 @@ export async function detectClassifierDegradation(userId: string): Promise<numbe
   const inserted = await insertAlert({
     userId,
     type: 'classifier_degradation',
+    certainty: 'data_issue',
     message,
     evidence: { error_rate: rate, error_count: count, total_high_confidence },
     dedupKey,

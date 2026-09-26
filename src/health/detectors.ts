@@ -14,8 +14,8 @@ type HealthAlert = {
 
 async function insertHealthAlert(alert: HealthAlert): Promise<boolean> {
   const res = await query<{ id: string }>(
-    `INSERT INTO alerts (user_id, type, message, evidence, dedup_key)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO alerts (user_id, type, message, evidence, dedup_key, certainty)
+     VALUES ($1, $2, $3, $4, $5, 'data_issue')
      ON CONFLICT (dedup_key) DO NOTHING
      RETURNING id`,
     [alert.userId, alert.type, alert.message, JSON.stringify(alert.evidence), alert.dedupKey],

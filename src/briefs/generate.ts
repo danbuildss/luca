@@ -3,6 +3,8 @@ import { getPnlSummary } from '../books/query.js';
 import { escapeLegacyMarkdown, figuresBlock, provisionalNote } from '../telegram/format.js';
 import { usdValueSql } from '../ingestion/assets.js';
 import { getOpenUnknowns, PING_MIN_USD, type OpenUnknowns } from '../alerts/questions.js';
+import { getLedgerStatus, type LedgerStatus } from '../ledger/status.js';
+import type { PnlSummary } from '../books/query.js';
 
 // Unpriced rows count as 0 so totals and ORDER BY never see NULL
 const USD_OR_ZERO = `COALESCE(${usdValueSql('ne')}, 0)`;
@@ -82,6 +84,55 @@ async function getTopCounterparties(userId: string, periodDays: number, limit = 
   return res.rows;
 }
 
+// Supported transfers in the period worth mentioning: priced at PING_MIN_USD or more, or
+// not priced at all (so their size is unknown). Internal moves and swaps count here even
+// though they are not revenue or expenses.
+async function getMaterialActivity(userId: string, periodDays: number): Promise<number> {
+  const res = await query<{ count: number }>(
+    `SELECT COUNT(*)::int AS count
+     FROM normalized_events ne
+     JOIN wallets w ON w.id = ne.wallet_id AND w.active = TRUE
+     WHERE ne.user_id = $1
+       AND ne.supported IS TRUE
+       AND ne.amount <> 0
+       AND ne.block_time >= NOW() - INTERVAL '1 day' * $2
+       AND (${usdValueSql('ne')} IS NULL OR ABS(${usdValueSql('ne')}) >= $3)`,
+    [userId, periodDays, PING_MIN_USD],
+  );
+  return res.rows[0]?.count ?? 0;
+}
+
+const roundsToZero = (n: number): boolean => Math.abs(n) < 0.005;
+
+// Nothing happened in the period: no revenue, expenses or gas, no transfer worth
+// mentioning, and nothing in the period still waiting to be classified or priced.
+function isQuietPeriod(pnl: PnlSummary, materialCount: number): boolean {
+  return roundsToZero(pnl.revenue_usdc) && roundsToZero(pnl.expenses_usdc) && roundsToZero(pnl.gas_usdc)
+    && materialCount === 0 && pnl.pending_count === 0 && pnl.unpriced_count === 0
+    && pnl.unknown_count === 0 && pnl.provisional_count === 0;
+}
+
+// Books that could not be proven against the chain lead the brief, ahead of the figures
+function ledgerLead(ledger: LedgerStatus): string | null {
+  if (ledger.status !== 'incomplete') return null;
+  const n = ledger.wallets.filter((w) => w.status === 'incomplete').length;
+  return `Your books are incomplete: ${n === 1 ? 'one wallet has' : `${n} wallets have`} a balance change I cannot explain yet, so these figures may be missing transfers. I am working on it.`;
+}
+
+// A quiet period in one line. "Up to date" only when nothing is open and every wallet's
+// books were proven at the last check; otherwise the open items follow as the focus.
+function quietLines(header: string, period: 'day' | 'week', open: OpenUnknowns, ledger: LedgerStatus): string[] {
+  const quiet = period === 'day'
+    ? 'Quiet day yesterday. No revenue, expenses or material activity.'
+    : 'Quiet week. No revenue, expenses or material activity.';
+  const upToDate = open.count === 0 && ledger.status === 'complete';
+  const lines = [header, ``, upToDate ? `${quiet} Your books are up to date.` : quiet];
+  const lead = ledgerLead(ledger);
+  if (lead) lines.push(``, lead);
+  appendCounterpartiesAndUnknowns(lines, [], open, 0);
+  return lines;
+}
+
 // Counterparty names are user-set, so they stay outside the monospace block where
 // Markdown escaping applies.
 function appendCounterpartiesAndUnknowns(
@@ -117,11 +168,13 @@ function appendCounterpartiesAndUnknowns(
 
 // `timezone` (IANA) localises the header date; omitted → server timezone
 export async function generateDailyBrief(userId: string, timezone?: string): Promise<string> {
-  const [today, yesterday, open, topCounterparties] = await Promise.all([
+  const [today, yesterday, open, topCounterparties, material, ledger] = await Promise.all([
     getPnlSummary(userId, 1),
     getPnlSummary(userId, 2),
     getOpenUnknowns(userId),
     getTopCounterparties(userId, 1, 3),
+    getMaterialActivity(userId, 1),
+    getLedgerStatus(userId),
   ]);
 
   // yesterday-only figures = 2-day total minus today
@@ -135,9 +188,14 @@ export async function generateDailyBrief(userId: string, timezone?: string): Pro
     weekday: 'short', month: 'short', day: 'numeric',
   }, timezone);
 
+  const header = `*Daily brief, ${dateStr}*`;
+  if (isQuietPeriod(today, material)) return quietLines(header, 'day', open, ledger).join('\n');
+
+  const lead = ledgerLead(ledger);
   const lines: string[] = [
-    `*Daily brief, ${dateStr}*`,
+    header,
     ``,
+    ...(lead ? [lead, ``] : []),
     figuresBlock([
       ['Revenue', signedUsd(today.revenue_usdc), provisionalNote(today.revenue_provisional_usdc)],
       ['Expenses', signedUsd(-today.expenses_usdc, '-'), provisionalNote(today.expenses_provisional_usdc)],
@@ -157,11 +215,13 @@ export async function generateDailyBrief(userId: string, timezone?: string): Pro
 // ---------------------------------------------------------------------------
 
 export async function generateWeeklyBrief(userId: string, timezone?: string): Promise<string> {
-  const [thisWeek, twoWeeks, open, topCounterparties] = await Promise.all([
+  const [thisWeek, twoWeeks, open, topCounterparties, material, ledger] = await Promise.all([
     getPnlSummary(userId, 7),
     getPnlSummary(userId, 14),
     getOpenUnknowns(userId),
     getTopCounterparties(userId, 7, 5),
+    getMaterialActivity(userId, 7),
+    getLedgerStatus(userId),
   ]);
 
   const priorRevenue = twoWeeks.revenue_usdc - thisWeek.revenue_usdc;
@@ -176,9 +236,14 @@ export async function generateWeeklyBrief(userId: string, timezone?: string): Pr
   const dayOpts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' };
   const weekRange = `${formatDate(weekAgo, dayOpts, timezone)}–${formatDate(now, dayOpts, timezone)}`;
 
+  const header = `*Week of ${weekRange}*`;
+  if (isQuietPeriod(thisWeek, material)) return quietLines(header, 'week', open, ledger).join('\n');
+
+  const lead = ledgerLead(ledger);
   const lines: string[] = [
-    `*Week of ${weekRange}*`,
+    header,
     ``,
+    ...(lead ? [lead, ``] : []),
     figuresBlock([
       ['Revenue', signedUsd(thisWeek.revenue_usdc), `${revChange} vs prior week`],
       ['Expenses', signedUsd(-thisWeek.expenses_usdc, '-'), `${expChange} vs prior week`],

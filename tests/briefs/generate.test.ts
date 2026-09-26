@@ -63,12 +63,28 @@ describe('getPnlSummary', () => {
   });
 });
 
+// Brief query order: P&L for the period, P&L for twice the period, open unknowns, top
+// counterparties, material activity, ledger status. By default there is some activity
+// and the books are proven, so the full brief renders.
+const activity = (count: number) => ({ rows: [{ count }] });
+const ledger = (...statuses: string[]) => ({
+  rows: statuses.map((status, i) => ({
+    address: `0x${i}`, label: null, status, incomplete_since_at: null, incomplete_since_block: null, last_checked_at: null,
+  })),
+});
+function queueBrief(
+  pnl: { rows: unknown[] }, pnl2: { rows: unknown[] }, openRes: { rows: unknown[] }, top: { rows: unknown[] },
+  material = activity(1), ledgerRes = ledger('complete'),
+) {
+  queueResults(pnl, pnl2, openRes, top, material, ledgerRes);
+}
+
 describe('generateDailyBrief', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('prints signed revenue, expenses, gas and net', async () => {
     // Query order: getPnlSummary(1d), getPnlSummary(2d), open unknowns, topCounterparties
-    queueResults(
+    queueBrief(
       pnlRow('450', '23.50', '0.80'),   // today
       pnlRow('900', '47', '1.60'),       // 2d total
       open(2),                           // open unknowns
@@ -84,7 +100,7 @@ describe('generateDailyBrief', () => {
   });
 
   it('shows a negative net with a minus sign', async () => {
-    queueResults(
+    queueBrief(
       pnlRow('10', '60', '0'),
       pnlRow('20', '120', '0'),
       open(0),
@@ -96,7 +112,7 @@ describe('generateDailyBrief', () => {
   });
 
   it('includes gas in net', async () => {
-    queueResults(
+    queueBrief(
       pnlRow('100', '40', '10'),
       pnlRow('100', '40', '10'),
       open(0),
@@ -108,7 +124,7 @@ describe('generateDailyBrief', () => {
   });
 
   it('compares against yesterday-only figures', async () => {
-    queueResults(
+    queueBrief(
       pnlRow('150', '50', '0'),   // today
       pnlRow('250', '100', '0'),  // 2d → yesterday: rev 100, exp 50
       open(0),
@@ -121,7 +137,7 @@ describe('generateDailyBrief', () => {
   });
 
   it('includes unknown count nudge when unknowns exist', async () => {
-    queueResults(
+    queueBrief(
       pnlRow('100', '0', '0'),
       pnlRow('100', '0', '0'),
       open(5),
@@ -134,13 +150,13 @@ describe('generateDailyBrief', () => {
   });
 
   it('lists small unknowns that never got their own question', async () => {
-    queueResults(pnlRow('0', '0', '0'), pnlRow('0', '0', '0'), open(3, 2, '4.20'), { rows: [] });
+    queueBrief(pnlRow('0', '0', '0'), pnlRow('0', '0', '0'), open(3, 2, '4.20'), { rows: [] });
     const brief = await generateDailyBrief('user-1');
     expect(brief).toContain('3 transfers need context. 2 of them are under $10.00 ($4.20 in total), so I have not pinged you about them.');
   });
 
   it('shows the provisional part beside revenue and says how many labels are guesses', async () => {
-    queueResults(
+    queueBrief(
       { rows: [{ revenue_usdc: '450', expenses_usdc: '0', gas_usdc: '0', revenue_provisional_usdc: '300', provisional_count: 2 }] },
       pnlRow('450', '0', '0'),
       open(0),
@@ -152,7 +168,7 @@ describe('generateDailyBrief', () => {
   });
 
   it('omits unknown nudge when no unknowns', async () => {
-    queueResults(
+    queueBrief(
       pnlRow('100', '0', '0'),
       pnlRow('100', '0', '0'),
       open(0),
@@ -164,7 +180,7 @@ describe('generateDailyBrief', () => {
   });
 
   it('includes top counterparties when present', async () => {
-    queueResults(
+    queueBrief(
       pnlRow('500', '50', '1'),
       pnlRow('1000', '100', '2'),
       open(0),
@@ -184,7 +200,7 @@ describe('generateDailyBrief', () => {
   });
 
   it('escapes Markdown in user-set counterparty names', async () => {
-    queueResults(
+    queueBrief(
       pnlRow('500', '50', '1'),
       pnlRow('1000', '100', '2'),
       open(0),
@@ -196,8 +212,49 @@ describe('generateDailyBrief', () => {
     expect(brief).not.toContain('evil_*name');
   });
 
+  it('sends one line on a quiet day with nothing open', async () => {
+    queueBrief(pnlRow('0', '0', '0'), pnlRow('0', '0', '0'), open(0), { rows: [] }, activity(0));
+    const brief = await generateDailyBrief('user-1');
+    expect(brief.split('\n').slice(1).join('\n').trim()).toBe(
+      'Quiet day yesterday. No revenue, expenses or material activity. Your books are up to date.',
+    );
+    expect(brief).not.toContain('Revenue ');
+  });
+
+  it('on a quiet day with open questions, makes them the focus and does not say up to date', async () => {
+    queueBrief(pnlRow('0', '0', '0'), pnlRow('0', '0', '0'), open(3, 2, '4.20'), { rows: [] }, activity(0));
+    const brief = await generateDailyBrief('user-1');
+    expect(brief).toContain('Quiet day yesterday. No revenue, expenses or material activity.');
+    expect(brief).not.toContain('up to date');
+    expect(brief).toContain('3 transfers need context.');
+  });
+
+  it('does not call a day quiet when a transfer moved money, even if it is not revenue or expense', async () => {
+    queueBrief(pnlRow('0', '0', '0'), pnlRow('0', '0', '0'), open(0), { rows: [] }, activity(1));
+    const brief = await generateDailyBrief('user-1');
+    expect(brief).not.toContain('Quiet day');
+    expect(lineValue(brief, 'Net')).toBe('+$0.00');
+  });
+
+  it('does not say up to date while a wallet has not been checked against the chain', async () => {
+    queueBrief(pnlRow('0', '0', '0'), pnlRow('0', '0', '0'), open(0), { rows: [] }, activity(0), ledger('complete', 'unknown'));
+    const brief = await generateDailyBrief('user-1');
+    expect(brief).toContain('Quiet day yesterday.');
+    expect(brief).not.toContain('up to date');
+  });
+
+  it('leads with incomplete books before the figures', async () => {
+    queueBrief(pnlRow('100', '0', '0'), pnlRow('100', '0', '0'), open(0), { rows: [] }, activity(1), ledger('incomplete', 'complete'));
+    const brief = await generateDailyBrief('user-1');
+    const lines = brief.split('\n');
+    const leadAt = lines.findIndex((l) => l.startsWith('Your books are incomplete: one wallet has'));
+    const revenueAt = lines.findIndex((l) => l.includes('Revenue'));
+    expect(leadAt).toBeGreaterThan(0);
+    expect(leadAt).toBeLessThan(revenueAt);
+  });
+
   it('does not throw on an invalid timezone', async () => {
-    queueResults(
+    queueBrief(
       pnlRow('0', '0', '0'),
       pnlRow('0', '0', '0'),
       open(0),
@@ -213,7 +270,7 @@ describe('generateWeeklyBrief', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('includes week-over-week comparison with signed values', async () => {
-    queueResults(
+    queueBrief(
       pnlRow('2450', '180', '3.20'),   // this week (7d)
       pnlRow('4500', '400', '6'),       // 14d total
       open(3),
@@ -232,7 +289,7 @@ describe('generateWeeklyBrief', () => {
   });
 
   it('shows a negative weekly net with a minus sign', async () => {
-    queueResults(
+    queueBrief(
       pnlRow('10', '60', '0'),
       pnlRow('10', '60', '0'),
       open(0),
@@ -243,8 +300,14 @@ describe('generateWeeklyBrief', () => {
     expect(lineValue(brief, 'Net')).toBe('-$50.00');
   });
 
+  it('sends one line on a quiet week', async () => {
+    queueBrief(pnlRow('0', '0', '0'), pnlRow('0', '0', '0'), open(0), { rows: [] }, activity(0));
+    const brief = await generateWeeklyBrief('user-1');
+    expect(brief).toContain('Quiet week. No revenue, expenses or material activity. Your books are up to date.');
+  });
+
   it('formats the week date range correctly', async () => {
-    queueResults(
+    queueBrief(
       pnlRow('0', '0', '0'),
       pnlRow('0', '0', '0'),
       open(0),
