@@ -49,7 +49,7 @@ export async function runAgent(params: {
   assertUserScoped(userId);
 
   const [systemPrompt, history] = await Promise.all([
-    buildSystemPrompt(userId),
+    buildSystemPrompt(userId, params.role),
     loadConversationHistory(userId),
   ]);
 

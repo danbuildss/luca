@@ -23,6 +23,7 @@ vi.mock('../../src/ops/metrics.js', () => ({
 }));
 
 import * as db from '../../src/db.js';
+import { buildSystemPrompt } from '../../src/agent/system.js';
 import { runAgent } from '../../src/agent/run.js';
 import { ADMIN_TOOL_DEFINITIONS } from '../../src/agent/admin-tools.js';
 
@@ -65,6 +66,7 @@ describe('admin tools in the agent', () => {
     create.mockResolvedValueOnce(answer('ok'));
     await runAgent({ userId: USER, userMessage: 'how many invites are pending?', role: 'operator' });
     expect(toolNames(0).some((n) => n.startsWith('admin_'))).toBe(false);
+    expect(buildSystemPrompt).toHaveBeenCalledWith(USER, 'operator');
   });
 
   it('are offered to an admin', async () => {
@@ -74,6 +76,8 @@ describe('admin tools in the agent', () => {
     for (const t of ADMIN_TOOL_DEFINITIONS) {
       expect(toolNames(0)).toContain(t.type === 'function' ? t.function.name : '');
     }
+    // The prompt says so too, or the model hedges instead of calling them
+    expect(buildSystemPrompt).toHaveBeenCalledWith(USER, 'admin');
   });
 
   it('refuses an admin tool call from someone whose database role is operator, even if the model asks', async () => {
