@@ -18,6 +18,8 @@ import { UserRateLimiter, singleFlight } from '../../src/telegram/ratelimit.js';
 import { describePendingAction } from '../../src/agent/pending.js';
 import { generateDailyBrief, generateWeeklyBrief } from '../../src/briefs/generate.js';
 import { launchWithRetry } from '../../src/telegram/launch.js';
+import { setAuditNotifier, recoverAudits } from '../../src/ledger/audit-runs.js';
+import { saveMessage } from '../../src/agent/context.js';
 import { saveBrief, markBriefSent } from '../../src/briefs/store.js';
 import { runAgent } from '../../src/agent/run.js';
 import { detectWorkerStale } from '../../src/health/detectors.js';
@@ -404,6 +406,17 @@ async function configureCommandMenus(): Promise<void> {
 
 async function start() {
   await configureCommandMenus();
+
+  // Book checks run in this process; results go to whoever asked, and into their
+  // conversation so a follow-up question ("which one?") has the context
+  setAuditNotifier(async (requesterId, text) => {
+    const u = await query<{ telegram_id: string }>(`SELECT telegram_id::text AS telegram_id FROM users WHERE id = $1`, [requesterId]);
+    if (!u.rows[0]) return;
+    await bot.telegram.sendMessage(Number(u.rows[0].telegram_id), text);
+    await saveMessage({ userId: requesterId, role: 'assistant', content: text });
+  });
+  const recovered = await recoverAudits();
+  if (recovered > 0) logger.info({ recovered }, 'Book checks interrupted by the restart were picked up');
 
   scheduleAlertPoll();
   scheduleHealthPoll();

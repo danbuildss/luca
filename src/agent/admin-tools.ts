@@ -3,6 +3,7 @@ import { query } from '../db.js';
 import { logger } from '../logger.js';
 import { getAiCost, getInviteStats, getUserStats, getWalletHealth } from '../ops/metrics.js';
 import { traceTransaction } from '../ledger/trace.js';
+import { requestAudit, auditRequestForModel } from '../ledger/audit-runs.js';
 import { config } from '../config.js';
 
 // Founder questions ("how many invites are pending?", "who has not activated?",
@@ -53,6 +54,22 @@ export const ADMIN_TOOL_DEFINITIONS: ChatCompletionTool[] = [
   {
     type: 'function',
     function: {
+      name: 'admin_check_books',
+      description:
+        "Admin only. Check an operator's books against the chain: \"check @alice's books\", \"did Luca miss anything for @alice?\". Runs in the background; the result is sent to the admin as its own message.",
+      parameters: {
+        type: 'object',
+        properties: {
+          username: { type: 'string', description: 'The operator\'s Telegram username, with or without @.' },
+          days: { type: 'number', description: 'Only check the last N days. Omit to check everything tracked.' },
+        },
+        required: ['username'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'admin_trace_transaction',
       description:
         'Admin only. Follow one Base transaction through every layer Luca keeps (chain, transfer feed, raw record, normalized event, asset identity, classification, price, books) for every Luca wallet it touches, and name the layer where a movement was lost. Use when asked whether Luca saw a transaction or why it is missing.',
@@ -96,6 +113,15 @@ export async function executeAdminTool(
       return await getWalletHealth();
     case 'admin_get_ai_cost':
       return await getAiCost();
+    case 'admin_check_books': {
+      const name = typeof args.username === 'string' ? args.username.replace(/^@/, '').trim().toLowerCase() : '';
+      const target = (await query<{ id: string }>(
+        `SELECT id FROM users WHERE LOWER(LTRIM(telegram_username, '@')) = $1`, [name],
+      )).rows[0];
+      if (!target) return { error: `No user @${name}.` };
+      const days = typeof args.days === 'number' ? args.days : null;
+      return auditRequestForModel(await requestAudit({ userId: target.id, requestedBy: userId, days, admin: true }));
+    }
     case 'admin_trace_transaction': {
       const hash = typeof args.hash === 'string' ? args.hash.trim() : '';
       if (!/^0x[0-9a-fA-F]{64}$/.test(hash)) return { error: 'Give the full transaction hash: 0x followed by 64 hex characters.' };

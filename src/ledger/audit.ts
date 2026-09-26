@@ -1,61 +1,109 @@
 import { query } from '../db.js';
-import { fetchAllTransfers, blockToHex } from '../ingestion/alchemy.js';
+import { fetchAllTransfers, blockToHex, RpcError } from '../ingestion/alchemy.js';
 import { fetchSupportedTokenLogs } from '../ingestion/logs.js';
 import { fetchSentTransactions } from '../ingestion/blockscout.js';
 import { traceTransaction, type TraceLayer, type TraceResult } from './trace.js';
 
 // Real-wallet check for the roadmap's Phase 1 gate: every transaction any source knows
-// for one wallet (Alchemy's transfer feed, the USDC/BNKR token logs, Blockscout's sent
-// transactions, and what Luca stored) is traced through every layer, and the losses are
-// counted per layer. Read-only: it never writes to the database.
+// for one wallet over a block range (Alchemy's transfer feed, the USDC/BNKR token logs,
+// Blockscout's sent transactions, and what Luca stored) is traced through every layer,
+// and what did not reach the books is listed by layer. Read-only: it never writes.
+
+// Base produces a block every 2 seconds
+export const BLOCKS_PER_DAY = 43_200;
+
+// A data provider (Alchemy, Blockscout) did not answer; the check could not finish.
+export class ProviderUnavailableError extends Error {
+  constructor(readonly cause: unknown) {
+    super(`data provider unavailable: ${cause instanceof Error ? cause.message : String(cause)}`);
+  }
+}
+
+function isProviderError(err: unknown): boolean {
+  const e = err as { isAxiosError?: boolean; code?: string } | null;
+  return err instanceof RpcError || Boolean(e?.isAxiosError)
+    || ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN'].includes(e?.code ?? '');
+}
+
+// Provider failures become ProviderUnavailableError; anything else (a bug, the database)
+// propagates as itself so it is not mistaken for an outage.
+async function fromProvider<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    throw isProviderError(err) ? new ProviderUnavailableError(err) : err;
+  }
+}
+
+export type AuditItem = {
+  hash: string;
+  block: number | null;
+  source_key: string;
+  asset: string | null;
+  direction: 'in' | 'out' | null;
+  raw_amount: string | null;
+};
 
 export type WalletAudit = {
   wallet: string;
   wallet_id: string;
   from_block: number;
   to_block: number;
+  // Every transaction any source knew for the wallet, spam included
+  discovered: number;
+  // Transactions with at least one ETH, USDC or BNKR movement for this wallet
   transactions: number;
+  hashes: string[];
   verdicts: Record<TraceResult['verdict'], number>;
   movements: number;
-  lost: Array<{ hash: string; layer: TraceLayer; source_key: string; asset: string | null; notes: string[] }>;
+  lost: Array<AuditItem & { layer: TraceLayer; notes: string[] }>;
+  // In the books, labeled unknown: waiting on the operator, not missing
+  unknown: AuditItem[];
   notes: Record<string, number>;
 };
 
-export async function auditWallet(
-  address: string,
-  apiKey: string,
-  opts: { pauseMs?: number; onProgress?: (done: number, total: number) => void } = {},
-): Promise<WalletAudit> {
-  const wallet = address.toLowerCase();
-  const w = (await query<{ id: string; from_block: string | null; last_block: string | null }>(
-    `SELECT w.id,
+export type WalletRange = { wallet_id: string; address: string; from_block: number; to_block: number };
+
+// The block range Luca has synced for a wallet, optionally only the last `days` of it.
+// Null when the wallet has never been synced.
+export async function syncedRange(walletId: string, days?: number | null): Promise<WalletRange | null> {
+  const w = (await query<{ id: string; address: string; from_block: string | null; last_block: string | null }>(
+    `SELECT w.id, LOWER(w.address) AS address,
             (SELECT MIN(sr.from_block) FROM sync_runs sr WHERE sr.wallet_id = w.id)::text AS from_block,
             wj.last_block::text AS last_block
      FROM wallets w LEFT JOIN watch_jobs wj ON wj.wallet_id = w.id
-     WHERE LOWER(w.address) = $1 AND w.chain = 'base'
-     ORDER BY w.active DESC, w.created_at ASC
-     LIMIT 1`,
-    [wallet],
+     WHERE w.id = $1`,
+    [walletId],
   )).rows[0];
-  if (!w) throw new Error(`${address} is not a wallet Luca tracks`);
-  if (!w.from_block || !w.last_block) throw new Error(`${address} has not been synced yet`);
-  const fromBlock = Number(w.from_block);
+  if (!w?.from_block || !w.last_block) return null;
   const toBlock = Number(w.last_block);
+  let fromBlock = Number(w.from_block);
+  if (days) fromBlock = Math.max(fromBlock, toBlock - days * BLOCKS_PER_DAY);
+  return { wallet_id: w.id, address: w.address, from_block: fromBlock, to_block: toBlock };
+}
 
-  // Every source's view of the wallet's history over the range Luca has synced
-  const [feed, logs, sent, stored] = await Promise.all([
+export async function auditRange(
+  range: WalletRange,
+  apiKey: string,
+  opts: { pauseMs?: number; onProgress?: (done: number, total: number) => void } = {},
+): Promise<WalletAudit> {
+  const { wallet_id, address: wallet, from_block: fromBlock, to_block: toBlock } = range;
+
+  // Every source's view of the wallet's history over the range. These calls only talk to
+  // the providers, so any failure here means a provider did not answer.
+  const [feed, logs, sent] = await Promise.all([
     fetchAllTransfers(apiKey, wallet, blockToHex(fromBlock), blockToHex(toBlock)),
     fetchSupportedTokenLogs(apiKey, wallet, fromBlock, toBlock),
     fetchSentTransactions(wallet, fromBlock, toBlock),
-    query<{ hash: string }>(
-      `SELECT DISTINCT LOWER(hash) AS hash FROM normalized_events
-       WHERE wallet_id = $1 AND block_number BETWEEN $2 AND $3
-       UNION
-       SELECT DISTINCT LOWER(tx_hash) FROM raw_receipts
-       WHERE wallet_id = $1 AND block_number BETWEEN $2 AND $3`,
-      [w.id, fromBlock, toBlock],
-    ),
-  ]);
+  ]).catch((err: unknown) => { throw new ProviderUnavailableError(err); });
+  const stored = await query<{ hash: string }>(
+    `SELECT DISTINCT LOWER(hash) AS hash FROM normalized_events
+     WHERE wallet_id = $1 AND block_number BETWEEN $2 AND $3
+     UNION
+     SELECT DISTINCT LOWER(tx_hash) FROM raw_receipts
+     WHERE wallet_id = $1 AND block_number BETWEEN $2 AND $3`,
+    [wallet_id, fromBlock, toBlock],
+  );
   const hashes = [...new Set([
     ...feed.map((t) => t.hash.toLowerCase()),
     ...logs.filter((l) => l.raw > 0n).map((l) => l.hash.toLowerCase()),
@@ -64,41 +112,68 @@ export async function auditWallet(
   ])].sort();
 
   const audit: WalletAudit = {
-    wallet, wallet_id: w.id, from_block: fromBlock, to_block: toBlock, transactions: hashes.length,
+    wallet, wallet_id, from_block: fromBlock, to_block: toBlock, discovered: hashes.length, transactions: 0, hashes: [],
     verdicts: { complete: 0, gaps: 0, not_tracked: 0, not_found: 0 },
-    movements: 0, lost: [], notes: {},
+    movements: 0, lost: [], unknown: [], notes: {},
   };
 
   let done = 0;
   for (const hash of hashes) {
-    const trace = await traceTransaction(hash, apiKey);
+    const trace = await fromProvider(() => traceTransaction(hash, apiKey));
     audit.verdicts[trace.verdict]++;
-    for (const m of trace.movements.filter((x) => x.wallet_id === w.id)) {
+    let counted = false;
+    for (const m of trace.movements.filter((x) => x.wallet_id === wallet_id)) {
+      // Spam and other untracked tokens are not part of the books unless something went wrong
+      if (!['ETH', 'USDC', 'BNKR'].includes(m.asset ?? '') && !m.lost_at) continue;
+      counted = true;
       audit.movements++;
-      if (m.lost_at) audit.lost.push({ hash, layer: m.lost_at, source_key: m.source_key, asset: m.asset, notes: m.notes });
+      const item: AuditItem = {
+        hash, block: trace.block, source_key: m.source_key, asset: m.asset, direction: m.direction, raw_amount: m.raw_amount,
+      };
+      if (m.lost_at) audit.lost.push({ ...item, layer: m.lost_at, notes: m.notes });
+      else if (m.label_status === 'unknown') audit.unknown.push(item);
       for (const n of m.notes) audit.notes[n] = (audit.notes[n] ?? 0) + 1;
     }
+    if (counted) { audit.transactions++; audit.hashes.push(hash); }
     opts.onProgress?.(++done, hashes.length);
     if (opts.pauseMs) await new Promise((r) => setTimeout(r, opts.pauseMs));
   }
   return audit;
 }
 
+// Engineering fallback: the server script audits one wallet by address
+export async function auditWallet(
+  address: string,
+  apiKey: string,
+  opts: { days?: number; pauseMs?: number; onProgress?: (done: number, total: number) => void } = {},
+): Promise<WalletAudit> {
+  const w = (await query<{ id: string }>(
+    `SELECT id FROM wallets WHERE LOWER(address) = $1 AND chain = 'base'
+     ORDER BY active DESC, created_at ASC LIMIT 1`,
+    [address.toLowerCase()],
+  )).rows[0];
+  if (!w) throw new Error(`${address} is not a wallet Luca tracks`);
+  const range = await syncedRange(w.id, opts.days);
+  if (!range) throw new Error(`${address} has not been synced yet`);
+  return auditRange(range, apiKey, opts);
+}
+
 export function describeAudit(a: WalletAudit): string[] {
   const lines = [
     `Wallet ${a.wallet}, blocks ${a.from_block}–${a.to_block}`,
-    `${a.transactions} transactions known to any source, ${a.movements} movements for this wallet.`,
+    `${a.discovered} transactions known to any source; ${a.transactions} with ETH, USDC or BNKR movements (${a.movements} movements).`,
     `Complete: ${a.verdicts.complete}  |  With gaps: ${a.verdicts.gaps}  |  Not found: ${a.verdicts.not_found}  |  Not this wallet's: ${a.verdicts.not_tracked}`,
+    `Labeled unknown (waiting on the operator, not missing): ${a.unknown.length}`,
   ];
   if (a.lost.length === 0) {
-    lines.push('', 'Nothing was lost: every movement reached the books.');
+    lines.push('', 'Nothing was lost: every supported movement reached the books.');
   } else {
     const byLayer = new Map<string, number>();
     for (const l of a.lost) byLayer.set(l.layer, (byLayer.get(l.layer) ?? 0) + 1);
-    lines.push('', 'Lost movements by layer:', ...[...byLayer].map(([layer, n]) => `  ${layer}: ${n}`));
+    lines.push('', 'Did not reach the books, by layer:', ...[...byLayer].map(([layer, n]) => `  ${layer}: ${n}`));
     lines.push('', 'Details:');
     for (const l of a.lost) {
-      lines.push(`  ${l.hash} ${l.source_key} ${l.asset ?? '?'} lost at ${l.layer}${l.notes.length ? ` (${l.notes.join('; ')})` : ''}`);
+      lines.push(`  ${l.hash} ${l.source_key} ${l.asset ?? '?'} stopped at ${l.layer}${l.notes.length ? ` (${l.notes.join('; ')})` : ''}`);
     }
   }
   const notes = Object.entries(a.notes);
