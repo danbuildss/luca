@@ -30,7 +30,7 @@
   "dependencies": {
     "axios": "^1.6.7",
     "dotenv": "^16.4.1",
-    "fastify": "^4.26.2",
+    "fastify": "^5.12.5",
     "node-cron": "^3.0.3",
     "openai": "^4.28.0",
     "p-retry": "^6.2.0",
