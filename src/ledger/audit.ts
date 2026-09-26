@@ -22,7 +22,7 @@ export const BLOCKS_PER_DAY = 43_200;
 export const AUDIT_SAFE_MARGIN_BLOCKS = 150;
 
 export async function safeBlock(apiKey: string): Promise<number> {
-  const tip = await getCurrentBlock(apiKey).catch((err: unknown) => { throw new ProviderUnavailableError(err); });
+  const tip = await getCurrentBlock(apiKey).catch((err: unknown) => { throw asProviderFailure(err); });
   return tip - AUDIT_SAFE_MARGIN_BLOCKS;
 }
 
@@ -33,10 +33,23 @@ export class ProviderUnavailableError extends Error {
   }
 }
 
+// A provider answered "your request is wrong" (HTTP 4xx other than a timeout or rate
+// limit): that is a bug on Luca's side, not an outage, and must not be reported as one.
+export function isRejectedRequest(err: unknown): boolean {
+  const status = (err as { isAxiosError?: boolean; response?: { status?: number } } | null)?.response?.status;
+  return typeof status === 'number' && status >= 400 && status < 500 && status !== 408 && status !== 429;
+}
+
 function isProviderError(err: unknown): boolean {
+  if (isRejectedRequest(err)) return false;
   const e = err as { isAxiosError?: boolean; code?: string } | null;
   return err instanceof RpcError || Boolean(e?.isAxiosError)
     || ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN'].includes(e?.code ?? '');
+}
+
+// Unreachable, overloaded or rate-limited provider: an outage. A rejected request: Luca's bug.
+function asProviderFailure(err: unknown): unknown {
+  return isRejectedRequest(err) ? err : new ProviderUnavailableError(err);
 }
 
 // Provider failures become ProviderUnavailableError; anything else (a bug, the database)
@@ -117,14 +130,14 @@ export async function auditRange(
   //                              missed would otherwise go unseen)
   //   Blockscout sent list       everything the wallet sent, failed and zero-value included (fees)
   // ETH a contract sends inside a transaction appears only in Alchemy's feed; the hourly
-  // balance check is what catches a miss there. These calls only talk to the providers,
-  // so any failure here means a provider did not answer.
+  // balance check is what catches a miss there. These calls only talk to the providers:
+  // a failure is an outage, unless the provider rejected the request as malformed.
   const [feed, logs, native, sent] = await Promise.all([
     fetchAllTransfers(apiKey, wallet, blockToHex(fromBlock), blockToHex(toBlock)),
     fetchSupportedTokenLogs(apiKey, wallet, fromBlock, toBlock),
     fetchNativeTransactions(wallet, fromBlock),
     fetchSentTransactions(wallet, fromBlock, toBlock),
-  ]).catch((err: unknown) => { throw new ProviderUnavailableError(err); });
+  ]).catch((err: unknown) => { throw asProviderFailure(err); });
   const stored = await query<{ hash: string }>(
     `SELECT DISTINCT LOWER(hash) AS hash FROM normalized_events
      WHERE wallet_id = $1 AND block_number BETWEEN $2 AND $3
