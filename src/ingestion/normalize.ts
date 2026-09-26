@@ -178,7 +178,7 @@ export function normalizeTransfer(
     gas_usd: null,
     direction,
     tx_type: toTxType(t.category),
-    raw_payload: t as unknown as Record<string, unknown>,
+    raw_payload: t,
   };
 
   const event: EventRow = {

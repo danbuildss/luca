@@ -68,7 +68,7 @@ async function get<T>(url: string): Promise<T> {
   );
 }
 
-function buildUrl(path: string, params: Record<string, unknown> = {}): string {
+function buildUrl(path: string, params: Record<string, string | number | boolean | null | undefined> = {}): string {
   const u = new URL(`${BASE_URL}${path}`);
   for (const [k, v] of Object.entries(params)) {
     if (v !== null && v !== undefined) u.searchParams.set(k, String(v));
@@ -241,7 +241,7 @@ export function normalizeTokenTransfer(
     gas_usd: null,
     direction,
     tx_type: 'transfer',
-    raw_payload: t as unknown as Record<string, unknown>,
+    raw_payload: t,
   };
 
   const event: EventRow = {
@@ -300,7 +300,7 @@ export function normalizeNativeTx(
     gas_usd: null,
     direction,
     tx_type: 'transfer',
-    raw_payload: t as unknown as Record<string, unknown>,
+    raw_payload: t,
   };
 
   const event: EventRow = {

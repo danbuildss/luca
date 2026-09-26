@@ -283,7 +283,7 @@ export async function prepareWriteAction(
   if (!(CLASSIFICATION_LABELS as ReadonlyArray<string>).includes(String(args.new_label))) {
     return { ok: false, error: `Invalid label: ${String(args.new_label)}` };
   }
-  const ref = await resolveEventRef(userId, String(args.event_id ?? ''));
+  const ref = await resolveEventRef(userId, argText(args.event_id));
   if (ref.status === 'not_found') {
     return {
       ok: false,
@@ -298,6 +298,11 @@ export async function prepareWriteAction(
     };
   }
   return { ok: true, args: { ...args, event_id: ref.event.id, tx_hash: ref.event.hash } };
+}
+
+// Tool arguments come from the model: only a string or number is a usable id or name
+function argText(v: unknown): string {
+  return typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '';
 }
 
 // ---------------------------------------------------------------------------
@@ -346,7 +351,7 @@ export async function executeTool(
     }
 
     case 'get_figure_breakdown': {
-      const figure = String(args.figure ?? '') as Figure;
+      const figure = argText(args.figure) as Figure;
       if (!(FIGURES as readonly string[]).includes(figure)) return { error: `Unknown figure: ${figure}` };
       const periodDays = (args.period_days as number | undefined) ?? 30;
       return await getFigureBreakdown(userId, figure, periodDays);
@@ -425,7 +430,7 @@ export async function executeTool(
     }
 
     case 'get_transaction': {
-      const ref = await resolveEventRef(userId, String(args.event_id ?? ''));
+      const ref = await resolveEventRef(userId, argText(args.event_id));
       if (ref.status === 'not_found') return { error: 'Transaction not found' };
       if (ref.status === 'ambiguous') {
         return { error: 'More than one transfer matches; pick one by id', candidates: ref.candidates };
@@ -443,7 +448,7 @@ export async function executeTool(
       if (!(CLASSIFICATION_LABELS as ReadonlyArray<string>).includes(newLabel)) {
         return { error: `Invalid label: ${newLabel}` };
       }
-      const ref = await resolveEventRef(userId, String(args.event_id ?? ''));
+      const ref = await resolveEventRef(userId, argText(args.event_id));
       if (ref.status !== 'found') return { error: 'Transaction not found' };
 
       const result = await applyCorrection({

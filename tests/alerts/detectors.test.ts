@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 
 // Mock DB — all detector SQL goes through query()
 vi.mock('../../src/db.js', () => ({
@@ -19,7 +19,7 @@ import {
   detectUnusualGas,
 } from '../../src/alerts/detectors.js';
 
-const mockQuery = db.query as ReturnType<typeof vi.fn>;
+const mockQuery = db.query as unknown as Mock<(text: string, params?: unknown[]) => Promise<unknown>>;
 
 // Helper: make query return rows in sequence across multiple calls
 function queueQueryResults(...results: Array<{ rows: unknown[] }>) {

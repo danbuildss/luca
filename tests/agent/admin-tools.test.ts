@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 
 // The agent loop with the model, database and prompt stubbed out: which tools the model
 // is offered, and what happens when it calls an admin tool anyway.
@@ -27,7 +27,7 @@ import { buildSystemPrompt } from '../../src/agent/system.js';
 import { runAgent } from '../../src/agent/run.js';
 import { ADMIN_TOOL_DEFINITIONS } from '../../src/agent/admin-tools.js';
 
-const mockQuery = db.query as ReturnType<typeof vi.fn>;
+const mockQuery = db.query as unknown as Mock<(text: string, params?: unknown[]) => Promise<unknown>>;
 const USER = '00000000-0000-0000-0000-000000000001';
 
 type Request = { tools: Array<{ function: { name: string } }>; messages: Array<{ role: string; content: string }> };

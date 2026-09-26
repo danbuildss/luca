@@ -179,7 +179,7 @@ export function alchemyMock<T extends Record<string, unknown>>(orig: T): T {
       Promise.resolve(balanceAt(wallet, token.toLowerCase(), b)),
     getEthBalance: () => Promise.resolve(0),
     getErc20Balance: () => Promise.resolve(0),
-  } as T;
+  };
 }
 
 // Blockscout's HTTP API as seen by axios.get, in the real API v2 shape (newest first,
@@ -222,5 +222,5 @@ export function blockscoutMock<T extends Record<string, unknown>>(orig: T): T {
           from: { hash: t.from }, to: t.to ? { hash: t.to } : null,
           value: BigInt(t.rawContract.value ?? '0x0').toString(), gas_used: null, gas_price: null, status: 'ok',
         }))),
-  } as T;
+  };
 }
