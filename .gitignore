@@ -14,3 +14,7 @@ coverage/
 /hermes/
 /docs/build-gap-analysis.md
 /.claude/skills/
+
+# Server-only files, never committed
+/backups/
+bun.lock
