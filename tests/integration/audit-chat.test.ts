@@ -2,7 +2,7 @@
 // checks recorded in audit_runs, reuse while the books are unchanged, restart recovery,
 // operator scoping, and the exact wording Luca sends. Real Postgres, simulated chain.
 import fs from 'node:fs';
-import { it, expect, vi, beforeEach } from 'vitest';
+import { it, expect, vi, beforeEach, describe } from 'vitest';
 
 vi.mock('../../src/config.js', async (importOriginal) => {
   const orig = await importOriginal<{ config: Record<string, unknown> }>();
@@ -64,7 +64,9 @@ async function finished(runs = 1): Promise<string> {
 
 describeDb('books check from chat (integration)', () => {
   useIntegrationDb();
-  beforeEach(() => { resetChain(); sent.length = 0; });
+  // Tip 1200: the safe block a check verifies up to is 1050 (tip minus 150), above the
+  // transfers these tests make at blocks 900–950; the sync reaches 1190.
+  beforeEach(() => { resetChain(); chain.tip = 1200; sent.length = 0; });
 
   it('everything complete: states the range, wallets and counts, and that every movement reached the books', async () => {
     const { user, wallet } = await seedUserWithWallet({ timezone: 'UTC' });
@@ -81,10 +83,13 @@ describeDb('books check from chat (integration)', () => {
     expect(r).toMatchObject({ status: 'started', wallets: 1 });
     const text = await finished();
     record('Everything complete', text);
-    expect(text).toMatch(/^I checked everything I've tracked since \w{3} \d+ across your wallet: 2 transactions, 2 movements of ETH, USDC and BNKR\.\nEvery supported movement reached your books\.$/);
+    expect(text).toMatch(/^I checked everything I've tracked across your wallet on \w{3} \d+, up to \d\d:\d\d: 2 transactions, 2 supported financial movements\.\nEvery supported movement reached your books\.$/);
     expect(text).not.toMatch(/\ball\b/);
-    const run = await sql<{ status: string; result: { wallets: unknown[]; transactions: number } }>(`SELECT status, result FROM audit_runs`);
+    const run = await sql<{ status: string; result: { wallets: Array<{ to_block: number; synced_to: number; signature: string }>; transactions: number } }>(`SELECT status, result FROM audit_runs`);
     expect(run[0]).toMatchObject({ status: 'complete', result: { transactions: 2 } });
+    // Verified up to the safe chain block, not Luca's own sync checkpoint
+    expect(run[0].result.wallets[0]).toMatchObject({ to_block: 1050, synced_to: 1190 });
+    expect(run[0].result.wallets[0].signature).toMatch(/^[0-9a-f]{32}:[0-9a-f]{32}:[0-9a-f]{32}$/);
   });
 
   it('one transaction genuinely missing: says which, and that it never arrived from the provider', async () => {
@@ -99,7 +104,7 @@ describeDb('books check from chat (integration)', () => {
     await executeTool(user.id, 'check_books_complete', {});
     const text = await finished();
     record('One transaction genuinely missing', text);
-    expect(text).toContain('2 transactions, 2 movements');
+    expect(text).toContain('2 transactions, 2 supported financial movements');
     expect(text).toContain('1 movement is missing from your books:');
     expect(text).toContain(`12.00 USDC in (${missed.slice(0, 6)}…${missed.slice(-4)}): my data provider never delivered it, so it's missing from your books.`);
     expect(text).toContain("I haven't changed anything in your books.");
@@ -136,26 +141,91 @@ describeDb('books check from chat (integration)', () => {
     expect((await sql<{ status: string }>(`SELECT status FROM audit_runs`))[0].status).toBe('failed');
   });
 
-  it('reuses a result while the books are unchanged, and runs again once something new arrives', async () => {
-    const { user, wallet } = await seedUserWithWallet({ timezone: 'UTC' });
-    const w = wallet.address;
-    const a = usdcTransfer(w, { block: 900, from: addr(), to: w, raw: 1_000_000n });
-    await sync(wallet.id);
-    await label(user.id, a);
-    await executeTool(user.id, 'check_books_complete', {});
-    await finished();
+  describe('reusing a result', () => {
+    async function completeCheck() {
+      const { user, wallet } = await seedUserWithWallet({ timezone: 'UTC' });
+      const w = wallet.address;
+      const a = usdcTransfer(w, { block: 900, from: addr(), to: w, raw: 1_000_000n });
+      await sync(wallet.id);
+      await label(user.id, a);
+      await executeTool(user.id, 'check_books_complete', {});
+      const text = await finished();
+      expect(text).toContain('Every supported movement reached your books.');
+      return { user, wallet, w };
+    }
+    const runs = async () => (await sql<{ n: number }>(`SELECT COUNT(*)::int AS n FROM audit_runs`))[0].n;
 
-    const again = await executeTool(user.id, 'check_books_complete', {});
-    expect(again).toMatchObject({ status: 'result' });
-    expect((again as { result: string }).result).toMatch(/^Nothing has changed in your books since I checked at /);
-    expect((await sql<{ n: number }>(`SELECT COUNT(*)::int AS n FROM audit_runs`))[0].n).toBe(1);
+    it('reuses the result only when the chain has no new safe blocks and the books are unchanged', async () => {
+      const { user } = await completeCheck();
+      const again = await executeTool(user.id, 'check_books_complete', {});
+      expect(again).toMatchObject({ status: 'result' });
+      expect((again as { result: string }).result).toMatch(/^Nothing has changed in your books since I checked at /);
+      expect(await runs()).toBe(1);
+    });
 
-    // A new transfer arrives and is synced: the old result no longer holds
-    chain.tip = 1100;
-    usdcTransfer(w, { block: 1050, from: addr(), to: w, raw: 2_000_000n });
-    await sync(wallet.id);
-    expect(await executeTool(user.id, 'check_books_complete', {})).toMatchObject({ status: 'started' });
-    await finished(2);
+    it('a new on-chain transaction the sync has not reached: not reused, verified, reported missing', async () => {
+      const { user, w } = await completeCheck();
+      // The chain moves on and a payment arrives; Luca's sync does not run, so the
+      // database is exactly as it was
+      chain.tip = 1400;
+      const late = usdcTransfer(w, { block: 1200, from: addr(), to: w, raw: 7_000_000n });
+
+      const again = await executeTool(user.id, 'check_books_complete', {});
+      expect(again).toMatchObject({ status: 'started' });
+      const text = await finished(2);
+      record('New on-chain transaction not in the database (sync behind)', text);
+      expect(text).not.toContain('Every supported movement reached');
+      expect(text).toContain('2 transactions, 2 supported financial movements');
+      expect(text).toContain(`7.00 USDC in (${late.slice(0, 6)}…${late.slice(-4)}): I haven't synced it yet (my last sync of this wallet reached `);
+      // Only the new blocks were checked, on top of the earlier result
+      const run = await sql<{ base_run_id: string | null; to_block: number }>(
+        `SELECT base_run_id, (result->'wallets'->0->>'to_block')::int AS to_block FROM audit_runs ORDER BY started_at DESC LIMIT 1`);
+      expect(run[0].base_run_id).not.toBeNull();
+      expect(run[0].to_block).toBe(1250);
+    });
+
+    it('a new on-chain transaction the sync passed over and lost: not reused, reported as never delivered', async () => {
+      const { user, wallet, w } = await completeCheck();
+      chain.tip = 1400;
+      // Neither the transfer feed nor the token logs report it when Luca syncs, so the
+      // sync moves its cursor past it and stores nothing
+      const lost = usdcTransfer(w, { block: 1200, from: addr(), to: w, raw: 9_000_000n, inFeed: false, inLogs: false });
+      await sync(wallet.id);
+      expect((await sql<{ n: number }>(`SELECT COUNT(*)::int AS n FROM normalized_events WHERE hash = $1`, [lost]))[0].n).toBe(0);
+      // The chain itself has it (its Transfer log is readable now)
+      usdcTransfer(w, { block: 1200, from: addr(), to: w, raw: 9_000_000n, inFeed: false, inLogs: true, txHash: lost });
+
+      expect(await executeTool(user.id, 'check_books_complete', {})).toMatchObject({ status: 'started' });
+      const text = await finished(2);
+      record('New on-chain transaction the sync lost', text);
+      expect(text).toContain(`9.00 USDC in (${lost.slice(0, 6)}…${lost.slice(-4)}): my data provider never delivered it, so it's missing from your books.`);
+    });
+
+    it('a stored USD value changes (non-null to a different non-null): not reused, checked again in full', async () => {
+      const { user, wallet } = await completeCheck();
+      // Priced, then checked: the result holds while the value stays 1.00
+      await sql(`UPDATE normalized_events SET usd_value = 1.00 WHERE wallet_id = $1`, [wallet.id]);
+      await executeTool(user.id, 'check_books_complete', {});
+      await finished(2);
+      expect(await executeTool(user.id, 'check_books_complete', {})).toMatchObject({ status: 'result' });
+      // Repriced: still non-null, different value
+      await sql(`UPDATE normalized_events SET usd_value = 1.37 WHERE wallet_id = $1`, [wallet.id]);
+
+      const again = await executeTool(user.id, 'check_books_complete', {});
+      expect(again).toMatchObject({ status: 'started' });
+      await finished(3);
+      const last = await sql<{ base_run_id: string | null }>(`SELECT base_run_id FROM audit_runs ORDER BY started_at DESC LIMIT 1`);
+      expect(last[0].base_run_id).toBeNull();
+    });
+
+    it('a label change also invalidates the result', async () => {
+      const { user, wallet } = await completeCheck();
+      await sql(`UPDATE classifications SET superseded_at = NOW() WHERE user_id = $1`, [user.id]);
+      const ev = await sql<{ id: string }>(`SELECT id FROM normalized_events WHERE wallet_id = $1`, [wallet.id]);
+      await insertClassification({ eventId: ev[0].id, userId: user.id, label: 'expense', method: 'counterparty' });
+      expect(await executeTool(user.id, 'check_books_complete', {})).toMatchObject({ status: 'started' });
+      await finished(2);
+    });
   });
 
   it('"did you catch everything yesterday?" checks only the last day and says so', async () => {
@@ -165,7 +235,7 @@ describeDb('books check from chat (integration)', () => {
     await label(user.id, a);
     await executeTool(user.id, 'check_books_complete', { days: 1 });
     const text = await finished();
-    expect(text).toMatch(/^I checked everything across your wallet over the last day \(since /);
+    expect(text).toMatch(/^I checked everything across your wallet over the last day \(\w{3} \d+, (up to )?\d\d:\d\d/);
   });
 
   it('a check interrupted by a restart is run again; one interrupted twice is reported', async () => {
@@ -210,7 +280,7 @@ describeDb('books check from chat (integration)', () => {
     expect(await executeAdminTool(admin.id, 'admin_check_books', { username: '@alice' })).toMatchObject({ status: 'started' });
     const text = await finished();
     expect(sent[0].to).toBe(admin.id);
-    expect(text).toMatch(/across @alice's wallet: 1 transaction, 1 movement/);
+    expect(text).toMatch(/across @alice's wallet (on|from) .+: 1 transaction, 1 supported financial movement\./);
     expect(text).toContain("Every supported movement reached @alice's books.");
     // An operator cannot use it
     expect(await executeAdminTool(user.id, 'admin_check_books', { username: 'founder' })).toEqual({ error: 'Not available.' });

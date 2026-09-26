@@ -4,18 +4,26 @@ import { config } from '../config.js';
 import { getBlock } from '../ingestion/alchemy.js';
 import { SUPPORTED_TOKENS } from '../ingestion/assets.js';
 import { significant } from '../books/breakdown.js';
-import { auditRange, syncedRange, ProviderUnavailableError, type AuditItem, type WalletAudit } from './audit.js';
+import {
+  auditRange, auditableRange, safeBlock, ProviderUnavailableError, type AuditItem, type WalletAudit,
+} from './audit.js';
 import type { TraceLayer } from './trace.js';
 
 // "Are my books complete?" from chat. A check compares everything the chain and the data
-// providers know for an operator's wallets with what reached the books (src/ledger/audit.ts).
-// It runs in the background and is recorded in audit_runs, so a restart mid-check is
-// known and retried, a recent result is reused while the books have not changed, and the
-// outcome is sent to whoever asked exactly once. Read-only: a check never changes books.
+// providers know for an operator's wallets with what reached the books (src/ledger/audit.ts),
+// up to the safe chain block. It runs in the background and is recorded in audit_runs, so
+// a restart mid-check is known and retried, and the outcome is sent to whoever asked
+// exactly once. Read-only: a check never changes books.
+//
+// A result records, per wallet, the block it verified through and a fingerprint of the
+// books over that range. It is reused only when the chain has no new safe blocks and the
+// fingerprint is unchanged. New blocks are verified before anything is said about them
+// (only the new range, when the earlier result still holds), so a transaction Luca failed
+// to ingest can never hide behind "nothing changed in the database".
 
 // Where a movement stopped, in the operator's terms
 export const GAP_KINDS = [
-  'missing_from_provider', 'provider_not_stored', 'stored_not_normalized', 'unsupported', 'not_on_chain',
+  'not_synced', 'missing_from_provider', 'provider_not_stored', 'stored_not_normalized', 'unsupported', 'not_on_chain',
   'unclassified', 'missing_price',
 ] as const;
 export type GapKind = (typeof GAP_KINDS)[number];
@@ -32,9 +40,10 @@ const GAP_OF_LAYER: Record<TraceLayer, GapKind> = {
 
 // Missing = not in the books at all (or in them wrongly); incomplete = in the books but
 // not finished (no label yet, or no USD price)
-const MISSING: GapKind[] = ['missing_from_provider', 'provider_not_stored', 'stored_not_normalized', 'unsupported', 'not_on_chain'];
+const MISSING: GapKind[] = ['not_synced', 'missing_from_provider', 'provider_not_stored', 'stored_not_normalized', 'unsupported', 'not_on_chain'];
 
 const GAP_WORDS: Record<GapKind, string> = {
+  not_synced: "I haven't synced it yet, so it's missing from your books",
   missing_from_provider: "my data provider never delivered it, so it's missing from your books",
   provider_not_stored: "my data provider reported it, but I never stored it, so it's missing from your books",
   stored_not_normalized: 'I have the raw record, but it never became an entry in your books',
@@ -49,7 +58,14 @@ export type AuditEntry = AuditItem & { wallet: string; time: string | null };
 export type AuditSummary = {
   checked_at: string;
   days: number | null;
-  wallets: Array<{ address: string; from_block: number; to_block: number; from_time: string | null; to_time: string | null }>;
+  wallets: Array<{
+    wallet_id: string; address: string; from_block: number; to_block: number;
+    from_time: string | null; to_time: string | null;
+    synced_to: number | null; synced_to_time: string | null;
+    // Fingerprint of the books over [from_block, to_block] when verified; null when the
+    // books changed while the check ran (the result is then never reused)
+    signature: string | null;
+  }>;
   transactions: number;
   movements: number;
   gaps: Record<GapKind, AuditEntry[]>;
@@ -85,22 +101,27 @@ async function activeWallets(userId: string): Promise<Array<{ id: string; addres
   return res.rows;
 }
 
-// Changes when a transfer, fee, label or price is added or changes, or a wallet is added.
-// New empty blocks do not change it, so an unchanged result is reused.
-export async function booksSignature(userId: string, days: number | null): Promise<string> {
-  const res = await query<{ sig: string | null }>(
-    `SELECT string_agg(
-              w.id::text || ':' ||
-              (SELECT COUNT(*) FROM normalized_events ne WHERE ne.wallet_id = w.id)::text || ':' ||
-              (SELECT COUNT(*) FROM raw_receipts rr WHERE rr.wallet_id = w.id)::text || ':' ||
-              (SELECT COUNT(*) FROM normalized_events ne WHERE ne.wallet_id = w.id AND ne.usd_value IS NOT NULL)::text || ':' ||
-              COALESCE((SELECT MAX(c.created_at)::text FROM classifications c
-                        JOIN normalized_events ne ON ne.id = c.event_id WHERE ne.wallet_id = w.id), '-'),
-              '|' ORDER BY w.id) AS sig
-     FROM wallets w WHERE w.user_id = $1 AND w.active = TRUE AND w.chain = 'base'`,
-    [userId],
+// Fingerprint of everything a check's outcome depends on for one wallet, up to a block:
+// each stored event's identity, amount, USD value and price source, its active label and
+// status, the raw transfer records and the fees. Any added row or changed value, such as a
+// repriced event, changes it. Rows stored before block numbers were kept are included.
+export async function rangeSignature(walletId: string, toBlock: number): Promise<string> {
+  const res = await query<{ events: string; raw: string; fees: string }>(
+    `SELECT
+       (SELECT md5(COALESCE(string_agg(concat_ws(',', ne.id, ne.source_key, ne.supported, ne.token_address, ne.raw_amount,
+                                                 ne.amount, ne.usd_value, ne.price_source, c.id, c.label, c.status),
+                                       '|' ORDER BY ne.id), ''))
+        FROM normalized_events ne
+        LEFT JOIN classifications c ON c.event_id = ne.id AND c.superseded_at IS NULL
+        WHERE ne.wallet_id = $1 AND (ne.block_number IS NULL OR ne.block_number <= $2)) AS events,
+       (SELECT md5(COALESCE(string_agg(concat_ws(',', tx_hash, source_key, raw_amount), '|' ORDER BY tx_hash, source_key), ''))
+        FROM raw_transfers WHERE wallet_id = $1 AND (block_number IS NULL OR block_number <= $2)) AS raw,
+       (SELECT md5(COALESCE(string_agg(concat_ws(',', tx_hash, status, fee_wei), '|' ORDER BY tx_hash), ''))
+        FROM raw_receipts WHERE wallet_id = $1 AND block_number <= $2) AS fees`,
+    [walletId, toBlock],
   );
-  return `${days ?? 'all'}#${res.rows[0]?.sig ?? ''}`;
+  const r = res.rows[0];
+  return `${r.events}:${r.raw}:${r.fees}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -131,24 +152,47 @@ export async function requestAudit(params: {
   )).rows[0];
   if (running) return { status: 'running', started_at: running.started_at };
 
-  const signature = await booksSignature(params.userId, days);
-  const last = (await query<{ result: AuditSummary; signature: string; finished_at: Date }>(
-    `SELECT result, signature, finished_at FROM audit_runs
+  const last = (await query<{ id: string; result: AuditSummary; finished_at: Date }>(
+    `SELECT id, result, finished_at FROM audit_runs
      WHERE user_id = $1 AND status = 'complete' AND days IS NOT DISTINCT FROM $2
      ORDER BY finished_at DESC LIMIT 1`,
     [params.userId, days],
   )).rows[0];
-  const fresh = last && Date.now() - new Date(last.finished_at).getTime() < REUSE_HOURS * 3_600_000;
   const words = {
     timezone: params.timezone ?? await userTimezone(params.requestedBy),
     subject: params.subject ?? await subjectFor(params.userId, params.requestedBy),
   };
-  if (last && fresh && last.signature === signature) {
-    return { status: 'reused', checked_at: last.result.checked_at, unchanged: true, message: describeSummary(last.result, { ...words, reused: 'unchanged' }) };
+
+  // Does the earlier result still hold for the range it verified?
+  let base: string | null = null;
+  const apiKey = config.ALCHEMY_API_KEY;
+  if (last && apiKey && Date.now() - new Date(last.finished_at).getTime() < REUSE_HOURS * 3_600_000) {
+    const sameWallets = last.result.wallets.length === wallets.length
+      && wallets.every((w) => last.result.wallets.some((lw) => lw.wallet_id === w.id));
+    let holds = sameWallets && last.result.wallets.every((lw) => lw.signature !== null);
+    for (const lw of holds ? last.result.wallets : []) {
+      if (await rangeSignature(lw.wallet_id, lw.to_block) !== lw.signature) { holds = false; break; }
+    }
+    if (holds) {
+      // Unchanged books over the verified range, and no new safe blocks since: reuse.
+      // A provider that cannot give the tip means the chain cannot be compared: check.
+      const safe = await safeBlock(apiKey).catch(() => null);
+      if (safe !== null && last.result.wallets.every((lw) => safe <= lw.to_block)) {
+        return { status: 'reused', checked_at: last.result.checked_at, unchanged: true, message: describeSummary(last.result, { ...words, reused: 'unchanged' }) };
+      }
+      // New blocks: verify only those, on top of the earlier result. A days-limited check
+      // slides its window, so it is checked again in full.
+      if (days === null) base = last.id;
+    }
   }
-  if (last && !params.admin) {
+
+  // Full checks an operator's own questions start per day are capped internally; past the
+  // cap the latest result is given with its time, never presented as a limit. Checks of
+  // only the new blocks are cheap and not capped.
+  if (last && !base && !params.admin) {
     const today = (await query<{ n: number }>(
-      `SELECT COUNT(*)::int AS n FROM audit_runs WHERE user_id = $1 AND started_at > NOW() - INTERVAL '1 day'`,
+      `SELECT COUNT(*)::int AS n FROM audit_runs
+       WHERE user_id = $1 AND base_run_id IS NULL AND started_at > NOW() - INTERVAL '1 day'`,
       [params.userId],
     )).rows[0]?.n ?? 0;
     if (today >= OPERATOR_RUNS_PER_DAY) {
@@ -157,8 +201,8 @@ export async function requestAudit(params: {
   }
 
   const run = (await query<{ id: string }>(
-    `INSERT INTO audit_runs (user_id, requested_by, days, signature) VALUES ($1, $2, $3, $4) RETURNING id`,
-    [params.userId, params.requestedBy, days, signature],
+    `INSERT INTO audit_runs (user_id, requested_by, days, base_run_id) VALUES ($1, $2, $3, $4) RETURNING id`,
+    [params.userId, params.requestedBy, days, base],
   )).rows[0];
   void runAudit(run.id, words);
   return { status: 'started', run_id: run.id, wallets: wallets.length };
@@ -197,28 +241,53 @@ async function blockTime(apiKey: string, block: number | null): Promise<string |
   return TIME_CACHE.get(block) ?? null;
 }
 
-export async function buildSummary(audits: WalletAudit[], days: number | null, apiKey: string): Promise<AuditSummary> {
-  const gaps = Object.fromEntries(GAP_KINDS.map((k) => [k, [] as AuditEntry[]])) as Record<GapKind, AuditEntry[]>;
-  const unknown: AuditEntry[] = [];
-  const hashes = new Set<string>();
-  let movements = 0;
-  for (const a of audits) {
+type WalletPart = { audit: WalletAudit; from_block: number; signature: string | null };
+
+function emptyAudit(range: { wallet_id: string; address: string; from_block: number; to_block: number; synced_to: number | null }): WalletAudit {
+  return {
+    wallet: range.address, wallet_id: range.wallet_id, from_block: range.from_block, to_block: range.to_block,
+    synced_to: range.synced_to, discovered: 0, transactions: 0, hashes: [],
+    verdicts: { complete: 0, gaps: 0, not_tracked: 0, not_found: 0 }, movements: 0, lost: [], unknown: [], notes: {},
+  };
+}
+
+// Combines this run's wallets with the earlier result it builds on (when only new blocks
+// were verified). Ranges do not overlap, so counts add up.
+export async function buildSummary(
+  parts: WalletPart[],
+  days: number | null,
+  apiKey: string,
+  base: AuditSummary | null = null,
+): Promise<AuditSummary> {
+  const gaps = Object.fromEntries(GAP_KINDS.map((k) => [k, [...(base?.gaps[k] ?? [])]])) as Record<GapKind, AuditEntry[]>;
+  const unknown: AuditEntry[] = [...(base?.unknown ?? [])];
+  let movements = base?.movements ?? 0;
+  for (const { audit: a } of parts) {
     movements += a.movements;
     for (const l of a.lost) {
-      hashes.add(l.hash);
-      gaps[GAP_OF_LAYER[l.layer]].push({ ...l, wallet: a.wallet, time: await blockTime(apiKey, l.block) });
+      // Past Luca's own sync: the sync has not reached it (or is stuck), not a provider miss
+      const pastSync = (l.layer === 'provider' || l.layer === 'raw') && (a.synced_to === null || (l.block ?? 0) > a.synced_to);
+      gaps[pastSync ? 'not_synced' : GAP_OF_LAYER[l.layer]].push({ ...l, wallet: a.wallet, time: await blockTime(apiKey, l.block) });
     }
     for (const u of a.unknown) unknown.push({ ...u, wallet: a.wallet, time: await blockTime(apiKey, u.block) });
+  }
+  const wallets: AuditSummary['wallets'] = [];
+  for (const { audit: a, from_block, signature } of parts) {
+    const prev = base?.wallets.find((w) => w.wallet_id === a.wallet_id);
+    wallets.push({
+      wallet_id: a.wallet_id, address: a.wallet, from_block, to_block: a.to_block,
+      from_time: prev?.from_time ?? await blockTime(apiKey, from_block),
+      to_time: await blockTime(apiKey, a.to_block),
+      synced_to: a.synced_to, synced_to_time: await blockTime(apiKey, a.synced_to),
+      signature,
+    });
   }
   return {
     checked_at: new Date().toISOString(),
     days,
-    wallets: await Promise.all(audits.map(async (a) => ({
-      address: a.wallet, from_block: a.from_block, to_block: a.to_block,
-      from_time: await blockTime(apiKey, a.from_block), to_time: await blockTime(apiKey, a.to_block),
-    }))),
+    wallets,
     // A transaction touching two of the operator's wallets is one transaction
-    transactions: new Set(audits.flatMap((a) => a.hashes)).size,
+    transactions: (base?.transactions ?? 0) + new Set(parts.flatMap((p) => p.audit.hashes)).size,
     movements,
     gaps,
     unknown,
@@ -226,8 +295,8 @@ export async function buildSummary(audits: WalletAudit[], days: number | null, a
 }
 
 export async function runAudit(runId: string, words: { timezone?: string; subject?: string } = {}): Promise<void> {
-  const run = (await query<{ user_id: string; requested_by: string | null; days: number | null; started_at: Date }>(
-    `SELECT user_id, requested_by, days, started_at FROM audit_runs WHERE id = $1`, [runId],
+  const run = (await query<{ user_id: string; requested_by: string | null; days: number | null; base_run_id: string | null }>(
+    `SELECT user_id, requested_by, days, base_run_id FROM audit_runs WHERE id = $1`, [runId],
   )).rows[0];
   if (!run) return;
   const requester = run.requested_by ?? run.user_id;
@@ -238,18 +307,31 @@ export async function runAudit(runId: string, words: { timezone?: string; subjec
   let text: string;
   try {
     if (!apiKey) throw new ProviderUnavailableError(new Error('ALCHEMY_API_KEY not set'));
-    const audits: WalletAudit[] = [];
+    const safe = await safeBlock(apiKey);
+    const base = run.base_run_id
+      ? (await query<{ result: AuditSummary }>(`SELECT result FROM audit_runs WHERE id = $1`, [run.base_run_id])).rows[0]?.result ?? null
+      : null;
+    const parts: WalletPart[] = [];
     for (const w of await activeWallets(run.user_id)) {
-      const range = await syncedRange(w.id, run.days);
-      if (range) audits.push(await auditRange(range, apiKey, { pauseMs: 100 }));
+      const range = await auditableRange(w.id, safe, run.days);
+      if (!range) continue;
+      const prev = base?.wallets.find((x) => x.wallet_id === w.id);
+      // Building on an earlier result: only the blocks after it
+      const checkFrom = prev ? prev.to_block + 1 : range.from_block;
+      const window = { ...range, from_block: checkFrom };
+      // The fingerprint is kept only if the books did not change while this wallet was checked
+      const before = await rangeSignature(w.id, window.to_block);
+      const audit = window.from_block > window.to_block ? emptyAudit(window) : await auditRange(window, apiKey, { pauseMs: 100 });
+      const after = await rangeSignature(w.id, window.to_block);
+      parts.push({ audit, from_block: prev ? prev.from_block : range.from_block, signature: before === after ? after : null });
     }
-    const summary = await buildSummary(audits, run.days, apiKey);
+    const summary = await buildSummary(parts, run.days, apiKey, base);
     await query(
       `UPDATE audit_runs SET status = 'complete', result = $2, finished_at = NOW() WHERE id = $1`,
       [runId, JSON.stringify(summary)],
     );
     text = describeSummary(summary, { timezone, subject });
-    logger.info({ runId, userId: run.user_id, transactions: summary.transactions }, 'Books check complete');
+    logger.info({ runId, userId: run.user_id, transactions: summary.transactions, incremental: Boolean(base) }, 'Books check complete');
   } catch (err) {
     const provider = err instanceof ProviderUnavailableError;
     await query(
@@ -360,15 +442,24 @@ function entryText(e: AuditEntry, timezone: string | undefined): string {
 }
 
 // "everything I've tracked since Sep 1 across your 2 wallets"
+// "everything I've tracked across your 2 wallets from Sep 1 to Sep 26 10:35": the exact
+// range the check verified, never "all"
 function coverageText(s: AuditSummary, timezone: string | undefined, subject: string): string {
   const starts = s.wallets.map((w) => w.from_time).filter((t): t is string => Boolean(t)).sort();
+  const ends = s.wallets.map((w) => w.to_time).filter((t): t is string => Boolean(t)).sort();
   const since = starts[0] ? fmtDate(starts[0], timezone, s.days !== null) : null;
+  const until = ends.length ? fmtDate(ends[ends.length - 1], timezone, true) : null;
   const walletsText = s.wallets.length === 1 ? `${subject} wallet` : `${subject} ${s.wallets.length} wallets`;
+  // One day: "Sep 21, up to 14:30"; otherwise "Sep 1 to Sep 26, 14:30"
+  const sameDay = since && until && until.startsWith(since.split(',')[0]);
+  const span = since && until
+    ? (sameDay ? `${since.split(',')[0]}, up to ${until.split(', ').pop()}` : `${since} to ${until}`)
+    : null;
   if (s.days !== null) {
     const period = s.days === 1 ? 'the last day' : `the last ${s.days} days`;
-    return `everything across ${walletsText} over ${period}${since ? ` (since ${since})` : ''}`;
+    return `everything across ${walletsText} over ${period}${span ? ` (${span})` : ''}`;
   }
-  return `everything I've tracked${since ? ` since ${since}` : ''} across ${walletsText}`;
+  return `everything I've tracked across ${walletsText}${span ? (sameDay ? ` on ${span}` : ` from ${span}`) : ''}`;
 }
 
 export function describeSummary(
@@ -383,7 +474,7 @@ export function describeSummary(
   if (o.reused === 'stale') lines.push(`This is from my check at ${at}; anything that arrived since then is not in it yet.`);
 
   const tx = `${s.transactions} transaction${s.transactions === 1 ? '' : 's'}`;
-  const mv = `${s.movements} movement${s.movements === 1 ? '' : 's'} of ETH, USDC and BNKR`;
+  const mv = `${s.movements} supported financial movement${s.movements === 1 ? '' : 's'}`;
   lines.push(`I checked ${coverageText(s, o.timezone, subject)}: ${tx}, ${mv}.`);
 
   const missing = MISSING.flatMap((k) => s.gaps[k].map((e) => ({ k, e })));
@@ -397,7 +488,16 @@ export function describeSummary(
     const wrong = missing.filter(({ k }) => k === 'not_on_chain').length;
     const state = wrong === 0 ? 'missing from' : wrong === missing.length ? 'wrong in' : 'missing or wrong in';
     lines.push('', `${movementsN(missing.length)} ${state} ${books}:`);
-    for (const { k, e } of missing) lines.push(`- ${entryText(e, o.timezone)}: ${GAP_WORDS[k]}.`);
+    for (const { k, e } of missing) {
+      let why = GAP_WORDS[k];
+      if (k === 'not_synced') {
+        const reached = s.wallets.find((w) => w.address === e.wallet)?.synced_to_time;
+        why = reached
+          ? `I haven't synced it yet (my last sync of this wallet reached ${fmtDate(reached, o.timezone, true)}), so it's missing from your books`
+          : GAP_WORDS[k];
+      }
+      lines.push(`- ${entryText(e, o.timezone)}: ${why}.`);
+    }
   }
   if (incomplete.length > 0) {
     lines.push('', `${movementsN(incomplete.length)} in ${books} but not finished:`);

@@ -222,6 +222,7 @@ describeDb('transaction trace and wallet audit (integration)', () => {
 
   describe('auditWallet', () => {
     it('finds every transaction any source knows and counts what was lost where', async () => {
+      chain.tip = 1200; // checks verify up to the tip minus 150 blocks
       const { user, wallet } = await seedUserWithWallet();
       const w = wallet.address;
       const ok = usdcTransfer(w, { block: 900, from: addr(), to: w, raw: 1_000_000n });
