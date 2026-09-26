@@ -4,7 +4,7 @@ import { it, expect, vi, beforeEach, describe } from 'vitest';
 
 // The AI: labels every transfer revenue unless a test says otherwise, and records what it saw
 const llm = vi.hoisted(() => ({
-  label: 'revenue' as string,
+  label: 'revenue',
   calls: [] as Array<{ ids: string[]; context: Map<string, unknown> }>,
 }));
 vi.mock('../../src/classification/llm.js', () => ({

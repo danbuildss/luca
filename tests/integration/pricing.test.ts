@@ -4,9 +4,9 @@
 import { it, expect, vi, beforeEach, describe } from 'vitest';
 
 const chain = vi.hoisted(() => ({
-  eth: 2500 as number | null,
-  bnkr: { usd: 0.004, kind: 'twap' } as { usd: number; kind: 'twap' | 'spot' } | null,
-  usdc: 1 as number | null,
+  eth: 2500,
+  bnkr: { usd: 0.004, kind: 'twap' },
+  usdc: 1,
   reads: 0,
 }));
 vi.mock('../../src/pricing/onchain.js', () => ({

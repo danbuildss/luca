@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 type RpcBody = { method: string; params: Array<{ fromBlock: string; toBlock: string }> };
-const post = vi.fn<[string, RpcBody], Promise<unknown>>();
+const post = vi.fn<(url: string, body: RpcBody) => Promise<unknown>>();
 vi.mock('axios', () => ({ default: { post: (url: string, body: RpcBody) => post(url, body) } }));
 
 const { parseReceipt, getLogsChunked, RpcError } = await import('../../src/ingestion/alchemy.js');

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 type GetConfig = { params?: Record<string, string | boolean> };
-const get = vi.fn<[string, GetConfig?], Promise<unknown>>();
+const get = vi.fn<(url: string, cfg?: GetConfig) => Promise<unknown>>();
 vi.mock('axios', () => ({ default: { get: (url: string, cfg?: GetConfig) => get(url, cfg) } }));
 
 const chainPrice = vi.hoisted(() => ({ eth: null as number | null, bnkr: null as { usd: number; kind: 'twap' | 'spot' } | null }));

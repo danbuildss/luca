@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 
 vi.mock('../../src/db.js', () => ({
   query: vi.fn(),
@@ -9,7 +9,7 @@ import * as db from '../../src/db.js';
 import { generateDailyBrief, generateWeeklyBrief } from '../../src/briefs/generate.js';
 import { getPnlSummary } from '../../src/books/query.js';
 
-const mockQuery = db.query as ReturnType<typeof vi.fn>;
+const mockQuery = db.query as unknown as Mock<(text: string, params?: unknown[]) => Promise<unknown>>;
 
 // Returns rows in call order
 function queueResults(...results: Array<{ rows: unknown[] }>) {
@@ -50,7 +50,7 @@ describe('getPnlSummary', () => {
   it('nets refunds by direction in SQL', async () => {
     queueResults(pnlRow('0', '0', '0'));
     await getPnlSummary('user-1', 7);
-    const sql = mockQuery.mock.calls[0][0] as string;
+    const sql = mockQuery.mock.calls[0][0];
     // revenue going out and expenses coming in are subtracted
     expect(sql).toMatch(/direction = 'out' THEN -/);
     expect(sql).toMatch(/direction = 'in' THEN -/);

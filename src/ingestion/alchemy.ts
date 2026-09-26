@@ -206,7 +206,7 @@ export function parseReceipt(r: RpcReceipt): TxReceipt {
     l1Fee,
     operatorFee,
     fee: gasUsed * effectiveGasPrice + l1Fee + operatorFee,
-    raw: r as unknown as Record<string, unknown>,
+    raw: r,
   };
 }
 
