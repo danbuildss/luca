@@ -4,8 +4,10 @@
 --
 -- A check of an operator's books against the chain ("are my books complete?") runs in
 -- the background and can take minutes. Each run is recorded so a restart mid-check is
--- known (status 'interrupted') and retried, the result can be reused while the books
--- have not changed, and the operator is told the outcome exactly once (delivered_at).
+-- known (status 'interrupted') and retried, and the operator is told the outcome exactly
+-- once (delivered_at). The result records, per wallet, the block the check verified
+-- through and a fingerprint of the books over that range; it is reused only when the
+-- chain has no new safe blocks and the fingerprint is unchanged.
 
 CREATE TABLE IF NOT EXISTS audit_runs (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -15,7 +17,9 @@ CREATE TABLE IF NOT EXISTS audit_runs (
   status        TEXT NOT NULL DEFAULT 'running'
                 CHECK (status IN ('running', 'complete', 'failed', 'interrupted')),
   attempts      INTEGER NOT NULL DEFAULT 1,
-  signature     TEXT,     -- state of the books when checked; unchanged = the result still holds
+  -- Set when only the blocks after an earlier check were verified (its result still
+  -- held); this run's result then covers both
+  base_run_id   UUID REFERENCES audit_runs(id) ON DELETE SET NULL,
   result        JSONB,
   error         TEXT,
   started_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -31,3 +35,4 @@ DO $$ BEGIN
     EXECUTE 'GRANT ALL ON audit_runs TO luca';
   END IF;
 END $$;
+

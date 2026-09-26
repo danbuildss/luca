@@ -1,5 +1,5 @@
 import { query } from '../db.js';
-import { fetchAllTransfers, blockToHex, RpcError } from '../ingestion/alchemy.js';
+import { fetchAllTransfers, blockToHex, getCurrentBlock, RpcError } from '../ingestion/alchemy.js';
 import { fetchSupportedTokenLogs } from '../ingestion/logs.js';
 import { fetchSentTransactions } from '../ingestion/blockscout.js';
 import { traceTransaction, type TraceLayer, type TraceResult } from './trace.js';
@@ -11,6 +11,18 @@ import { traceTransaction, type TraceLayer, type TraceResult } from './trace.js'
 
 // Base produces a block every 2 seconds
 export const BLOCKS_PER_DAY = 43_200;
+
+// A check verifies up to the chain, not up to Luca's own sync, so a stuck or lossy sync
+// cannot shrink what gets checked. It stops this far behind the tip: the worker syncs
+// every 60 seconds to 10 blocks short of the tip, so anything older than 5 minutes that
+// is not in the books is a real miss, not a sync that simply has not run yet. Base
+// reorgs are far shallower than this.
+export const AUDIT_SAFE_MARGIN_BLOCKS = 150;
+
+export async function safeBlock(apiKey: string): Promise<number> {
+  const tip = await getCurrentBlock(apiKey).catch((err: unknown) => { throw new ProviderUnavailableError(err); });
+  return tip - AUDIT_SAFE_MARGIN_BLOCKS;
+}
 
 // A data provider (Alchemy, Blockscout) did not answer; the check could not finish.
 export class ProviderUnavailableError extends Error {
@@ -49,6 +61,8 @@ export type WalletAudit = {
   wallet_id: string;
   from_block: number;
   to_block: number;
+  // How far Luca's own sync of the wallet had got (watch_jobs.last_block)
+  synced_to: number | null;
   // Every transaction any source knew for the wallet, spam included
   discovered: number;
   // Transactions with at least one ETH, USDC or BNKR movement for this wallet
@@ -62,11 +76,13 @@ export type WalletAudit = {
   notes: Record<string, number>;
 };
 
-export type WalletRange = { wallet_id: string; address: string; from_block: number; to_block: number };
+export type WalletRange = {
+  wallet_id: string; address: string; from_block: number; to_block: number; synced_to: number | null;
+};
 
-// The block range Luca has synced for a wallet, optionally only the last `days` of it.
-// Null when the wallet has never been synced.
-export async function syncedRange(walletId: string, days?: number | null): Promise<WalletRange | null> {
+// What a check covers for a wallet: from the first block Luca ever synced for it (or the
+// last `days`) up to `toBlock`, normally the safe chain block. Null when never synced.
+export async function auditableRange(walletId: string, toBlock: number, days?: number | null): Promise<WalletRange | null> {
   const w = (await query<{ id: string; address: string; from_block: string | null; last_block: string | null }>(
     `SELECT w.id, LOWER(w.address) AS address,
             (SELECT MIN(sr.from_block) FROM sync_runs sr WHERE sr.wallet_id = w.id)::text AS from_block,
@@ -75,11 +91,13 @@ export async function syncedRange(walletId: string, days?: number | null): Promi
      WHERE w.id = $1`,
     [walletId],
   )).rows[0];
-  if (!w?.from_block || !w.last_block) return null;
-  const toBlock = Number(w.last_block);
+  if (!w?.from_block) return null;
   let fromBlock = Number(w.from_block);
   if (days) fromBlock = Math.max(fromBlock, toBlock - days * BLOCKS_PER_DAY);
-  return { wallet_id: w.id, address: w.address, from_block: fromBlock, to_block: toBlock };
+  return {
+    wallet_id: w.id, address: w.address, from_block: fromBlock, to_block: toBlock,
+    synced_to: w.last_block ? Number(w.last_block) : null,
+  };
 }
 
 export async function auditRange(
@@ -112,7 +130,8 @@ export async function auditRange(
   ])].sort();
 
   const audit: WalletAudit = {
-    wallet, wallet_id, from_block: fromBlock, to_block: toBlock, discovered: hashes.length, transactions: 0, hashes: [],
+    wallet, wallet_id, from_block: fromBlock, to_block: toBlock, synced_to: range.synced_to,
+    discovered: hashes.length, transactions: 0, hashes: [],
     verdicts: { complete: 0, gaps: 0, not_tracked: 0, not_found: 0 },
     movements: 0, lost: [], unknown: [], notes: {},
   };
@@ -153,14 +172,14 @@ export async function auditWallet(
     [address.toLowerCase()],
   )).rows[0];
   if (!w) throw new Error(`${address} is not a wallet Luca tracks`);
-  const range = await syncedRange(w.id, opts.days);
+  const range = await auditableRange(w.id, await safeBlock(apiKey), opts.days);
   if (!range) throw new Error(`${address} has not been synced yet`);
   return auditRange(range, apiKey, opts);
 }
 
 export function describeAudit(a: WalletAudit): string[] {
   const lines = [
-    `Wallet ${a.wallet}, blocks ${a.from_block}–${a.to_block}`,
+    `Wallet ${a.wallet}, blocks ${a.from_block}–${a.to_block} (Luca's sync is at ${a.synced_to ?? 'never'})`,
     `${a.discovered} transactions known to any source; ${a.transactions} with ETH, USDC or BNKR movements (${a.movements} movements).`,
     `Complete: ${a.verdicts.complete}  |  With gaps: ${a.verdicts.gaps}  |  Not found: ${a.verdicts.not_found}  |  Not this wallet's: ${a.verdicts.not_tracked}`,
     `Labeled unknown (waiting on the operator, not missing): ${a.unknown.length}`,
