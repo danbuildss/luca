@@ -25,6 +25,8 @@ export const chain = {
   blockTxs: new Map<number, Array<{ hash: string; from: string; to: string | null }>>(),
   truth: [] as Truth[],
   feedDown: false,
+  // An HTTP error Blockscout's native transaction list answers with (e.g. 422, 503)
+  nativeHttpError: null as number | null,
 };
 
 let seq = 0;
@@ -46,6 +48,7 @@ export function resetChain(): void {
   chain.blockTxs = new Map();
   chain.truth = [];
   chain.feedDown = false;
+  chain.nativeHttpError = null;
 }
 
 export function balanceAt(wallet: string, token: string | null, block: number): bigint {
@@ -252,8 +255,11 @@ export function blockscoutMock<T extends Record<string, unknown>>(orig: T): T {
           log_index: t.uniqueId.split(':').at(-1) ?? null,
         }))),
     // Successful, value-bearing top-level ETH transactions in or out, from its own list
-    fetchNativeTransactions: (wallet: string, from: number) => Promise.resolve(
-      chain.native
+    fetchNativeTransactions: (wallet: string, from: number) => chain.nativeHttpError !== null
+      ? Promise.reject(Object.assign(new Error(`Request failed with status code ${chain.nativeHttpError}`), {
+          isAxiosError: true, response: { status: chain.nativeHttpError },
+        }))
+      : Promise.resolve(chain.native
         .filter((t) => t.block >= from && [t.from.toLowerCase(), t.to.toLowerCase()].includes(wallet.toLowerCase()))
         .map((t) => ({
           hash: t.hash, block_number: t.block, timestamp: time(t.block),

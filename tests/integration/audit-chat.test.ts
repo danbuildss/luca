@@ -141,6 +141,25 @@ describeDb('books check from chat (integration)', () => {
     expect((await sql<{ status: string }>(`SELECT status FROM audit_runs`))[0].status).toBe('failed');
   });
 
+  it('a provider rejecting the request (HTTP 422) is reported as an error on Luca\'s side, not an outage', async () => {
+    const { user, wallet } = await seedUserWithWallet({ timezone: 'UTC' });
+    await sync(wallet.id);
+    chain.nativeHttpError = 422;
+    await executeTool(user.id, 'check_books_complete', {});
+    const text = await finished();
+    record('Provider rejected the request (Luca-side error)', text);
+    expect(text).toBe("I couldn't finish checking your wallets because of an error on my side. Nothing in the books has changed, and the error is logged.");
+    expect(text).not.toContain('isn\'t responding');
+  });
+
+  it('a provider that is down (HTTP 503) is still reported as not responding', async () => {
+    const { user, wallet } = await seedUserWithWallet({ timezone: 'UTC' });
+    await sync(wallet.id);
+    chain.nativeHttpError = 503;
+    await executeTool(user.id, 'check_books_complete', {});
+    expect(await finished()).toContain("my blockchain data provider isn't responding right now");
+  });
+
   describe('reusing a result', () => {
     async function completeCheck() {
       const { user, wallet } = await seedUserWithWallet({ timezone: 'UTC' });

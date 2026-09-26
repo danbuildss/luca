@@ -122,10 +122,10 @@ export async function fetchNativeTransactions(
   let nextParams: Record<string, unknown> | null = null;
 
   do {
-    const url = buildUrl(`/addresses/${walletAddress}/transactions`, {
-      filter: 'to | from',
-      ...(nextParams ?? {}),
-    });
+    // No filter: Blockscout returns transactions in both directions. (The API accepts
+    // only "to" or "from"; the literal "to | from" is rejected with HTTP 422.)
+    // Blockscout's next_page_params are block numbers, indexes and hashes
+    const url = buildUrl(`/addresses/${walletAddress}/transactions`, (nextParams ?? {}) as Record<string, string | number | null>);
 
     const page = await get<PagedResponse<BlockscoutTx>>(url);
     const relevant = page.items.filter(isIngestibleNativeTx(fromBlockNumber));
