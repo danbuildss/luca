@@ -34,8 +34,8 @@ vi.mock('../../src/ledger/audit-runs.js', async (importOriginal) => ({
 import { runAgent } from '../../src/agent/run.js';
 import * as db from '../../src/db.js';
 import {
-  namesPeriod, checkArgs, claimsCheck, claimsVerdict, asksCompleteness, periodDays,
-  CLAIM_CORRECTION, NO_CHECK_STARTED, VERDICT_CORRECTION,
+  namesPeriod, checkArgs, claimsCheck, claimsVerdict, asksCompleteness, periodDays, leaksToolCall,
+  CLAIM_CORRECTION, NO_CHECK_STARTED, VERDICT_CORRECTION, TOOL_LEAK_CORRECTION, TOOL_LEAK_FALLBACK,
 } from '../../src/agent/checks.js';
 
 const USER = '00000000-0000-0000-0000-000000000001';
@@ -51,6 +51,14 @@ function callCheck(args: Record<string, unknown>) {
     usage: { prompt_tokens: 1, completion_tokens: 1 },
   };
 }
+function callTool(name: string, args: Record<string, unknown>) {
+  return {
+    choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 't2', type: 'function', function: { name, arguments: JSON.stringify(args) } }] } }],
+    usage: { prompt_tokens: 1, completion_tokens: 1 },
+  };
+}
+// The exact reply an operator got in production (Sep 27)
+const LEAK = '{"limit":20,"period_days":7}\n\nI’m sorry, but I can’t show recent transactions right now because I need the tool result to answer that.';
 const daysAsked = (): unknown => (requestAudit.mock.calls as unknown as Array<[{ days: unknown }]>)[0][0].days;
 
 describe('the period a books check covers', () => {
@@ -206,5 +214,42 @@ describe('books checks through the agent', () => {
     const r = await runAgent({ userId: USER, userMessage: 'what did gas cost this week?', role: 'operator' });
     expect(r.text).toBe('You spent $12.00 on gas this week.');
     expect(create).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('tool input never reaches the operator', () => {
+  beforeEach(() => { vi.clearAllMocks(); seen.length = 0; });
+
+  it('recognises raw tool input and tool talk, and nothing else', () => {
+    for (const t of [LEAK, '{"limit":20,"period_days":7}', 'Here: {"hash": "0xabc"}', 'I need the tool result first.', 'Making a function call now.']) {
+      expect(leaksToolCall(t), t).toBe(true);
+    }
+    for (const t of ['You spent $12.00 on gas this week.', 'Revenue {approx} was $840.', 'Nothing here: {}',
+      '```\nRevenue      +$4,810.00\nExpenses     -$1,940.00\n```', 'A tool for the job.']) {
+      expect(leaksToolCall(t), t).toBe(false);
+    }
+  });
+
+  it('a reply showing tool input is not sent; the model must make the call, then answers from its result', async () => {
+    script(
+      say(LEAK),
+      callTool('get_recent_activity', { limit: 20, period_days: 7 }),
+      say('Nothing moved in your wallet this week.'),
+    );
+    const r = await runAgent({ userId: USER, userMessage: 'show me my recent transactions', role: 'operator' });
+
+    expect(seen[1].tool_choice).toBe('required');
+    expect(seen[1].messages.at(-1)).toEqual({ role: 'system', content: TOOL_LEAK_CORRECTION });
+    expect(seen[1].messages.some((m) => m.role === 'assistant' && m.content === LEAK)).toBe(false);
+    // Once the call is made, the answer may be plain text again
+    expect(seen[2].tool_choice).toBe('auto');
+    expect(r.text).toBe('Nothing moved in your wallet this week.');
+  });
+
+  it('if the model shows tool input again, Luca says plainly it could not look it up', async () => {
+    script(say(LEAK), say('{"limit":20}'));
+    const r = await runAgent({ userId: USER, userMessage: 'show me my recent transactions', role: 'operator' });
+    expect(r.text).toBe(TOOL_LEAK_FALLBACK);
+    expect(r.text).not.toMatch(/[{}]|tool/i);
   });
 });

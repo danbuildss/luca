@@ -10,7 +10,10 @@ import { pendingActions, type PendingAction } from './pending.js';
 import { saveAnswerTrace, type ToolUse } from './traces.js';
 import { ADMIN_TOOL_DEFINITIONS, executeAdminTool, isAdminTool } from './admin-tools.js';
 import { logAgentSpend } from './spend.js';
-import { CHECK_TOOLS, checkArgs, claimsCheck, claimsVerdict, CLAIM_CORRECTION, NO_CHECK_STARTED, VERDICT_CORRECTION } from './checks.js';
+import {
+  CHECK_TOOLS, checkArgs, claimsCheck, claimsVerdict, leaksToolCall,
+  CLAIM_CORRECTION, NO_CHECK_STARTED, VERDICT_CORRECTION, TOOL_LEAK_CORRECTION, TOOL_LEAK_FALLBACK,
+} from './checks.js';
 import { answerBooksCheck, startBooksCheck } from './books-check.js';
 
 export type AgentResult = {
@@ -84,6 +87,9 @@ export async function runAgent(params: {
   let corrected = false;
   // A reply stating whether the books are complete, with no check behind it, gets one
   let verdictCorrected = false;
+  // A reply showing raw tool input instead of making the call gets one forced retry
+  let leakCorrected = false;
+  let forceTool = false;
 
   while (steps < MAX_STEPS) {
     steps++;
@@ -93,7 +99,7 @@ export async function runAgent(params: {
       messages,
       tools,
       // After a false claim of a running check, a tool call is required
-      tool_choice: corrected && !used.some((u) => CHECK_TOOLS.has(u.name)) ? 'required' : 'auto',
+      tool_choice: forceTool || (corrected && !used.some((u) => CHECK_TOOLS.has(u.name))) ? 'required' : 'auto',
     });
     await logAgentSpend(userId, AGENT_MODEL, response.usage);
 
@@ -106,6 +112,19 @@ export async function runAgent(params: {
     // No tool calls — we have the final answer
     if (!assistantMessage.tool_calls || assistantMessage.tool_calls.length === 0) {
       const text = assistantMessage.content ?? '';
+      // Never show the operator tool input or talk about tools
+      if (leaksToolCall(text)) {
+        if (!leakCorrected) {
+          leakCorrected = true;
+          forceTool = true;
+          logger.warn({ userId }, 'Reply showed tool input instead of calling the tool; correcting');
+          messages.pop();
+          messages.push({ role: 'system', content: TOOL_LEAK_CORRECTION });
+          continue;
+        }
+        logger.warn({ userId }, 'Reply showed tool input again; not sent');
+        return finish(TOOL_LEAK_FALLBACK);
+      }
       // Never tell the operator a check is running unless one was started this turn
       if (claimsCheck(text) && !used.some((u) => CHECK_TOOLS.has(u.name))) {
         if (!corrected) {
@@ -132,6 +151,9 @@ export async function runAgent(params: {
       }
       return finish(text);
     }
+
+    // The retry made its call: the answer after it may be plain text again
+    forceTool = false;
 
     // Execute each tool call
     for (const toolCall of assistantMessage.tool_calls) {

@@ -95,3 +95,32 @@ export function claimsVerdict(text: string): boolean {
 
 export const VERDICT_CORRECTION =
   'Your last reply said whether the books are complete or that nothing is missing, but no check ran in this turn. Only a books check can say that. Answer the question without any completeness verdict.';
+
+// ---------------------------------------------------------------------------
+// Tool input or tool talk never reaches the operator
+// ---------------------------------------------------------------------------
+// The model sometimes writes a tool call out as text instead of making it: the operator
+// asked "show me my recent transactions" and got `{"limit":20,"period_days":7}` followed by
+// "I need the tool result to answer that". A reply that shows raw tool input or talks about
+// tools is never sent; the model gets one chance to make the call, then Luca says plainly
+// that it could not look it up.
+
+const TOOL_TALK = /\btool\s+(results?|calls?|outputs?)\b|\bfunction\s+calls?\b/i;
+
+export function leaksToolCall(text: string): boolean {
+  if (TOOL_TALK.test(text)) return true;
+  // Any JSON object with at least one field: no answer to an operator contains one
+  for (const m of text.matchAll(/\{[^{}]*\}/g)) {
+    try {
+      const v: unknown = JSON.parse(m[0]);
+      if (v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length > 0) return true;
+    } catch { /* not JSON */ }
+  }
+  return false;
+}
+
+export const TOOL_LEAK_CORRECTION =
+  'Your last reply showed the operator raw tool arguments or talked about tools, instead of calling the tool. Call the tool you meant now, then answer from its result in plain words. Never show JSON or mention tools.';
+
+export const TOOL_LEAK_FALLBACK =
+  "Something went wrong on my side while looking that up, so I don't have an answer yet. Ask me again in a moment.";
