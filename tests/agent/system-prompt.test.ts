@@ -40,7 +40,7 @@ describe('open questions about earlier transfers', () => {
       } : { rows: [] }));
     const prompt = await buildSystemPrompt('user-1', 'operator');
     expect(prompt).toContain('## Open Questions');
-    expect(prompt).toContain('<data>\n1. id p-1, asked 2026-09-27 12:30 UTC: I found 6 earlier payments to 0xabcd…1234 that the same rule covers (6 labeled expense). Want me to label them revenue too?\n</data>');
+    expect(prompt).toContain('<data>\n1. yes/no question id p-1, asked 2026-09-27 12:30 UTC: I found 6 earlier payments to 0xabcd…1234 that the same rule covers (6 labeled expense). Want me to label them revenue too?\n</data>');
     q.mockImplementation(() => Promise.resolve({ rows: [] }));
     expect(await buildSystemPrompt('user-1', 'operator')).not.toContain('## Open Questions');
   });

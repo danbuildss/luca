@@ -1,7 +1,7 @@
 import { query } from '../db.js';
 
 // Per-counterparty questions sent before grouped questions (src/alerts/questions.ts).
-// Kept so the buttons on messages already sent still work.
+// Kept for their history; their buttons on messages already sent now say they have expired.
 
 export type CounterpartyAlert = {
   id: string;

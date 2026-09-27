@@ -1,25 +1,9 @@
 import type { Telegraf, Context, Telegram } from 'telegraf';
-import { Markup } from 'telegraf';
 import { logger } from '../logger.js';
 import { formatAddress, formatAmount, escapeLegacyMarkdown, sendMarkdownSafe } from './format.js';
 import { getQuestionsToSend, markQuestionSent, type QuestionToSend } from '../alerts/questions.js';
 import { txLink } from '../ledger/links.js';
-
-// Callback data stays under Telegram's 64-byte limit: qg:<uuid>:internal_transfer is 57.
-function questionKeyboard(groupId: string) {
-  const p = `qg:${groupId}`;
-  return Markup.inlineKeyboard([
-    [
-      Markup.button.callback('Revenue', `${p}:revenue`),
-      Markup.button.callback('Expense', `${p}:expense`),
-    ],
-    [
-      Markup.button.callback('Internal', `${p}:internal_transfer`),
-      Markup.button.callback('Refund', `${p}:refund`),
-      Markup.button.callback('Skip', `qg_skip:${groupId}`),
-    ],
-  ]);
-}
+import { saveMessage } from '../agent/context.js';
 
 function day(d: Date): string {
   return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
@@ -29,6 +13,9 @@ function usd(n: number): string {
   return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+// Luca's question about transfers that need context, answered in chat ("those are
+// expenses", "that was infrastructure"); no buttons. src/agent/changes.ts turns the answer
+// into a change the operator confirms.
 export function questionText(q: QuestionToSend): string {
   // Address inside a code span: strip backticks rather than escape them.
   const who = `\`${formatAddress(q.counterparty_address).replace(/`/g, '')}\``;
@@ -42,30 +29,30 @@ export function questionText(q: QuestionToSend): string {
       : `You sent ${amount} to ${who} on ${day(q.last_at)}.`;
     // The transaction itself, tappable on BaseScan
     const tx = q.hash ? `Transaction: ${txLink(q.hash)}` : null;
-    return [what, ...(tx ? [tx] : []), '', 'What was it for? Tap a label below, or just tell me in a message.'].join('\n');
+    return [what, ...(tx ? [tx] : []), '', 'What was it for?'].join('\n');
   }
 
   const total = parseFloat(q.total_usd);
-  const kind = q.direction === 'in' ? `incoming ${asset} transfers from` : `outgoing ${asset} payments to`;
+  const kind = q.direction === 'in' ? `similar ${asset} transfers from` : `similar ${asset} payments to`;
   const span = day(q.first_at) === day(q.last_at) ? `on ${day(q.last_at)}` : `${day(q.first_at)} to ${day(q.last_at)}`;
-  const amount = total > 0 ? `, ${usd(total)} total` : '';
-  return [
-    `${q.event_count} ${kind} ${who}${amount}, ${span}.`,
-    '',
-    `What are these? One tap labels all ${q.event_count}, or just tell me in a message.`,
-  ].join('\n');
+  const amount = total > 0 ? `${usd(total)} total, ` : '';
+  return `I have ${q.event_count} ${kind} ${who} that still need context (${amount}${span}). They look related. What were they for?`;
 }
 
 export async function sendPendingAlerts(bot: Telegraf<Context>): Promise<void> {
   const questions = await getQuestionsToSend();
   for (const q of questions) {
     try {
+      const text = questionText(q);
       const sent = await sendMarkdownSafe(
         (t, x) => bot.telegram.sendMessage(Number(q.telegram_id), t, x as Parameters<Telegram['sendMessage']>[2]),
-        questionText(q),
-        { reply_markup: questionKeyboard(q.id).reply_markup },
+        text,
       );
-      if (sent) await markQuestionSent(q.id, sent.message_id);
+      if (sent) {
+        await markQuestionSent(q.id, sent.message_id);
+        // In the conversation, so the operator's answer ("those are expenses") has its context
+        await saveMessage({ userId: q.user_id, role: 'assistant', content: text });
+      }
     } catch (err) {
       logger.error({ err, groupId: q.id }, 'Failed to send question');
     }

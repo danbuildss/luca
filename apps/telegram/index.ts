@@ -11,11 +11,10 @@ import { handleQuality } from '../../src/telegram/commands/quality.js';
 import { handleGoldSet } from '../../src/telegram/commands/goldset.js';
 import { handleOps } from '../../src/telegram/commands/ops.js';
 import { touchUserActivity } from '../../src/ops/db.js';
-import { handleCallback, agentConfirmKeyboard } from '../../src/telegram/callbacks.js';
+import { handleCallback } from '../../src/telegram/callbacks.js';
 import { sendPendingAlerts } from '../../src/telegram/alerts.js';
 import { replyMarkdownSafe, replyPlainWithLinks, sendPlainWithLinks } from '../../src/telegram/format.js';
 import { UserRateLimiter, singleFlight } from '../../src/telegram/ratelimit.js';
-import { describePendingAction } from '../../src/agent/pending.js';
 import { generateDailyBrief, generateWeeklyBrief } from '../../src/briefs/generate.js';
 import { launchWithRetry } from '../../src/telegram/launch.js';
 import { setAuditNotifier, recoverAudits } from '../../src/ledger/audit-runs.js';
@@ -95,9 +94,11 @@ bot.command('summary', async (ctx) => {
   await handleSummary(ctx, user, args);
 });
 
+// Label buttons: an internal tool now. Operators answer Luca's questions in chat.
 bot.command('review', async (ctx) => {
   const user = await requireUser(ctx);
   if (!user) return;
+  if (user.role !== 'admin') { await ctx.reply(ADMIN_ONLY_MSG); return; }
   void touchUserActivity(user.userId);
   await handleReview(ctx, user);
 });
@@ -265,17 +266,10 @@ bot.on('text', async (ctx) => {
     // Typing indicator while agent works
     await ctx.sendChatAction('typing');
 
-    const { text, pendingActions } = await runAgent({ userId: user.userId, userMessage, role: user.role });
+    // A change the operator asked for ends the reply with Luca's own question about it;
+    // it happens only when they answer yes (src/agent/changes.ts). No buttons.
+    const { text } = await runAgent({ userId: user.userId, userMessage, role: user.role });
     await replyMarkdownSafe(ctx, text);
-
-    // Write actions the agent proposed — executed only after the user confirms.
-    for (const action of pendingActions) {
-      const kb = agentConfirmKeyboard(action.id);
-      await ctx.reply(
-        `Please confirm this change:\n${describePendingAction(action.toolName, action.args)}\n\nThis request expires in 10 minutes.`,
-        { reply_markup: kb.reply_markup },
-      );
-    }
   } catch (err) {
     logger.error({ err, userId: user.userId }, 'Agent run failed');
     await ctx.reply('Something went wrong on my side. Please try again in a moment.');
@@ -290,23 +284,6 @@ bot.on('text', async (ctx) => {
 bot.on('callback_query', async (ctx) => {
   const user = await requireUser(ctx);
   if (!user) return;
-
-  // Handle alert_skip separately (no event to label)
-  const data = (ctx.callbackQuery as { data?: string } | undefined)?.data ?? '';
-  if (data.startsWith('alert_skip:')) {
-    const alertId = data.split(':')[1];
-    try {
-      const { resolveAlert } = await import('../../src/alerts/counterparty.js');
-      await resolveAlert({ alertId, userId: user.userId, status: 'skipped' });
-      await ctx.answerCbQuery('Skipped');
-    } catch (err) {
-      logger.error({ err, alertId, userId: user.userId }, 'alert_skip callback failed');
-      try { await ctx.answerCbQuery('Something went wrong — try again'); } catch { /* already answered */ }
-      return;
-    }
-    try { await ctx.editMessageReplyMarkup(undefined); } catch { /* already edited */ }
-    return;
-  }
 
   await handleCallback(ctx, user);
 });

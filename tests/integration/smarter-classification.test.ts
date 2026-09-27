@@ -260,7 +260,7 @@ describeDb('smarter classification (integration)', () => {
 
       const qs = await mine(user.id);
       expect(qs).toHaveLength(1);
-      expect(questionText(qs[0])).toMatch(/^4 outgoing USDC payments to `0x0+[0-9a-f]+…[0-9a-f]+`, \$1,240\.00 total, \w+ \d+ to \w+ \d+\./);
+      expect(questionText(qs[0])).toMatch(/^I have 4 similar USDC payments to `0x0+[0-9a-f]+…[0-9a-f]+` that still need context \(\$1,240\.00 total, \w+ \d+ to \w+ \d+\)\. They look related\. What were they for\?$/);
 
       const answer = await labelQuestionGroup(qs[0].id, user.id, 'expense');
       expect(answer).toMatchObject({ ok: true, labeled: 4, rule: { kind: 'learned' } });

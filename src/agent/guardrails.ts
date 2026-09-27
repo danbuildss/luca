@@ -1,5 +1,5 @@
 // Write tools — all others are read-only
-const WRITE_TOOLS = new Set(['apply_correction', 'register_wallet']);
+const WRITE_TOOLS = new Set(['apply_correction', 'register_wallet', 'label_question_group']);
 
 export function isWriteTool(toolName: string): boolean {
   return WRITE_TOOLS.has(toolName);

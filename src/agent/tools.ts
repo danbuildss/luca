@@ -14,6 +14,7 @@ import { ClassificationLabel, CLASSIFICATION_LABELS, WALLET_ROLES, SUPPORTED_CHA
 import { requestAudit, auditRequestForModel, movementStatus, amountText, isMissing } from '../ledger/audit-runs.js';
 import { traceTransaction } from '../ledger/trace.js';
 import { config } from '../config.js';
+import { skipQuestionGroup } from '../alerts/questions.js';
 
 // ---------------------------------------------------------------------------
 // Tool definitions (OpenAI function calling schema)
@@ -238,6 +239,33 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
   {
     type: 'function',
     function: {
+      name: 'label_question_group',
+      description: 'Label a group of transfers Luca asked about (listed under "Open Questions" as a group) with what the operator said they were, for example "those are expenses" or "that was infrastructure" (expense). Nothing changes yet: Luca asks the operator to confirm in its own words. If it is unclear which group they mean or what they were, ask instead.',
+      parameters: {
+        type: 'object',
+        properties: {
+          group_id: { type: 'string', description: 'The id of the group from Open Questions.' },
+          label: { type: 'string', enum: CLASSIFICATION_LABELS.filter((l) => l !== 'unknown'), description: 'What the operator said the transfers were.' },
+        },
+        required: ['group_id', 'label'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'skip_question_group',
+      description: 'Stop asking about a group of transfers for now, when the operator says they do not know or want to skip it ("not sure", "skip that", "ask me later"). Changes nothing in the books.',
+      parameters: {
+        type: 'object',
+        properties: { group_id: { type: 'string', description: 'The id of the group from Open Questions.' } },
+        required: ['group_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'answer_proposal',
       description: 'Answer one of your open questions about earlier transfers (listed under "Open Questions") when the operator\'s message clearly answers it, for example "yes, update those 6 payments" or "no, leave the old ones as they are". Never call it for a bare "yes" or "no", and never when it is unclear which question they mean: ask instead. The result says exactly what changed; relay it as given.',
       parameters: {
@@ -324,7 +352,7 @@ export async function prepareWriteAction(
   toolName: string,
   args: Record<string, unknown>,
 ): Promise<PreparedWrite> {
-  // Checked before the Confirm button is shown, so the operator never confirms a wallet
+  // Checked before Luca asks the operator to confirm, so the operator never confirms a wallet
   // Luca cannot track
   if (toolName === 'register_wallet') {
     if ((args.chain ?? 'base') !== 'base') return { ok: false, error: 'Luca only tracks wallets on Base.' };
@@ -332,6 +360,19 @@ export async function prepareWriteAction(
       return { ok: false, error: 'That is not a Base wallet address (0x followed by 40 hex characters).' };
     }
     return { ok: true, args };
+  }
+  if (toolName === 'label_question_group') {
+    const label = String(args.label);
+    if (!(CLASSIFICATION_LABELS as ReadonlyArray<string>).includes(label) || label === 'unknown') {
+      return { ok: false, error: `Invalid label: ${label}` };
+    }
+    const groupId = argText(args.group_id);
+    const open = /^[0-9a-f-]{36}$/i.test(groupId) ? (await query<{ id: string }>(
+      `SELECT id FROM question_groups WHERE id = $1 AND user_id = $2 AND status IN ('open', 'skipped') AND event_count > 0`,
+      [groupId, userId],
+    )).rows[0] : undefined;
+    if (!open) return { ok: false, error: 'That group is not open any more. Check Open Questions, or ask the operator which transfers they mean.' };
+    return { ok: true, args: { group_id: groupId, label } };
   }
   if (toolName !== 'apply_correction') return { ok: true, args };
 
@@ -585,6 +626,17 @@ export async function executeTool(
       }
 
       return { success: true, wallet_id: walletId, address, chain, label, role };
+    }
+
+    case 'label_question_group':
+      // Only ever applied after the operator confirms (src/agent/changes.ts)
+      return { error: 'This change needs the operator\'s confirmation first.' };
+
+    case 'skip_question_group': {
+      const groupId = argText(args.group_id);
+      if (!/^[0-9a-f-]{36}$/i.test(groupId)) return { error: 'Unknown group' };
+      await skipQuestionGroup(groupId, userId);
+      return { skipped: true, note: 'I will not ask about these again unless more transfers like them arrive.' };
     }
 
     case 'answer_proposal':

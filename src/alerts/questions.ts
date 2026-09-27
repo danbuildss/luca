@@ -6,7 +6,7 @@ import { applyCorrection, type RuleOutcome } from '../corrections/handler.js';
 import { relabelEvents } from '../corrections/store.js';
 
 // Unknown transfers are asked about in groups: one question per address, direction and
-// token ("4 outgoing USDC payments to 0xabc…, $1,240 total"), answered with one tap.
+// token ("4 outgoing USDC payments to 0xabc…, $1,240 total"), answered in chat.
 //   - Groups under PING_MIN_USD (and fully priced) never ping; the daily brief lists them.
 //   - At most MAX_PINGS_PER_DAY questions per operator in any 24 hours.
 //   - A skipped group comes back after REASK_AFTER_DAYS, or sooner if its total doubles.
@@ -166,6 +166,25 @@ export async function getQuestionsToSend(): Promise<QuestionToSend[]> {
   return res.rows;
 }
 
+// Questions Luca has asked and the operator has not answered yet, newest first, so the
+// agent knows which group an answer like "those are expenses" is about
+export type AskedGroup = {
+  id: string; counterparty_address: string; direction: 'in' | 'out'; asset: string | null;
+  event_count: number; total_usd: string; first_at: Date; last_at: Date; sent_at: Date;
+};
+
+export async function getAskedGroups(userId: string): Promise<AskedGroup[]> {
+  const res = await query<AskedGroup>(
+    `SELECT id, counterparty_address, direction, asset, event_count, total_usd::text AS total_usd, first_at, last_at, sent_at
+     FROM question_groups
+     WHERE user_id = $1 AND status = 'open' AND sent_at IS NOT NULL AND event_count > 0
+     ORDER BY sent_at DESC
+     LIMIT 10`,
+    [userId],
+  );
+  return res.rows;
+}
+
 export async function markQuestionSent(groupId: string, messageId: number): Promise<void> {
   await query(
     `UPDATE question_groups
@@ -190,7 +209,7 @@ export type GroupAnswer =
   | { ok: true; labeled: number; rule: RuleOutcome }
   | { ok: false; reason: 'not_found' | 'nothing_open' };
 
-// One tap labels the whole group with the operator's answer; the latest transfer is recorded
+// One answer labels the whole group (after the operator confirms it in chat); the latest transfer is recorded
 // as the correction and teaches the rule for the address.
 export async function labelQuestionGroup(
   groupId: string,

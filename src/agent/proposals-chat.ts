@@ -1,8 +1,10 @@
 import { query } from '../db.js';
-import { pendingProposals, isCurrent, answerProposal, type Proposal } from '../corrections/proposals.js';
+import { pendingProposals, isCurrent, type OpenQuestion } from '../corrections/proposals.js';
+import { resolveProposal } from './changes.js';
 
-// Answers to Luca's questions about earlier transfers ("want me to label them revenue
-// too?"), decided in code, never guessed by the model:
+// Answers to Luca's yes/no questions (a change the operator asked for: "Label … as
+// revenue?", or earlier transfers a rule covers: "want me to label them revenue too?"),
+// decided in code, never guessed by the model:
 //  - A bare "yes" or "no" answers the question only when it is the one open question and
 //    the operator has said nothing else since it was asked.
 //  - Otherwise Luca asks which question they mean, numbered; "yes to 2" then answers it.
@@ -50,7 +52,7 @@ async function timezone(userId: string): Promise<string> {
 }
 
 // The numbered list Luca shows when it is not sure which question an answer is for
-export async function whichOne(userId: string, open: Proposal[]): Promise<string> {
+export async function whichOne(userId: string, open: OpenQuestion[]): Promise<string> {
   const tz = await timezone(userId);
   const when = (d: Date): string => {
     try { return new Date(d).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz }); }
@@ -76,12 +78,12 @@ export async function answerProposalReply(p: { userId: string; message: string }
   if (numbered) {
     const target = open[numbered.n - 1];
     if (!target) return { text: await whichOne(p.userId, open), args: { answered: null } };
-    const r = await answerProposal({ userId: p.userId, proposalId: target.id, accept: numbered.accept });
+    const r = await resolveProposal({ userId: p.userId, proposalId: target.id, accept: numbered.accept });
     return { text: r.text, args: { proposal_id: target.id, accept: numbered.accept } };
   }
 
   if (open.length === 1 && await isCurrent(p.userId, open[0])) {
-    const r = await answerProposal({ userId: p.userId, proposalId: open[0].id, accept: bare === true });
+    const r = await resolveProposal({ userId: p.userId, proposalId: open[0].id, accept: bare === true });
     return { text: r.text, args: { proposal_id: open[0].id, accept: bare } };
   }
   return { text: await whichOne(p.userId, open), args: { answered: null } };

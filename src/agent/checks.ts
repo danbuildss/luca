@@ -156,3 +156,27 @@ export function activityArgs(message: string, args: Record<string, unknown>): Re
   void _ignored;
   return rest;
 }
+
+// ---------------------------------------------------------------------------
+// A change is asked about in Luca's words, not the model's
+// ---------------------------------------------------------------------------
+// When the model proposes a change, its reply is kept for anything else the operator
+// asked, but not when it talks about the change itself: calling it done, or asking for a
+// confirmation Luca's own question already asks.
+
+const CHANGE_TALK = new RegExp(
+  [
+    String.raw`\bdone\b`,
+    String.raw`\bi(?:'ve| have)?\s+(?:now\s+)?(?:re)?label(?:l)?ed\b`,
+    String.raw`\bi(?:'ve| have)?\s+(?:now\s+)?(?:changed|updated|marked|recorded|added|started tracking|tracked|corrected)\b`,
+    String.raw`\b(?:is|are|has been|have been)\s+(?:now\s+)?(?:re)?(?:label(?:l)?ed|tracked|added|updated|marked)\b`,
+    String.raw`\b(?:i'?ll|i will|let me|i can|i'?m going to|going to)\s+(?:re)?(?:label|track|add|mark|update|change|record|correct)\b`,
+    String.raw`\bconfirm\b`, String.raw`\b(?:shall|should) i\b`, String.raw`\b(?:do you )?want me to\b`,
+    String.raw`\btap\b`, String.raw`\bbuttons?\b`,
+  ].join('|'),
+  'i',
+);
+
+export function restatesChange(text: string): boolean {
+  return CHANGE_TALK.test(text);
+}
