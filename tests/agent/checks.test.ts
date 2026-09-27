@@ -35,7 +35,7 @@ import { runAgent } from '../../src/agent/run.js';
 import { saveAnswerTrace } from '../../src/agent/traces.js';
 import * as db from '../../src/db.js';
 import {
-  namesPeriod, checkArgs, activityArgs, claimsCheck, claimsVerdict, asksCompleteness, periodDays, leaksToolCall,
+  namesPeriod, checkArgs, activityArgs, restatesChange, claimsCheck, claimsVerdict, asksCompleteness, periodDays, leaksToolCall,
   CLAIM_CORRECTION, NO_CHECK_STARTED, VERDICT_CORRECTION, TOOL_LEAK_CORRECTION, TOOL_LEAK_FALLBACK,
 } from '../../src/agent/checks.js';
 
@@ -276,5 +276,17 @@ describe('recent transactions cover everything unless a category is named', () =
     await runAgent({ userId: USER, userMessage: 'show me my recent transactions', role: 'operator' });
     const trace = (saveAnswerTrace as unknown as Mock).mock.calls[0][0] as { tools: Array<{ name: string; args: Record<string, unknown> }> };
     expect(trace.tools).toEqual([{ name: 'get_recent_activity', args: { limit: 20, period_days: 7 } }]);
+  });
+});
+
+describe('a change is asked about in Luca\'s words, not the model\'s', () => {
+  it('recognises model text that talks about the change itself', () => {
+    for (const t of ['Done! I have labeled it as revenue.', "I'll label that as revenue for you.", 'Should I label it as revenue?',
+      'It is now labeled revenue.', 'Please confirm below.', 'Tap Confirm to apply.', "I've started tracking that wallet."]) {
+      expect(restatesChange(t), t).toBe(true);
+    }
+    for (const t of ['You paid $0.01 in network fees this week.', 'Revenue this week was $840.', '']) {
+      expect(restatesChange(t), t).toBe(false);
+    }
   });
 });

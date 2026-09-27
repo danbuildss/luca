@@ -6,22 +6,21 @@ import { buildSystemPrompt } from './system.js';
 import { loadConversationHistory, saveMessage } from './context.js';
 import { TOOL_DEFINITIONS, executeTool, prepareWriteAction } from './tools.js';
 import { assertUserScoped, isWriteTool } from './guardrails.js';
-import { pendingActions, type PendingAction } from './pending.js';
 import { saveAnswerTrace, type ToolUse } from './traces.js';
 import { ADMIN_TOOL_DEFINITIONS, executeAdminTool, isAdminTool } from './admin-tools.js';
 import { logAgentSpend } from './spend.js';
 import {
-  CHECK_TOOLS, checkArgs, activityArgs, claimsCheck, claimsVerdict, leaksToolCall,
+  CHECK_TOOLS, checkArgs, activityArgs, claimsCheck, claimsVerdict, leaksToolCall, restatesChange,
   CLAIM_CORRECTION, NO_CHECK_STARTED, VERDICT_CORRECTION, TOOL_LEAK_CORRECTION, TOOL_LEAK_FALLBACK,
 } from './checks.js';
 import { answerBooksCheck, startBooksCheck } from './books-check.js';
 import { answerProposalReply, bareAnswer, explicitAnswer } from './proposals-chat.js';
-import { answerProposal } from '../corrections/proposals.js';
+import { createChanges, describeChange, resolveProposal, type ChangeAction, type ChangeTool } from './changes.js';
 
 export type AgentResult = {
+  // Changes the model asked for are never made here: the reply ends with Luca's own
+  // question about them, and they wait for the operator's answer (src/agent/changes.ts)
   text: string;
-  // Write-tool calls the model requested; NOT executed until the user confirms.
-  pendingActions: PendingAction[];
 };
 
 const MAX_STEPS = 6;
@@ -51,7 +50,8 @@ export async function runAgent(params: {
 }): Promise<AgentResult> {
   const { userId, userMessage } = params;
   const tools = params.role === 'admin' ? [...TOOL_DEFINITIONS, ...ADMIN_TOOL_DEFINITIONS] : TOOL_DEFINITIONS;
-  const pending: PendingAction[] = [];
+  // Changes the model asked for this turn, validated, to ask the operator about
+  const drafts: ChangeAction[] = [];
 
   assertUserScoped(userId);
 
@@ -64,10 +64,18 @@ export async function runAgent(params: {
 
   // Read tools behind this answer, saved with it (src/agent/traces.ts)
   const used: ToolUse[] = [];
-  const finish = async (text: string): Promise<AgentResult> => {
+  const finish = async (answer: string): Promise<AgentResult> => {
+    let text = answer;
+    if (drafts.length > 0) {
+      // The read-only part of the answer stays; the change itself is asked about in
+      // Luca's own words, never the model's (which may call it done or word it differently)
+      const { question } = await createChanges(userId, drafts);
+      const said = restatesChange(answer) ? '' : answer.trim();
+      text = said ? `${said}\n\n${question}` : question;
+    }
     await saveMessage({ userId, role: 'assistant', content: text });
     await saveAnswerTrace({ userId, question: userMessage, answer: text, tools: used });
-    return { text, pendingActions: pending };
+    return { text };
   };
 
   // "Are my books complete?" is answered by a check, never by the model
@@ -193,7 +201,7 @@ export async function runAgent(params: {
           if (bareAnswer(userMessage) !== null || !explicitAnswer(userMessage, accept)) {
             result = { error: 'The operator has not clearly answered this question. Ask them which question they mean and what they want; nothing was changed.' };
           } else {
-            const r = await answerProposal({ userId, proposalId: id, accept });
+            const r = await resolveProposal({ userId, proposalId: id, accept });
             used.push({ name: toolName, args: { proposal_id: id, accept } });
             if (r.ok) proposalText = r.text;
             result = { done: r.ok, message: r.text };
@@ -207,17 +215,17 @@ export async function runAgent(params: {
         if (prepared && !prepared.ok) {
           result = { error: prepared.error, candidates: prepared.candidates, executed: false };
         } else if (prepared) {
-          // Never execute state-changing tools directly — park them until the
-          // user taps Confirm (handled in src/telegram/callbacks.ts).
-          const action = pendingActions.create(userId, toolName, prepared.args);
-          pending.push(action);
+          // Never made here: validated, then asked about in Luca's own words after this reply
+          const action = await describeChange(userId, toolName as ChangeTool, prepared.args);
+          if (!drafts.some((d) => d.tool === action.tool && JSON.stringify(d.args) === JSON.stringify(action.args))) drafts.push(action);
+          used.push({ name: toolName, args: prepared.args });
           result = {
-            status: 'awaiting_user_confirmation',
+            status: 'waiting_for_operator',
             executed: false,
             message:
-              'This action has NOT been performed. The user will be shown Confirm / Cancel buttons ' +
-              'and it only happens if they tap Confirm (expires in 10 minutes). Tell the user what ' +
-              'you are proposing and ask them to confirm; do not say it is done.',
+              'This has NOT been done. After your reply, Luca asks the operator to confirm it in its own ' +
+              'words, and it only happens if they say yes. Do not say it is done and do not ask for ' +
+              'confirmation yourself: answer anything else they asked, or say nothing more.',
           };
         } else if (isAdminTool(toolName)) {
           used.push({ name: toolName, args: toolArgs });

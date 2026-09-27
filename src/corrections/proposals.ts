@@ -28,6 +28,10 @@ export type Proposal = {
 
 export type ProposalSummary = { id: string; count: number; question: string };
 
+// Anything Luca asked and is waiting on: a rule proposal, or a change the operator asked
+// for in chat (kind 'changes', src/agent/changes.ts; migration 024)
+export type OpenQuestion = { id: string; kind: ProposalKind | 'changes'; question: string; created_at: Date };
+
 const LABEL_WORDS: Record<string, string> = {
   revenue: 'revenue', expense: 'expense', internal_transfer: 'internal transfer', treasury: 'treasury',
   gas: 'network fee', x402_income: 'x402 income', x402_spend: 'x402 spend', refund: 'refund',
@@ -118,15 +122,14 @@ export async function createProposal(p: {
 }
 
 // Open questions, oldest first. Expired ones are marked as such on the way.
-export async function pendingProposals(userId: string): Promise<Proposal[]> {
+export async function pendingProposals(userId: string): Promise<OpenQuestion[]> {
   await query(
     `UPDATE label_proposals SET status = 'expired', decided_at = NOW()
      WHERE user_id = $1 AND status = 'pending' AND expires_at <= NOW()`,
     [userId],
   );
-  const res = await query<Proposal>(
-    `SELECT id, kind, rule_id, source_event_id, counterparty_address, direction, label::text AS label,
-            event_ids, question, created_at
+  const res = await query<OpenQuestion>(
+    `SELECT id, kind, question, created_at
      FROM label_proposals
      WHERE user_id = $1 AND status = 'pending'
      ORDER BY created_at ASC`,
@@ -137,7 +140,7 @@ export async function pendingProposals(userId: string): Promise<Proposal[]> {
 
 // A proposal is the one a bare "yes" answers only while the operator has said nothing
 // else since it was asked: at most one message of theirs (the answer itself) is newer.
-export async function isCurrent(userId: string, p: Proposal): Promise<boolean> {
+export async function isCurrent(userId: string, p: { created_at: Date }): Promise<boolean> {
   const res = await query<{ n: number }>(
     `SELECT COUNT(*)::int AS n FROM conversation_messages
      WHERE user_id = $1 AND role = 'user' AND created_at > $2`,
@@ -158,6 +161,7 @@ export async function answerProposal(p: { userId: string; proposalId: string; ac
     `UPDATE label_proposals lp
      SET status = $3, decided_at = NOW()
      WHERE lp.id = $1 AND lp.user_id = $2 AND lp.status = 'pending' AND lp.expires_at > NOW()
+       AND lp.kind IN ('apply_rule', 'send_back')
      RETURNING lp.id, lp.kind, lp.rule_id, lp.source_event_id, lp.counterparty_address, lp.direction,
                lp.label::text AS label, lp.event_ids, lp.question, lp.created_at,
                (SELECT name FROM counterparty_rules r WHERE r.id = lp.rule_id) AS rule_name`,
