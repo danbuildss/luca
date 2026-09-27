@@ -52,7 +52,11 @@ describe('/building', () => {
     data.buildLog.push({ date: '2026-09-28', title: 'Later entry', description: 'x', status: 'shipped', public: true, draft: false });
     const titles = publishedLog(data).map((e) => e.title);
     expect(titles[0]).toBe('Later entry');
-    expect(titles.slice(1, 3)).toEqual(['Corrections now ask before changing history', 'Books can now be checked against Base']);
+    expect(titles.slice(1, 4)).toEqual([
+      "Luca no longer says it changed something it didn't",
+      'The ACCUM fee view can be shared',
+      'Corrections now ask before changing history',
+    ]);
     expect(titles.at(-1)).toBe('Balance reconciliation caught missing gas entries');
     expect(displayDate('2026-09-24')).toBe('Sep 24, 2026');
   });
@@ -93,5 +97,16 @@ describe('/building', () => {
       expect(html).toContain('<ul class="nav-links" id="nav-links">');
     }
     expect(read('landing/main.js')).toContain("document.querySelector('.nav-toggle')");
+  });
+
+  it('CURRENTLY carries the live dot; the pulse stops for anyone who prefers reduced motion', () => {
+    expect(renderBuildingPage(buildingData)).toContain('<h2 class="kicker" id="b-currently"><span class="live-dot" aria-hidden="true"></span>Currently</h2>');
+    // Every LIVE roadmap item carries the same pulsing dot
+    const html = renderBuildingPage(buildingData);
+    const liveItems = publishedRoadmap(buildingData).flatMap((g) => g.items).filter((r) => r.status === 'live').length;
+    expect(html.match(/<span class="b-status live"><span class="live-dot" aria-hidden="true"><\/span>live<\/span>/g)).toHaveLength(liveItems);
+    const css = read('landing/styles.css');
+    expect(css).toContain('animation: live-pulse');
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{ \.live-dot::after \{ animation: none; \} \}/);
   });
 });

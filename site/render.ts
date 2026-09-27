@@ -67,7 +67,9 @@ export function publishedLog(data: BuildingData): BuildLogEntry[] {
     .map(({ e }) => e);
 }
 
-const status = (s: string): string => `<span class="b-status${s === 'live' ? ' live' : ''}">${esc(s)}</span>`;
+// LIVE carries the site's pulsing live dot (landing/styles.css .live-dot)
+const status = (s: string): string =>
+  `<span class="b-status${s === 'live' ? ' live' : ''}">${s === 'live' ? '<span class="live-dot" aria-hidden="true"></span>' : ''}${esc(s)}</span>`;
 
 function roadmapHtml(data: BuildingData): string {
   return publishedRoadmap(data).map(({ stage, items }) => {
@@ -177,7 +179,7 @@ export function renderBuildingPage(data: BuildingData): string {
     <h1>Building</h1>
 
     <section class="b-current" aria-labelledby="b-currently">
-      <h2 class="kicker" id="b-currently">Currently</h2>
+      <h2 class="kicker" id="b-currently"><span class="live-dot" aria-hidden="true"></span>Currently</h2>
       <p class="b-current-text">${esc(data.current.text)}</p>
       <p class="b-meta"><span>${esc(data.current.statusLine)}</span><span>Last updated: <time datetime="${data.current.lastUpdated}">${displayDate(data.current.lastUpdated)}</time></span></p>
     </section>
