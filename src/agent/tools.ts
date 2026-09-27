@@ -237,11 +237,11 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
     type: 'function',
     function: {
       name: 'check_books_complete',
-      description: "Check that everything the chain shows for the operator's own wallets reached their books: nothing missing, nothing stuck unlabeled or unpriced. Use for \"are my books complete?\", \"are you missing anything?\", \"check my wallets\", \"did you catch everything yesterday?\" (days: 1). The check runs in the background and its result is sent as its own message; a recent result is returned directly when the books have not changed.",
+      description: "Check that everything the chain shows for the operator's own wallets reached their books: nothing missing, nothing stuck unlabeled or unpriced. Use for \"are my books complete?\", \"are you missing anything?\", \"check my wallets\", \"check everything\". By default it checks everything Luca has tracked: leave days out unless the operator names a period. The check runs in the background and its result is sent as its own message; a recent result is returned directly when nothing has changed.",
       parameters: {
         type: 'object',
         properties: {
-          days: { type: 'number', description: 'Only check the last N days, e.g. 1 for "yesterday". Omit to check everything Luca has tracked.' },
+          days: { type: 'number', description: 'Only when the operator names a period ("yesterday", "this week", "last 3 days"): the number of days. Leave out otherwise; the default is everything tracked.' },
         },
         required: [],
       },
