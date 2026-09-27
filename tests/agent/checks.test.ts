@@ -35,7 +35,7 @@ import { runAgent } from '../../src/agent/run.js';
 import { saveAnswerTrace } from '../../src/agent/traces.js';
 import * as db from '../../src/db.js';
 import {
-  namesPeriod, checkArgs, activityArgs, restatesChange, claimsCheck, claimsVerdict, asksCompleteness, periodDays, leaksToolCall,
+  namesPeriod, checkArgs, activityArgs, walletArgs, restatesChange, claimsChange, NO_CHANGE_MADE, claimsCheck, claimsVerdict, asksCompleteness, periodDays, leaksToolCall,
   CLAIM_CORRECTION, NO_CHECK_STARTED, VERDICT_CORRECTION, TOOL_LEAK_CORRECTION, TOOL_LEAK_FALLBACK,
 } from '../../src/agent/checks.js';
 
@@ -288,5 +288,34 @@ describe('a change is asked about in Luca\'s words, not the model\'s', () => {
     for (const t of ['You paid $0.01 in network fees this week.', 'Revenue this week was $840.', '']) {
       expect(restatesChange(t), t).toBe(false);
     }
+  });
+});
+
+describe('Luca never says a change happened unless it did', () => {
+  beforeEach(() => { vi.clearAllMocks(); seen.length = 0; });
+
+  it('recognises a claim that a change was made, and nothing else', () => {
+    for (const t of ['Confirmed. I\'ll track 0xb54081ff3f6a90a5a1057d8a5537f7f14e376fdb as "Luca wallet" on Base.', 'Done! I\'ve labeled it revenue.',
+      "I've started tracking it.", 'It is now labeled revenue.', "I'm now tracking that wallet.", 'Got it. Done.']) {
+      expect(claimsChange(t), t).toBe(true);
+    }
+    for (const t of ['The gas total is small and fully confirmed.', "Tell me what it was and I'll label it.",
+      'That payment has been labeled revenue since Sep 3.', "I'm tracking 2 wallets for you.", "You've done 3 swaps this week.",
+      "I checked everything I've tracked across your wallets.", "I've recorded 14 transactions since Aug 27."]) {
+      expect(claimsChange(t), t).toBe(false);
+    }
+  });
+
+  it('a claimed change with nothing made and nothing waiting is replaced', async () => {
+    script(say('Confirmed. I\'ll track 0xb54081ff3f6a90a5a1057d8a5537f7f14e376fdb on Base.'));
+    const r = await runAgent({ userId: USER, userMessage: 'Luca Wallet', role: 'operator' });
+    expect(r.text).toBe(NO_CHANGE_MADE);
+  });
+
+  it('keeps a wallet role only when the operator named one', () => {
+    const args = { address: '0xabc', label: 'Luca wallet', role: 'operations' };
+    expect(walletArgs('track wallet 0xabc, label Luca wallet', args)).toEqual({ address: '0xabc', label: 'Luca wallet' });
+    expect(walletArgs('track my ops wallet 0xabc', args)).toEqual(args);
+    expect(walletArgs('track my treasury wallet 0xabc', { address: '0xabc', role: 'treasury' })).toEqual({ address: '0xabc', role: 'treasury' });
   });
 });

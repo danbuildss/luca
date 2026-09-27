@@ -218,4 +218,23 @@ describeDb('changes by chat, no buttons (integration)', () => {
 
     expect(await executeTool(user.id, 'label_question_group', { group_id: open.id, label: 'expense' })).toMatchObject({ error: expect.any(String) as string });
   });
+
+  it('the Sep 27 exchange: a reply that is not a yes never tracks the wallet, and Luca never says it did', async () => {
+    const { user } = await seedUserWithWallet();
+    const wallet = '0xb54081ff3f6a90a5a1057d8a5537f7f14e376fdb';
+    responses = [calls(['register_wallet', { address: wallet, label: 'Luca wallet', role: 'operations' }]), say('')];
+    const q = await says(user.id, `track wallet ${wallet}, label Luca wallet`);
+    // No role the operator did not ask for
+    expect(q.text).toBe(`Track wallet ${wallet} on Base as "Luca wallet"?`);
+
+    responses = [say(`Confirmed. I'll track ${wallet} as "Luca wallet" on Base.`)];
+    const r = await says(user.id, 'Luca Wallet');
+    expect(r.text).toBe(`I haven't made that change yet. Track wallet ${wallet} on Base as "Luca wallet"?\n\nReply yes or no.`);
+    expect(await sql(`SELECT 1 FROM wallets WHERE address = $1`, [wallet])).toHaveLength(0);
+
+    // Asked again, so a plain "yes" answers it
+    const done = await says(user.id, 'yes');
+    expect(done.text).toBe('Done. Started tracking wallet 0xb540…6fdb as "Luca wallet".');
+    expect(await sql(`SELECT 1 FROM wallets WHERE address = $1 AND user_id = $2`, [wallet, user.id])).toHaveLength(1);
+  });
 });
