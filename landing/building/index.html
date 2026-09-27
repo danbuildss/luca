@@ -67,7 +67,7 @@
     <h1>Building</h1>
 
     <section class="b-current" aria-labelledby="b-currently">
-      <h2 class="kicker" id="b-currently">Currently</h2>
+      <h2 class="kicker" id="b-currently"><span class="live-dot" aria-hidden="true"></span>Currently</h2>
       <p class="b-current-text">Testing Luca against real financial activity and onboarding the first outside operators.</p>
       <p class="b-meta"><span>Base · Invite-only beta · Read-only</span><span>Last updated: <time datetime="2026-09-27">Sep 27, 2026</time></span></p>
     </section>
@@ -84,11 +84,11 @@
         <ul class="b-items">
           <li>
             <div class="b-item"><span>Base wallet tracking</span></div>
-            <span class="b-status live">live</span>
+            <span class="b-status live"><span class="live-dot" aria-hidden="true"></span>live</span>
           </li>
           <li>
             <div class="b-item"><span>ETH / USDC / BNKR books</span></div>
-            <span class="b-status live">live</span>
+            <span class="b-status live"><span class="live-dot" aria-hidden="true"></span>live</span>
           </li>
           <li>
             <div class="b-item"><span>Transaction classification</span></div>
@@ -96,31 +96,31 @@
           </li>
           <li>
             <div class="b-item"><span>Financial memory</span></div>
-            <span class="b-status live">live</span>
+            <span class="b-status live"><span class="live-dot" aria-hidden="true"></span>live</span>
           </li>
           <li>
             <div class="b-item"><span>Natural-language Telegram</span></div>
-            <span class="b-status live">live</span>
+            <span class="b-status live"><span class="live-dot" aria-hidden="true"></span>live</span>
           </li>
           <li>
             <div class="b-item"><span>Balance reconciliation against Base</span></div>
-            <span class="b-status live">live</span>
+            <span class="b-status live"><span class="live-dot" aria-hidden="true"></span>live</span>
           </li>
           <li>
             <div class="b-item"><span>Transaction evidence / BaseScan</span></div>
-            <span class="b-status live">live</span>
+            <span class="b-status live"><span class="live-dot" aria-hidden="true"></span>live</span>
           </li>
           <li>
             <div class="b-item"><span>Historical pricing</span></div>
-            <span class="b-status live">live</span>
+            <span class="b-status live"><span class="live-dot" aria-hidden="true"></span>live</span>
           </li>
           <li>
             <div class="b-item"><span>Conversational corrections</span></div>
-            <span class="b-status live">live</span>
+            <span class="b-status live"><span class="live-dot" aria-hidden="true"></span>live</span>
           </li>
           <li>
             <div class="b-item"><span>Classification quality measurement</span></div>
-            <span class="b-status live">live</span>
+            <span class="b-status live"><span class="live-dot" aria-hidden="true"></span>live</span>
           </li>
           <li>
             <div class="b-item"><span>ACCUM fee accounting</span></div>
@@ -207,6 +207,22 @@
         <p>Not everything we shipped. Everything worth remembering.</p>
       </div>
       <ol class="b-log">
+      <li>
+        <p class="b-date"><time datetime="2026-09-27">Sep 27, 2026</time></p>
+        <div>
+          <h3>Luca no longer says it changed something it didn&#39;t</h3>
+          <p>Real-wallet testing caught Luca replying &quot;Confirmed&quot; to a request it had not carried out. Luca now only says a change happened after it has been made, and otherwise asks again.</p>
+          <p class="b-log-meta"><span class="b-status">fixed</span><a class="b-evidence" href="https://github.com/danbuildss/luca/pull/90" target="_blank" rel="noopener">Evidence</a></p>
+        </div>
+      </li>
+      <li>
+        <p class="b-date"><time datetime="2026-09-27">Sep 27, 2026</time></p>
+        <div>
+          <h3>The ACCUM fee view can be shared</h3>
+          <p>The owner of the ACCUM fee wallet can let other Luca users see the fee figures Luca verifies. Nothing else of theirs is shared.</p>
+          <p class="b-log-meta"><span class="b-status">shipped</span><a class="b-evidence" href="https://github.com/danbuildss/luca/pull/94" target="_blank" rel="noopener">Evidence</a></p>
+        </div>
+      </li>
       <li>
         <p class="b-date"><time datetime="2026-09-27">Sep 27, 2026</time></p>
         <div>

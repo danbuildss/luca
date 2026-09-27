@@ -130,7 +130,15 @@ button { font: inherit; color: inherit; }
   font: 500 12px/1 var(--mono); letter-spacing: 0.04em; text-transform: uppercase;
   color: var(--ink-3);
 }
-.live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px rgba(29, 122, 76, .15); }
+.live-dot { position: relative; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px rgba(29, 122, 76, .15); }
+/* A soft ring grows out of the dot and fades: "live". Still for reduced motion. */
+.live-dot::after {
+  content: ''; position: absolute; inset: 0; border-radius: 50%;
+  background: var(--green); opacity: 0;
+  animation: live-pulse 2.4s cubic-bezier(0, 0, .2, 1) infinite;
+}
+@keyframes live-pulse { 0% { transform: scale(1); opacity: .45; } 70%, 100% { transform: scale(3.2); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .live-dot::after { animation: none; } }
 .nowrap { white-space: nowrap; }
 .mono { font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; }
 
@@ -332,7 +340,7 @@ html:not(.js) .typing { display: none; }
 .b-items li + li { border-top: 1px solid var(--line); }
 .b-item-note { margin-top: 2px; font-size: 14px; color: var(--ink-3); }
 .b-status { flex: none; display: inline-flex; align-items: center; gap: 7px; font: 500 11px/1 var(--mono); letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-3); }
-.b-status.live::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+.b-status .live-dot { width: 6px; height: 6px; box-shadow: none; }
 .b-log { list-style: none; margin: 0; padding: 0; }
 .b-date { font: 12px/1.9 var(--mono); letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-3); }
 .b-log h3 { font-size: 17px; font-weight: 500; letter-spacing: -0.01em; }

@@ -93,7 +93,6 @@ export const buildingData: BuildingData = {
   ],
 
   buildLog: [
-    // Drafts for Dan's review: not on the page until `draft: false`
     {
       date: '2026-09-27',
       title: "Luca no longer says it changed something it didn't",
@@ -101,7 +100,7 @@ export const buildingData: BuildingData = {
       status: 'fixed',
       evidenceLink: 'https://github.com/danbuildss/luca/pull/90',
       public: true,
-      draft: true,
+      draft: false,
     },
     {
       date: '2026-09-27',
@@ -110,7 +109,7 @@ export const buildingData: BuildingData = {
       status: 'shipped',
       evidenceLink: 'https://github.com/danbuildss/luca/pull/94',
       public: true,
-      draft: true,
+      draft: false,
     },
     {
       date: '2026-09-27',
