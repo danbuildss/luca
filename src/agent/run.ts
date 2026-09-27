@@ -10,6 +10,7 @@ import { pendingActions, type PendingAction } from './pending.js';
 import { saveAnswerTrace, type ToolUse } from './traces.js';
 import { ADMIN_TOOL_DEFINITIONS, executeAdminTool, isAdminTool } from './admin-tools.js';
 import { logAgentSpend } from './spend.js';
+import { CHECK_TOOLS, checkArgs, claimsCheck, CLAIM_CORRECTION, NO_CHECK_STARTED } from './checks.js';
 
 export type AgentResult = {
   text: string;
@@ -63,6 +64,8 @@ export async function runAgent(params: {
 
   const openai = getOpenAI();
   let steps = 0;
+  // A reply claiming a books check without starting one gets one forced correction
+  let corrected = false;
   // Read tools behind this answer, saved with it (src/agent/traces.ts)
   const used: ToolUse[] = [];
   const finish = async (text: string): Promise<AgentResult> => {
@@ -78,7 +81,8 @@ export async function runAgent(params: {
       model: AGENT_MODEL,
       messages,
       tools,
-      tool_choice: 'auto',
+      // After a false claim of a running check, a tool call is required
+      tool_choice: corrected && !used.some((u) => CHECK_TOOLS.has(u.name)) ? 'required' : 'auto',
     });
     await logAgentSpend(userId, AGENT_MODEL, response.usage);
 
@@ -90,7 +94,19 @@ export async function runAgent(params: {
 
     // No tool calls — we have the final answer
     if (!assistantMessage.tool_calls || assistantMessage.tool_calls.length === 0) {
-      return finish(assistantMessage.content ?? '');
+      const text = assistantMessage.content ?? '';
+      // Never tell the operator a check is running unless one was started this turn
+      if (claimsCheck(text) && !used.some((u) => CHECK_TOOLS.has(u.name))) {
+        if (!corrected) {
+          corrected = true;
+          logger.warn({ userId }, 'Reply claimed a books check without starting one; correcting');
+          messages.pop();
+          messages.push({ role: 'system', content: CLAIM_CORRECTION });
+          continue;
+        }
+        return finish(NO_CHECK_STARTED);
+      }
+      return finish(text);
     }
 
     // Execute each tool call
@@ -103,6 +119,8 @@ export async function runAgent(params: {
       } catch {
         toolArgs = {};
       }
+      // A check covers everything tracked unless the operator named a period
+      if (CHECK_TOOLS.has(toolName)) toolArgs = checkArgs(userMessage, toolArgs);
 
       logger.debug({ userId, toolName, toolArgs }, 'agent tool call');
 
