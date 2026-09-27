@@ -15,6 +15,7 @@ import { requestAudit, auditRequestForModel, movementStatus, amountText, isMissi
 import { traceTransaction } from '../ledger/trace.js';
 import { config } from '../config.js';
 import { skipQuestionGroup } from '../alerts/questions.js';
+import { feeReport, feeMachineReportText } from '../fees/report.js';
 
 // ---------------------------------------------------------------------------
 // Tool definitions (OpenAI function calling schema)
@@ -301,6 +302,20 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
         type: 'object',
         properties: { hash: { type: 'string', description: 'The full transaction hash (0x followed by 64 hex characters).' } },
         required: ['hash'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_creator_fees',
+      description: "The creator fees Luca follows for the operator (e.g. $ACCUM trading fees paid in BNKR by Bankr): what Bankr reports as claimable and claimed, claims verified on-chain, whether they match, and the fee wallet's balance. Use for any question about ACCUM, creator fees, Bankr fees, claimable or claimed fees, or fee activity. The reply is sent to the operator exactly as the tool writes it. Luca only reads: it never claims, stakes or moves these fees.",
+      parameters: {
+        type: 'object',
+        properties: {
+          format: { type: 'string', enum: ['summary', 'machine'], description: "'machine' only when the operator asks for the machine report or JSON; otherwise leave out." },
+        },
+        required: [],
       },
     },
   },
@@ -654,6 +669,9 @@ export async function executeTool(
       const days = typeof args.days === 'number' ? args.days : null;
       return auditRequestForModel(await requestAudit({ userId, requestedBy: userId, days }));
     }
+
+    case 'get_creator_fees':
+      return { report: args.format === 'machine' ? await feeMachineReportText(userId) : await feeReport(userId) };
 
     case 'check_transaction': {
       const hash = argText(args.hash).trim();
