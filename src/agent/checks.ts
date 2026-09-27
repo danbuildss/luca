@@ -226,3 +226,15 @@ export function walletArgs(message: string, args: Record<string, unknown>): Reco
   void _ignored;
   return rest;
 }
+
+// ---------------------------------------------------------------------------
+// Creator fees: the machine report only when the operator asks for it
+// ---------------------------------------------------------------------------
+
+const MACHINE_REPORT = /\b(machine|json|raw data|structured)\b/i;
+
+export function feeArgs(message: string, args: Record<string, unknown>): Record<string, unknown> {
+  const rest = { ...args };
+  delete rest.format;
+  return MACHINE_REPORT.test(message) ? { ...rest, format: 'machine' } : rest;
+}

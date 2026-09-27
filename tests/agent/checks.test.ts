@@ -35,7 +35,7 @@ import { runAgent } from '../../src/agent/run.js';
 import { saveAnswerTrace } from '../../src/agent/traces.js';
 import * as db from '../../src/db.js';
 import {
-  namesPeriod, checkArgs, activityArgs, walletArgs, restatesChange, claimsChange, NO_CHANGE_MADE, claimsCheck, claimsVerdict, asksCompleteness, periodDays, leaksToolCall,
+  namesPeriod, checkArgs, activityArgs, walletArgs, feeArgs, restatesChange, claimsChange, NO_CHANGE_MADE, claimsCheck, claimsVerdict, asksCompleteness, periodDays, leaksToolCall,
   CLAIM_CORRECTION, NO_CHECK_STARTED, VERDICT_CORRECTION, TOOL_LEAK_CORRECTION, TOOL_LEAK_FALLBACK,
 } from '../../src/agent/checks.js';
 
@@ -322,5 +322,13 @@ describe('Luca never says a change happened unless it did', () => {
     expect(walletArgs('track wallet 0xabc, label Luca wallet', args)).toEqual({ address: '0xabc', label: 'Luca wallet' });
     expect(walletArgs('track my ops wallet 0xabc', args)).toEqual(args);
     expect(walletArgs('track my treasury wallet 0xabc', { address: '0xabc', role: 'treasury' })).toEqual({ address: '0xabc', role: 'treasury' });
+  });
+});
+
+describe('creator fees: the machine report only when the operator asks for it', () => {
+  it('keeps the machine format only when their words ask for it', () => {
+    expect(feeArgs('send the machine report', {})).toEqual({ format: 'machine' });
+    expect(feeArgs('give me the fees as JSON', { format: 'summary' })).toEqual({ format: 'machine' });
+    expect(feeArgs('how are the ACCUM fees?', { format: 'machine' })).toEqual({});
   });
 });

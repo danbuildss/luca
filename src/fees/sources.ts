@@ -173,7 +173,8 @@ export type FeeSourceStatus = {
   claimable_change: { since: Date; until: Date; change: string; full_day: boolean } | null;
   // Verified on-chain: fee-asset transfers into the fee wallet whose receipts tie them to
   // this pool (src/fees/claims.ts), within the history Luca holds for the wallet
-  verified: { count: number; total: string; last: { hash: string; block_time: Date; amount: string } | null };
+  // usd_when_claimed: the claims' value at the time of each claim; null unless all are priced
+  verified: { count: number; total: string; usd_when_claimed: number | null; last: { hash: string; block_time: Date; amount: string } | null };
   // Fee-contract transfers whose evidence was not enough; these stay unknown
   unclear: number;
   reconciliation:
@@ -225,8 +226,9 @@ export async function feeSourceStatus(userId: string): Promise<FeeSourceStatus[]
     // Exact on-chain amounts (raw integer units), not the rounded decimal
     const decimals = SUPPORTED_TOKENS[source.fee_token]?.decimals ?? 18;
     const exact = `COALESCE(ne.raw_amount / (10::numeric ^ $3::int), ne.amount)`;
-    const verified = (await query<{ count: number; total: string }>(
-      `SELECT COUNT(*)::int AS count, trim_scale(COALESCE(SUM(${exact}), 0))::text AS total
+    const verified = (await query<{ count: number; total: string; usd: string | null; priced: number }>(
+      `SELECT COUNT(*)::int AS count, trim_scale(COALESCE(SUM(${exact}), 0))::text AS total,
+              SUM(ne.usd_value)::text AS usd, COUNT(ne.usd_value)::int AS priced
        FROM fee_claim_checks k JOIN normalized_events ne ON ne.id = k.event_id
        WHERE k.fee_source_id = $1 AND k.verdict = 'claim' AND ne.user_id = $2`,
       [source.id, userId, decimals],
@@ -264,7 +266,12 @@ export async function feeSourceStatus(userId: string): Promise<FeeSourceStatus[]
       reported_stale: stale,
       last_error: latest && latest.status === 'error' ? { error: latest.error ?? 'Reading Bankr failed', read_at: latest.read_at } : null,
       claimable_change: claimableChange,
-      verified: { count: verified.count, total: verified.total, last },
+      verified: {
+        count: verified.count,
+        total: verified.total,
+        usd_when_claimed: verified.count > 0 && verified.priced === verified.count && verified.usd !== null ? parseFloat(verified.usd) : null,
+        last,
+      },
       unclear,
       reconciliation,
     });
