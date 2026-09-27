@@ -13,6 +13,7 @@ import { BASE_BNKR } from '../../ingestion/assets.js';
 import { escapeLegacyMarkdown, replyMarkdownSafe, replyPlainWithLinks } from '../format.js';
 import { traceTransaction, describeTrace } from '../../ledger/trace.js';
 import { config } from '../../config.js';
+import { getQualityBaseline, describeQualityShort } from '../../quality/baseline.js';
 
 // Escape DB/user-controlled text for legacy Markdown (usernames often contain `_`).
 function md(value: string | number | null | undefined): string {
@@ -42,8 +43,9 @@ function workerStatus(minutesStale: number | null): string {
 
 // /ops — system overview
 async function handleOpsOverview(ctx: Context): Promise<void> {
-  const [ov, ledger, sources, pricing] = await Promise.all([
+  const [ov, ledger, sources, pricing, quality] = await Promise.all([
     getOpsOverview(), getLedgerHealth(), getPriceSourceChecks(), getPricingMix(),
+    getQualityBaseline({ userId: null, days: 7 }),
   ]);
 
   const lines = [
@@ -72,7 +74,11 @@ async function handleOpsOverview(ctx: Context): Promise<void> {
       : ['  On-chain sources not checked yet']),
     `  ETH/BNKR transfers priced on chain: ${pricing.onchain} of ${pricing.total}  |  No price: ${pricing.unpriced}`,
     ``,
-    `*Quality*`,
+    `*Classification quality (7 days, all operators)*`,
+    ...describeQualityShort(quality),
+    `  Full report: ask me "how accurate is Luca?"`,
+    ``,
+    `*Other*`,
     `  Open unknowns: ${ov.total_unknown}  |  Unacked alerts: ${ov.unacked_alerts}`,
     `  Brief failures (24h): ${ov.briefs_failed_24h}`,
     ``,
