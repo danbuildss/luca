@@ -10,7 +10,8 @@ import { pendingActions, type PendingAction } from './pending.js';
 import { saveAnswerTrace, type ToolUse } from './traces.js';
 import { ADMIN_TOOL_DEFINITIONS, executeAdminTool, isAdminTool } from './admin-tools.js';
 import { logAgentSpend } from './spend.js';
-import { CHECK_TOOLS, checkArgs, claimsCheck, CLAIM_CORRECTION, NO_CHECK_STARTED } from './checks.js';
+import { CHECK_TOOLS, checkArgs, claimsCheck, claimsVerdict, CLAIM_CORRECTION, NO_CHECK_STARTED, VERDICT_CORRECTION } from './checks.js';
+import { answerBooksCheck, startBooksCheck } from './books-check.js';
 
 export type AgentResult = {
   text: string;
@@ -56,6 +57,21 @@ export async function runAgent(params: {
 
   await saveMessage({ userId, role: 'user', content: userMessage });
 
+  // Read tools behind this answer, saved with it (src/agent/traces.ts)
+  const used: ToolUse[] = [];
+  const finish = async (text: string): Promise<AgentResult> => {
+    await saveMessage({ userId, role: 'assistant', content: text });
+    await saveAnswerTrace({ userId, question: userMessage, answer: text, tools: used });
+    return { text, pendingActions: pending };
+  };
+
+  // "Are my books complete?" is answered by a check, never by the model
+  const direct = await answerBooksCheck({ userId, message: userMessage });
+  if (direct) {
+    used.push({ name: 'check_books_complete', args: direct.args });
+    return finish(direct.text);
+  }
+
   const messages: ChatCompletionMessageParam[] = [
     { role: 'system', content: systemPrompt },
     ...history,
@@ -66,13 +82,8 @@ export async function runAgent(params: {
   let steps = 0;
   // A reply claiming a books check without starting one gets one forced correction
   let corrected = false;
-  // Read tools behind this answer, saved with it (src/agent/traces.ts)
-  const used: ToolUse[] = [];
-  const finish = async (text: string): Promise<AgentResult> => {
-    await saveMessage({ userId, role: 'assistant', content: text });
-    await saveAnswerTrace({ userId, question: userMessage, answer: text, tools: used });
-    return { text, pendingActions: pending };
-  };
+  // A reply stating whether the books are complete, with no check behind it, gets one
+  let verdictCorrected = false;
 
   while (steps < MAX_STEPS) {
     steps++;
@@ -105,6 +116,19 @@ export async function runAgent(params: {
           continue;
         }
         return finish(NO_CHECK_STARTED);
+      }
+      // Whether the books are complete comes only from a check, never from the model
+      if (claimsVerdict(text) && !used.some((u) => CHECK_TOOLS.has(u.name))) {
+        if (!verdictCorrected) {
+          verdictCorrected = true;
+          logger.warn({ userId }, 'Reply stated a completeness verdict without a check; correcting');
+          messages.pop();
+          messages.push({ role: 'system', content: VERDICT_CORRECTION });
+          continue;
+        }
+        const check = await startBooksCheck({ userId, message: userMessage });
+        used.push({ name: 'check_books_complete', args: check.args });
+        return finish(check.text);
       }
       return finish(text);
     }
