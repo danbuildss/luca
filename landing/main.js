@@ -7,6 +7,24 @@
   onScroll();
   window.addEventListener('scroll', onScroll, { passive: true });
 
+  // ─── Phone menu ──────────────────────────────────────
+  const toggle = document.querySelector('.nav-toggle');
+  if (toggle) {
+    const setOpen = (open) => {
+      nav.classList.toggle('open', open);
+      toggle.setAttribute('aria-expanded', String(open));
+    };
+    toggle.addEventListener('click', () => setOpen(!nav.classList.contains('open')));
+    nav.querySelectorAll('.nav-links a').forEach((a) => a.addEventListener('click', () => setOpen(false)));
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && nav.classList.contains('open')) { setOpen(false); toggle.focus(); }
+    });
+    document.addEventListener('click', (e) => {
+      if (nav.classList.contains('open') && !nav.contains(e.target)) setOpen(false);
+    });
+    window.matchMedia('(min-width: 761px)').addEventListener('change', () => setOpen(false));
+  }
+
   // ─── Hero conversation plays in ───────────────────────
   // Steps: 0 wallet, 1 question, 2 typing, 3 books, 4 attention.
   const seq = document.querySelector('[data-sequence]');
