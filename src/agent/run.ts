@@ -10,11 +10,13 @@ import { saveAnswerTrace, type ToolUse } from './traces.js';
 import { ADMIN_TOOL_DEFINITIONS, executeAdminTool, isAdminTool } from './admin-tools.js';
 import { logAgentSpend } from './spend.js';
 import {
-  CHECK_TOOLS, checkArgs, activityArgs, claimsCheck, claimsVerdict, leaksToolCall, restatesChange,
+  CHECK_TOOLS, checkArgs, activityArgs, walletArgs, claimsCheck, claimsVerdict, claimsChange, leaksToolCall, restatesChange,
+  NO_CHANGE_MADE,
   CLAIM_CORRECTION, NO_CHECK_STARTED, VERDICT_CORRECTION, TOOL_LEAK_CORRECTION, TOOL_LEAK_FALLBACK,
 } from './checks.js';
 import { answerBooksCheck, startBooksCheck } from './books-check.js';
-import { answerProposalReply, bareAnswer, explicitAnswer } from './proposals-chat.js';
+import { answerProposalReply, bareAnswer, explicitAnswer, whichOne } from './proposals-chat.js';
+import { pendingProposals, reask } from '../corrections/proposals.js';
 import { createChanges, describeChange, resolveProposal, type ChangeAction, type ChangeTool } from './changes.js';
 
 export type AgentResult = {
@@ -169,6 +171,20 @@ export async function runAgent(params: {
         used.push({ name: 'check_books_complete', args: check.args });
         return finish(check.text);
       }
+      // Never say a change was made unless one was applied this turn (a change asked for
+      // this turn is asked about in finish(), in Luca's own words)
+      if (drafts.length === 0 && claimsChange(text)) {
+        logger.warn({ userId }, 'Reply claimed a change that was not made; not sent');
+        const open = await pendingProposals(userId);
+        if (open.length === 1) {
+          // Asked again, so it is the current question for a plain "yes" or "no"
+          await reask(userId, open[0].id);
+          const q = open[0].question;
+          return finish(`I haven't made that change yet. ${q}${/reply yes or no\.?$/i.test(q) ? '' : '\n\nReply yes or no.'}`);
+        }
+        if (open.length > 1) return finish(`I haven't made any change yet.\n\n${await whichOne(userId, open)}`);
+        return finish(NO_CHANGE_MADE);
+      }
       return finish(text);
     }
 
@@ -189,6 +205,8 @@ export async function runAgent(params: {
       if (CHECK_TOOLS.has(toolName)) toolArgs = checkArgs(userMessage, toolArgs);
       // Recent activity covers everything unless the operator named a category
       if (toolName === 'get_recent_activity') toolArgs = activityArgs(userMessage, toolArgs);
+      // A wallet role only when the operator named one
+      if (toolName === 'register_wallet') toolArgs = walletArgs(userMessage, toolArgs);
 
       logger.debug({ userId, toolName, toolArgs }, 'agent tool call');
 

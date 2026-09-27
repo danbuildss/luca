@@ -180,3 +180,46 @@ const CHANGE_TALK = new RegExp(
 export function restatesChange(text: string): boolean {
   return CHANGE_TALK.test(text);
 }
+
+// ---------------------------------------------------------------------------
+// Luca never says a change happened unless it did
+// ---------------------------------------------------------------------------
+// The operator answered "Luca Wallet" (not a yes) to "Track wallet …?", and the model
+// replied "Confirmed. I'll track 0xb540…" while nothing was tracked. A reply that says a
+// change was made (or will be) is only sent when a change was actually applied in the turn.
+
+const CHANGE_CLAIM = new RegExp(
+  [
+    // "Confirmed." / "Done." opening a sentence (not "fully confirmed", a label status)
+    String.raw`(?:^|[.!?]\s+)(?:confirmed|done)\b`,
+    String.raw`\bi(?:'ve| have)\s+(?:now\s+)?(?:re)?label(?:l)?ed\b`,
+    String.raw`\bi(?:'ve| have)\s+(?:now\s+)?(?:updated|changed|marked|corrected|started tracking)\b`,
+    String.raw`\bi(?:'m| am)\s+now\s+tracking\b`,
+    String.raw`\bstarted tracking\b`,
+    String.raw`\b(?:is|are)\s+now\s+(?:re)?(?:label(?:l)?ed|tracked|marked)\b`,
+  ].join('|'),
+  'im',
+);
+
+export function claimsChange(text: string): boolean {
+  return CHANGE_CLAIM.test(text);
+}
+
+export const NO_CHANGE_MADE = "I haven't changed anything.";
+
+// A wallet role only when the operator named one ("track my treasury wallet 0x…")
+const ROLE_WORDS: Record<string, RegExp> = {
+  operations: /\b(operations?|ops|operating)\b/i,
+  treasury: /\btreasury\b/i,
+  revenue: /\b(revenue|income)\b/i,
+  expenses: /\b(expenses?|spending)\b/i,
+  agent: /\bagents?\b/i,
+  personal: /\bpersonal\b/i,
+};
+
+export function walletArgs(message: string, args: Record<string, unknown>): Record<string, unknown> {
+  if (typeof args.role !== 'string' || ROLE_WORDS[args.role]?.test(message)) return args;
+  const { role: _ignored, ...rest } = args;
+  void _ignored;
+  return rest;
+}

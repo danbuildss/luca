@@ -95,8 +95,10 @@ export async function createChanges(userId: string, actions: ChangeAction[]): Pr
   );
   const question = changesQuestion(actions);
   const res = await query<{ id: string }>(
-    `INSERT INTO label_proposals (user_id, kind, actions, question, expires_at)
-     VALUES ($1, 'changes', $2, $3, clock_timestamp() + INTERVAL '${CHANGES_TTL}')
+    // One clock reading for both, so a change waits exactly CHANGES_TTL
+    `INSERT INTO label_proposals (user_id, kind, actions, question, created_at, expires_at)
+     SELECT $1, 'changes', $2, $3, t.now, t.now + INTERVAL '${CHANGES_TTL}'
+     FROM (SELECT clock_timestamp() AS now) t
      RETURNING id`,
     [userId, JSON.stringify(actions), question],
   );

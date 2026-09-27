@@ -138,6 +138,15 @@ export async function pendingProposals(userId: string): Promise<OpenQuestion[]> 
   return res.rows;
 }
 
+// Luca asked this question again: it is the current question from now on (created_at is
+// when it was last asked; expires_at is unchanged)
+export async function reask(userId: string, id: string): Promise<void> {
+  await query(
+    `UPDATE label_proposals SET created_at = clock_timestamp() WHERE id = $1 AND user_id = $2 AND status = 'pending'`,
+    [id, userId],
+  );
+}
+
 // A proposal is the one a bare "yes" answers only while the operator has said nothing
 // else since it was asked: at most one message of theirs (the answer itself) is newer.
 export async function isCurrent(userId: string, p: { created_at: Date }): Promise<boolean> {
