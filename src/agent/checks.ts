@@ -1,5 +1,5 @@
-// Guards for books checks in chat, decided from the operator's own words rather than left
-// to the model:
+// Guards for books checks in chat, decided from the operator's own words and the check's
+// own result rather than left to the model:
 //  - A check covers everything tracked unless the operator names a period. The model
 //    used to pass `days: 1` for "are my books complete?", silently checking one day.
 //  - Luca never says a check is running unless one was started in that turn. The model
@@ -43,3 +43,55 @@ export const CLAIM_CORRECTION =
 
 export const NO_CHECK_STARTED =
   "I haven't started a check of your wallets. Ask me \"are my books complete?\" and I'll run one.";
+
+// ---------------------------------------------------------------------------
+// Completeness questions are answered without the model
+// ---------------------------------------------------------------------------
+// "Are my books complete?" has one honest answer: a check's own result. The model used to
+// write the verdict itself from earlier messages ("Yes. Your books are complete") without
+// checking anything, so these questions go straight to the check and the reply is the
+// check's fixed wording.
+
+const COMPLETENESS = new RegExp(
+  [
+    String.raw`\b(are|is)\s+(my|our|the|all)\s+(my\s+)?books\s+(complete|up\s*to\s*date|current|right|correct|accurate|ok|okay|in order)\b`,
+    String.raw`\bbooks\s+(are\s+)?complete\b`,
+    String.raw`\b(missing|miss(ed)?)\s+anything\b`,
+    String.raw`\b(catch|caught)\s+everything\b`,
+    String.raw`\bcheck\s+(everything|all\s+my\s+wallets|my\s+wallets?|our\s+wallets?|my\s+books|our\s+books)\b`,
+    String.raw`\bcheck\s+@\w+('s)?\s+(books|wallets?)\b`,
+  ].join('|'),
+  'i',
+);
+
+export function asksCompleteness(message: string): boolean {
+  return COMPLETENESS.test(message);
+}
+
+const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+// The number of days a named period covers; null when the message names none (everything)
+export function periodDays(message: string, now = new Date()): number | null {
+  const m = message.toLowerCase();
+  if (/\b(yesterday|today|tonight|overnight|last night|this morning|24 ?h(ours)?)\b/.test(m)) return 1;
+  const n = /\b(?:last|past|previous)?\s*(\d+)\s*(day|days|week|weeks|month|months)\b/.exec(m);
+  if (n) return Number(n[1]) * (n[2].startsWith('week') ? 7 : n[2].startsWith('month') ? 30 : 1);
+  if (/\b(this|last|past|previous)\s+week\b/.test(m)) return 7;
+  if (/\b(this|last|past|previous)\s+month\b/.test(m)) return 30;
+  const since = /\bsince\s+(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/.exec(m);
+  if (since) {
+    const back = (now.getUTCDay() - WEEKDAYS.indexOf(since[1]) + 7) % 7;
+    return Math.max(1, back);
+  }
+  return null;
+}
+
+// A reply that states a completeness verdict
+const VERDICT = /\bbooks\s+are\s+(complete|up\s*to\s*date|current|in order)\b|\bno\s+missing\s+(movements?|transactions?)\b|\bnothing\s+(is\s+)?missing\b|\bevery\s+supported\s+movement\b|\bnot\s+missing\s+anything\b/i;
+
+export function claimsVerdict(text: string): boolean {
+  return VERDICT.test(text);
+}
+
+export const VERDICT_CORRECTION =
+  'Your last reply said whether the books are complete or that nothing is missing, but no check ran in this turn. Only a books check can say that. Answer the question without any completeness verdict.';

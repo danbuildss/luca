@@ -1,7 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 
-// The agent loop with a scripted model: which range a books check gets, and what happens
-// when the model claims a check it never started.
+// The agent loop with a scripted model: completeness questions answered by a check without
+// the model, which range a check gets, and what happens when the model claims a check it
+// never started or states a verdict no check backs.
 vi.hoisted(() => { process.env.AGENT_MODEL = 'gpt-4o'; });
 // Each request as the model saw it (the loop keeps appending to the same array)
 const seen: Array<{ tool_choice: unknown; messages: Array<{ role: string; content: string | null }> }> = [];
@@ -31,7 +32,11 @@ vi.mock('../../src/ledger/audit-runs.js', async (importOriginal) => ({
 }));
 
 import { runAgent } from '../../src/agent/run.js';
-import { namesPeriod, checkArgs, claimsCheck, CLAIM_CORRECTION, NO_CHECK_STARTED } from '../../src/agent/checks.js';
+import * as db from '../../src/db.js';
+import {
+  namesPeriod, checkArgs, claimsCheck, claimsVerdict, asksCompleteness, periodDays,
+  CLAIM_CORRECTION, NO_CHECK_STARTED, VERDICT_CORRECTION,
+} from '../../src/agent/checks.js';
 
 const USER = '00000000-0000-0000-0000-000000000001';
 const CLAIM = "I'm checking everything I've tracked across your wallets and will message you when it's done.";
@@ -74,20 +79,101 @@ describe('claims of a running check', () => {
   });
 });
 
+describe('recognising completeness questions and their period', () => {
+  it('knows a completeness question when it sees one', () => {
+    for (const m of ['are my books complete?', 'Are my books up to date?', 'are you missing anything?',
+      'did you miss anything?', 'did you catch everything yesterday?', 'check my wallets',
+      "check everything you've tracked across my wallets", "check @alice's books"]) {
+      expect(asksCompleteness(m), m).toBe(true);
+    }
+    for (const m of ['how are we doing this week?', 'what did gas cost?', 'that payment was not revenue',
+      'how many invites are pending?']) {
+      expect(asksCompleteness(m), m).toBe(false);
+    }
+  });
+
+  it('turns a named period into days, and no period into everything', () => {
+    expect(periodDays('are my books complete?')).toBeNull();
+    expect(periodDays('did you catch everything yesterday?')).toBe(1);
+    expect(periodDays('anything missing this week?')).toBe(7);
+    expect(periodDays('check the last 3 days')).toBe(3);
+    expect(periodDays('missing anything in the past 2 weeks?')).toBe(14);
+    // Sunday Sep 27 2026 → since Friday is 2 days
+    expect(periodDays('missed anything since friday?', new Date('2026-09-27T12:00:00Z'))).toBe(2);
+  });
+
+  it('recognises a completeness verdict in a reply', () => {
+    expect(claimsVerdict('Yes. Your books are complete for the wallets I track.')).toBe(true);
+    expect(claimsVerdict('no missing movements were found')).toBe(true);
+    expect(claimsVerdict('Revenue this week was $840.')).toBe(false);
+  });
+});
+
 describe('books checks through the agent', () => {
   beforeEach(() => { vi.clearAllMocks(); seen.length = 0; });
 
-  it('"are my books complete?" checks everything, even when the model asks for one day', async () => {
-    script(callCheck({ days: 1 }), say('Checking now; I will message you when done.'));
-    await runAgent({ userId: USER, userMessage: 'are my books complete?', role: 'operator' });
+  it('"are my books complete?" starts a full check without asking the model, in the check\'s words', async () => {
+    const r = await runAgent({ userId: USER, userMessage: 'are my books complete?', role: 'operator' });
+    expect(create).not.toHaveBeenCalled();
     expect(requestAudit).toHaveBeenCalledTimes(1);
     expect(daysAsked()).toBeNull();
+    expect(r.text).toBe("Checking everything I've tracked across your wallet against the chain now. I'll message you with the result, usually within a few minutes.");
   });
 
   it('"did you catch everything yesterday?" checks one day', async () => {
-    script(callCheck({ days: 1 }), say('Checking yesterday now.'));
-    await runAgent({ userId: USER, userMessage: 'did you catch everything yesterday?', role: 'operator' });
+    const r = await runAgent({ userId: USER, userMessage: 'did you catch everything yesterday?', role: 'operator' });
     expect(daysAsked()).toBe(1);
+    expect(r.text).toMatch(/^Checking the last day across your wallet against the chain now\./);
+  });
+
+  it('a still-valid result is given as the check wrote it, never rephrased', async () => {
+    requestAudit.mockResolvedValueOnce({ status: 'reused', checked_at: 'x', unchanged: true, message: 'Nothing has changed in your books since I checked at 09:12.\nI checked everything…' } as never);
+    const r = await runAgent({ userId: USER, userMessage: 'are you missing anything?', role: 'operator' });
+    expect(create).not.toHaveBeenCalled();
+    expect(r.text).toBe('Nothing has changed in your books since I checked at 09:12.\nI checked everything…');
+  });
+
+  it('an admin asking about another operator by @username checks that operator\'s wallets', async () => {
+    const mq = db.query as unknown as Mock<(text: string) => Promise<unknown>>;
+    mq.mockImplementation((text: string) => Promise.resolve(
+      text.includes('SELECT role') ? { rows: [{ role: 'admin' }] }
+        : text.includes('telegram_username') ? { rows: [{ id: 'alice-id' }] }
+          : { rows: [] }));
+    const r = await runAgent({ userId: USER, userMessage: "check @alice's books", role: 'admin' });
+    expect((requestAudit.mock.calls as unknown as Array<[Record<string, unknown>]>)[0][0]).toMatchObject({ userId: 'alice-id', requestedBy: USER, admin: true });
+    expect(r.text).toMatch(/^Checking everything I've tracked across @alice's wallet/);
+    mq.mockImplementation(() => Promise.resolve({ rows: [] }));
+  });
+
+  it('an operator naming someone else only ever checks their own wallets', async () => {
+    await runAgent({ userId: USER, userMessage: "check @alice's books", role: 'operator' });
+    expect((requestAudit.mock.calls as unknown as Array<[Record<string, unknown>]>)[0][0]).toMatchObject({ userId: USER });
+  });
+
+  it('a model reply stating a verdict with no check behind it is not sent', async () => {
+    script(
+      say('Yes. Your books are complete and nothing is missing. Revenue this week was $840.'),
+      say('Revenue this week was $840.'),
+    );
+    const r = await runAgent({ userId: USER, userMessage: 'how are we doing this week?', role: 'operator' });
+    expect(seen[1].messages.at(-1)).toEqual({ role: 'system', content: VERDICT_CORRECTION });
+    expect(r.text).toBe('Revenue this week was $840.');
+    expect(requestAudit).not.toHaveBeenCalled();
+  });
+
+  it('if the model keeps stating a verdict, a real check is started instead', async () => {
+    script(say('Your books are complete.'), say('Your books are complete.'));
+    const r = await runAgent({ userId: USER, userMessage: 'how are we doing this week?', role: 'operator' });
+    expect(requestAudit).toHaveBeenCalledTimes(1);
+    expect(daysAsked()).toBe(7);
+    expect(r.text).toMatch(/^Checking the last 7 days across your wallet against the chain now\./);
+  });
+
+  it('the model asking for one day on a question with no period still checks everything', async () => {
+    script(callCheck({ days: 1 }), say('Checking now; I will message you when done.'));
+    await runAgent({ userId: USER, userMessage: 'can you look over my wallets for me?', role: 'operator' });
+    expect(requestAudit).toHaveBeenCalledTimes(1);
+    expect(daysAsked()).toBeNull();
   });
 
   it('a reply claiming a check that was never started is not sent; the check is started first', async () => {
@@ -96,7 +182,7 @@ describe('books checks through the agent', () => {
       callCheck({}),       // after the correction: starts it
       say(CLAIM),          // now true
     );
-    const r = await runAgent({ userId: USER, userMessage: "check everything you've tracked across my wallets", role: 'operator' });
+    const r = await runAgent({ userId: USER, userMessage: 'can you look over my wallets for me?', role: 'operator' });
 
     expect(requestAudit).toHaveBeenCalledTimes(1);
     expect(daysAsked()).toBeNull();
@@ -110,7 +196,7 @@ describe('books checks through the agent', () => {
 
   it('if the model still does not start it, Luca says plainly that no check is running', async () => {
     script(say(CLAIM), say(CLAIM));
-    const r = await runAgent({ userId: USER, userMessage: 'check everything', role: 'operator' });
+    const r = await runAgent({ userId: USER, userMessage: 'can you look over my wallets for me?', role: 'operator' });
     expect(requestAudit).not.toHaveBeenCalled();
     expect(r.text).toBe(NO_CHECK_STARTED);
   });
