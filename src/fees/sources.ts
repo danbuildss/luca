@@ -18,6 +18,8 @@ export type FeeSource = {
   fee_contract: string;
   fee_asset: 'BNKR';
   fee_token: string;
+  // The owner shares this source's read-only view with other Luca users (migration 026)
+  shared: boolean;
 };
 
 // Fees are booked only in an asset Luca tracks
@@ -30,7 +32,7 @@ const STALE_AFTER_MINUTES = 120;
 const REPORTED_PRECISION = '0.000001';
 
 const SOURCE_COLUMNS = `fs.id, fs.user_id, fs.wallet_id, LOWER(w.address) AS wallet_address, fs.provider,
-  fs.token_address, fs.token_symbol, fs.pool_id, fs.fee_contract, fs.fee_asset, fs.fee_token`;
+  fs.token_address, fs.token_symbol, fs.pool_id, fs.fee_contract, fs.fee_asset, fs.fee_token, fs.shared`;
 
 export async function getFeeSources(userId: string): Promise<FeeSource[]> {
   const res = await query<FeeSource>(
@@ -183,10 +185,48 @@ export type FeeSourceStatus = {
     | { status: 'mismatch'; reported_claimed: string; reported_count: number; verified_claimed: string; verified_count: number; difference: string };
 };
 
+// Sources other owners share with everyone (never the viewer's own)
+export async function getSharedFeeSources(viewerUserId: string): Promise<FeeSource[]> {
+  const res = await query<FeeSource>(
+    `SELECT ${SOURCE_COLUMNS} FROM fee_sources fs JOIN wallets w ON w.id = fs.wallet_id
+     WHERE fs.shared AND fs.active AND w.active AND fs.user_id <> $1 ORDER BY fs.created_at`,
+    [viewerUserId],
+  );
+  return res.rows;
+}
+
+export type SetSharingResult = { ok: true; source: FeeSource } | { ok: false; error: string };
+
+// The owner's switch, run by an admin on the server
+export async function setFeeSourceSharing(params: { walletAddress: string; token: string; shared: boolean; userId?: string }): Promise<SetSharingResult> {
+  const matches = (await query<{ id: string }>(
+    `SELECT fs.id FROM fee_sources fs JOIN wallets w ON w.id = fs.wallet_id
+     WHERE LOWER(w.address) = $1 AND fs.token_address = $2 AND ($3::uuid IS NULL OR fs.user_id = $3::uuid)`,
+    [params.walletAddress.toLowerCase(), params.token.toLowerCase(), params.userId ?? null],
+  )).rows;
+  if (matches.length === 0) return { ok: false, error: 'No fee source for that wallet and token' };
+  if (matches.length > 1) return { ok: false, error: 'More than one user follows these fees; pass the user id' };
+  await query(`UPDATE fee_sources SET shared = $2, shared_changed_at = NOW() WHERE id = $1`, [matches[0].id, params.shared]);
+  const source = (await query<FeeSource>(
+    `SELECT ${SOURCE_COLUMNS} FROM fee_sources fs JOIN wallets w ON w.id = fs.wallet_id WHERE fs.id = $1`, [matches[0].id],
+  )).rows[0];
+  return { ok: true, source };
+}
+
 export async function feeSourceStatus(userId: string): Promise<FeeSourceStatus[]> {
-  const sources = await getFeeSources(userId);
+  return statusOf(await getFeeSources(userId));
+}
+
+// The view other users get of what owners share: built from the fee tables only
+export async function sharedFeeSourceStatus(viewerUserId: string): Promise<FeeSourceStatus[]> {
+  return statusOf(await getSharedFeeSources(viewerUserId));
+}
+
+// Every figure is scoped to the source's own owner and wallet
+async function statusOf(sources: FeeSource[]): Promise<FeeSourceStatus[]> {
   const out: FeeSourceStatus[] = [];
   for (const source of sources) {
+    const userId = source.user_id;
     const latestOk = (await query<Reading>(
       `SELECT trim_scale(claimable)::text AS claimable, trim_scale(claimed)::text AS claimed, claim_count, read_at
        FROM fee_source_readings WHERE fee_source_id = $1 AND status = 'ok'
