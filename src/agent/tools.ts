@@ -4,7 +4,7 @@ import { getPnlSummary, getBooksSummary } from '../books/query.js';
 import { getRecentActivity } from '../books/activity.js';
 import { getValuedBalances } from '../books/balances.js';
 import { getOverview } from '../books/overview.js';
-import { getFigureBreakdown, FIGURES, type Figure } from '../books/breakdown.js';
+import { getFigureBreakdown, FIGURES, significant, type Figure } from '../books/breakdown.js';
 import { getPreviousAnswers } from './traces.js';
 import { getLedgerStatus } from '../ledger/status.js';
 import { getEventsForReview, getEventWithClassification, resolveEventRef } from '../corrections/store.js';
@@ -337,6 +337,13 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
   },
 ];
 
+// A transaction row with its link and a ready-made rounded amount ("0.0014997 ETH"), so an
+// answer never shows a raw 18-decimal amount
+function shown<T extends { hash: string; amount?: string | number | null; asset?: string | null }>(row: T): T & { link: string; amount_display: string | null } {
+  const n = row.amount == null ? NaN : typeof row.amount === 'number' ? row.amount : parseFloat(row.amount);
+  return { ...withLink(row), amount_display: Number.isFinite(n) ? `${significant(n)} ${row.asset ?? ''}`.trim() : null };
+}
+
 // ---------------------------------------------------------------------------
 // Write-tool preparation — runs before an action is shown for confirmation, so the
 // user is never asked to confirm something that cannot succeed, and the confirmed
@@ -390,7 +397,7 @@ export async function prepareWriteAction(
     return {
       ok: false,
       error: 'More than one transfer matches. Ask the operator which one, then use its id.',
-      candidates: ref.candidates.map(withLink),
+      candidates: ref.candidates.map(shown),
     };
   }
   return { ok: true, args: { ...args, event_id: ref.event.id, tx_hash: ref.event.hash } };
@@ -512,18 +519,18 @@ export async function executeTool(
     case 'get_unknown_transactions': {
       const limit = (args.limit as number | undefined) ?? 20;
       const events = await getEventsForReview({ userId, label: 'unknown', limit });
-      return { unknown_count: events.length, events: events.map(withLink) };
+      return { unknown_count: events.length, events: events.map(shown) };
     }
 
     case 'get_transaction': {
       const ref = await resolveEventRef(userId, argText(args.event_id));
       if (ref.status === 'not_found') return { error: 'Transaction not found' };
       if (ref.status === 'ambiguous') {
-        return { error: 'More than one transfer matches; pick one by id', candidates: ref.candidates.map(withLink) };
+        return { error: 'More than one transfer matches; pick one by id', candidates: ref.candidates.map(shown) };
       }
       const event = await getEventWithClassification(ref.event.id, userId);
       if (!event) return { error: 'Transaction not found' };
-      return { event: withLink({ ...event, hash: ref.event.hash }) };
+      return { event: shown({ ...event, hash: ref.event.hash }) };
     }
 
     case 'apply_correction': {

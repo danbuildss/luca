@@ -5,6 +5,7 @@ import { getAiCost, getInviteStats, getUserStats, getWalletHealth } from '../ops
 import { traceTransaction } from '../ledger/trace.js';
 import { txLink } from '../ledger/links.js';
 import { requestAudit, auditRequestForModel } from '../ledger/audit-runs.js';
+import { getQualityBaseline, describeQuality } from '../quality/baseline.js';
 import { config } from '../config.js';
 
 // Founder questions ("how many invites are pending?", "who has not activated?",
@@ -81,6 +82,22 @@ export const ADMIN_TOOL_DEFINITIONS: ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'admin_get_classification_quality',
+      description:
+        'Admin only. The classification-quality baseline: how many of Luca\'s labels operators confirmed or corrected, unknowns, high-confidence mistakes, reviewed precision by label, internal-transfer mistakes, whether learned rules keep later transfers right, and the gold set, kept separate. For "how accurate is Luca?", "how accurate is Luca for @alice this week?". All operators unless a username is given. The result is a finished report: send it exactly as given.',
+      parameters: {
+        type: 'object',
+        properties: {
+          username: { type: 'string', description: 'One operator\'s Telegram username, e.g. "alice". Omit for all operators.' },
+          days: { type: 'number', description: 'Period in days. Default 7.' },
+        },
+        required: [],
+      },
+    },
+  },
 ];
 
 const ADMIN_TOOL_NAMES = new Set(
@@ -127,6 +144,19 @@ export async function executeAdminTool(
       const hash = typeof args.hash === 'string' ? args.hash.trim() : '';
       if (!/^0x[0-9a-fA-F]{64}$/.test(hash)) return { error: 'Give the full transaction hash: 0x followed by 64 hex characters.' };
       return { link: txLink(hash), ...(await traceTransaction(hash, config.ALCHEMY_API_KEY)) };
+    }
+    case 'admin_get_classification_quality': {
+      const days = typeof args.days === 'number' && args.days > 0 ? Math.min(Math.floor(args.days), 365) : 7;
+      const name = typeof args.username === 'string' ? args.username.replace(/^@/, '').trim().toLowerCase() : '';
+      let target: string | null = null;
+      if (name) {
+        target = (await query<{ id: string }>(
+          `SELECT id FROM users WHERE LOWER(LTRIM(telegram_username, '@')) = $1`, [name],
+        )).rows[0]?.id ?? null;
+        if (!target) return { error: `No user @${name}.` };
+      }
+      const q = await getQualityBaseline({ userId: target, days });
+      return { report: describeQuality(q, target ? `@${name}` : 'all operators') };
     }
     default:
       return { error: `Unknown tool: ${toolName}` };
