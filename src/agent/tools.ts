@@ -1,6 +1,7 @@
 import type { ChatCompletionTool } from 'openai/resources/chat/completions.js';
 import { query } from '../db.js';
-import { getPnlSummary, getBooksSummary, getBooksEvents } from '../books/query.js';
+import { getPnlSummary, getBooksSummary } from '../books/query.js';
+import { getRecentActivity } from '../books/activity.js';
 import { getValuedBalances } from '../books/balances.js';
 import { getOverview } from '../books/overview.js';
 import { getFigureBreakdown, FIGURES, type Figure } from '../books/breakdown.js';
@@ -89,18 +90,18 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
     type: 'function',
     function: {
       name: 'get_recent_activity',
-      description: 'Get recent transactions with their classification labels. Use this to show what happened recently, investigate a specific label category, or answer questions about specific movements.',
+      description: 'Get recent transactions with their labels, newest first, for a period. Use this for "show me my recent transactions", "what happened this week?" or questions about specific movements. Results are grouped by on-chain transaction, each with its movements (a swap is one transaction with ETH out, BNKR in and a network fee). `covers` says what the list includes: all transactions or one label, the period, and how many transactions and movements; describe the list by it, and never call a filtered list everything that happened. Each transaction has a ready-made `link` and each movement `amount_display` and `usd_display`, to show as they are.',
       parameters: {
         type: 'object',
         properties: {
           limit: {
             type: 'number',
-            description: 'Number of transactions to return. Default 20, max 50.',
+            description: 'Number of on-chain transactions to return. Default 20, max 50.',
           },
           label: {
             type: 'string',
             enum: [...CLASSIFICATION_LABELS],
-            description: 'Filter by classification label. Omit to show all.',
+            description: 'Only when the operator asks for one category (e.g. "show me my expenses"). Omit it for recent transactions in general.',
           },
           period_days: {
             type: 'number',
@@ -401,21 +402,11 @@ export async function executeTool(
     }
 
     case 'get_recent_activity': {
-      const limit = Math.min((args.limit as number | undefined) ?? 20, 50);
-      const label = (args.label as string | undefined) ?? undefined;
-      const periodDays = (args.period_days as number | undefined) ?? 7;
-      const events = await getBooksEvents({
-        userId,
-        label: label ?? 'unknown',
-        periodDays,
-        limit,
-      });
-      if (label) {
-        return { events: events.map(withLink) };
-      }
-      // No label filter: use getEventsForReview for all recent events
-      const allEvents = await getEventsForReview({ userId, limit });
-      return { events: allEvents.map(withLink) };
+      const limit = typeof args.limit === 'number' && args.limit > 0 ? Math.min(Math.floor(args.limit), 50) : 20;
+      const label = typeof args.label === 'string' ? args.label : null;
+      const periodDays = typeof args.period_days === 'number' && args.period_days > 0 ? Math.min(args.period_days, 365) : 7;
+      const valid = label && (CLASSIFICATION_LABELS as ReadonlyArray<string>).includes(label) ? label : null;
+      return await getRecentActivity({ userId, label: valid, periodDays, limit });
     }
 
     case 'get_wallets': {
