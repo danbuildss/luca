@@ -7,6 +7,7 @@ import { parseUniqueId, buildSourceKey } from '../ingestion/normalize.js';
 import { BASE_USDC, BASE_BNKR, SUPPORTED_TOKENS, usdValueSql } from '../ingestion/assets.js';
 import { REVENUE_SQL, EXPENSES_SQL, GAS_SQL } from '../books/query.js';
 import { BRIEF_CATEGORIES } from '../types/index.js';
+import { txLink } from './links.js';
 
 // Follows one transaction through every layer Luca keeps, for every tracked wallet it
 // touches: chain → transfer feed → raw evidence → normalized event → asset identity →
@@ -323,7 +324,8 @@ export async function traceTransaction(hash: string, apiKey?: string): Promise<T
 
 // A few lines for Telegram or a terminal, in plain words
 export function describeTrace(t: TraceResult): string[] {
-  const short = `${t.hash.slice(0, 6)}…${t.hash.slice(-4)}`;
+  // A tappable BaseScan link to the transaction itself (src/ledger/links.ts)
+  const short = txLink(t.hash);
   const head = t.verdict === 'not_found'
     ? `${short}: not found on Base and nothing stored for it.`
     : t.verdict === 'not_tracked'

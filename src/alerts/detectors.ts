@@ -2,6 +2,7 @@ import { query } from '../db.js';
 import { usdValueSql } from '../ingestion/assets.js';
 import { formatAddress } from '../telegram/format.js';
 import { getHighConfidenceErrorRate } from '../quality/metrics.js';
+import { txLink } from '../ledger/links.js';
 
 type AlertType =
   | 'large_inflow'
@@ -93,6 +94,7 @@ const LARGE_MOVEMENT_WINDOW = '24 hours';
 export async function detectLargeMovements(userId: string): Promise<number> {
   const res = await query<{
     event_id: string;
+    hash: string;
     direction: 'in' | 'out';
     asset: string | null;
     amount: string | null;
@@ -104,7 +106,7 @@ export async function detectLargeMovements(userId: string): Promise<number> {
     materiality_usd: string;
   }>(
     `SELECT
-       ne.id AS event_id, ne.direction, ne.asset, ne.amount::text, ne.usd_value::text,
+       ne.id AS event_id, ne.hash, ne.direction, ne.asset, ne.amount::text, ne.usd_value::text,
        ne.from_address, ne.to_address,
        w.label AS wallet_label, w.address AS wallet_address,
        u.materiality_usd::text
@@ -144,6 +146,8 @@ export async function detectLargeMovements(userId: string): Promise<number> {
     const message = [
       `${type === 'large_inflow' ? 'Large inflow' : 'Large outflow'}`,
       `$${usd.toFixed(2)} in ${row.asset ?? 'tokens'} ${verb} ${counterparty}, on ${walletHint}.`,
+      // Tappable on BaseScan when delivered (src/telegram/format.ts)
+      `Transaction: ${txLink(row.hash)}`,
     ].join('\n');
 
     const inserted = await insertAlert({
@@ -153,6 +157,7 @@ export async function detectLargeMovements(userId: string): Promise<number> {
       message,
       evidence: {
         event_id: row.event_id,
+        hash: row.hash,
         usd,
         asset: row.asset,
         direction: row.direction,

@@ -4,6 +4,7 @@ import { BRIEF_CATEGORIES } from '../types/index.js';
 import { getPnlSummary, type PnlSummary } from './query.js';
 import { getValuedBalances } from './balances.js';
 import { getLedgerStatus, type LedgerStatus } from '../ledger/status.js';
+import { withLink } from '../ledger/links.js';
 
 const USD = usdValueSql('ne');
 const COUNTERPARTY = `CASE WHEN ne.direction = 'in' THEN ne.from_address ELSE ne.to_address END`;
@@ -17,9 +18,13 @@ export type NeedsContext = {
   usd_value: string | null;
   counterparty: string | null;
   block_time: Date;
+  // Tappable BaseScan link (src/ledger/links.ts)
+  link: string;
 };
 
 export type FirstTimePayment = {
+  hash: string;
+  link: string;
   counterparty: string;
   asset: string | null;
   amount: string | null;
@@ -63,7 +68,7 @@ export async function getOverview(userId: string, periodDays: number): Promise<O
          AND ne.block_time >= NOW() - INTERVAL '1 day' * $2`,
       [userId, periodDays, BRIEF_CATEGORIES.internal, BRIEF_CATEGORIES.unknown],
     ),
-    query<NeedsContext & { total: number }>(
+    query<Omit<NeedsContext, 'link'> & { total: number }>(
       `SELECT ne.id AS event_id, ne.hash, ne.direction, ne.asset, ne.amount::text AS amount,
               ${USD}::text AS usd_value, ${COUNTERPARTY} AS counterparty, ne.block_time,
               COUNT(*) OVER ()::int AS total
@@ -77,8 +82,8 @@ export async function getOverview(userId: string, periodDays: number): Promise<O
       [userId, periodDays],
     ),
     // Outgoing payments in the last 7 days to an address this user had never paid before
-    query<FirstTimePayment>(
-      `SELECT ${COUNTERPARTY} AS counterparty, ne.asset, ne.amount::text AS amount,
+    query<Omit<FirstTimePayment, 'link'>>(
+      `SELECT ne.hash, ${COUNTERPARTY} AS counterparty, ne.asset, ne.amount::text AS amount,
               ${USD}::text AS usd_value, ne.block_time
        FROM normalized_events ne
        JOIN classifications c ON c.event_id = ne.id AND c.superseded_at IS NULL
@@ -128,9 +133,9 @@ export async function getOverview(userId: string, periodDays: number): Promise<O
     unknown_usd: num(t?.unknown_usd),
     needs_context: {
       count: unknownRows.rows[0]?.total ?? 0,
-      examples: unknownRows.rows.map(({ total: _total, ...row }) => row),
+      examples: unknownRows.rows.map(({ total: _total, ...row }) => withLink(row)),
     },
-    first_time_payments: firstTime.rows,
+    first_time_payments: firstTime.rows.map(withLink),
     spend_vs_usual: s?.has_history && usualWeekly > 0
       ? { last_7d_usd: last7, usual_weekly_usd: usualWeekly, ratio: last7 / usualWeekly }
       : null,

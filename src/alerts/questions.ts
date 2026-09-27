@@ -126,6 +126,7 @@ export type QuestionToSend = {
   last_at: Date;
   // The single transfer, when the group has one
   amount: string | null;
+  hash: string | null;
 };
 
 // Questions that should go out now: big enough (or unpriced), not asked recently (or
@@ -146,11 +147,11 @@ export async function getQuestionsToSend(): Promise<QuestionToSend[]> {
      )
      SELECT e.id, e.user_id, e.telegram_id, e.counterparty_address, e.direction, e.asset,
             e.event_count, e.total_usd::text AS total_usd, e.unpriced_count, e.first_at, e.last_at,
-            one.amount
+            one.amount, one.hash
      FROM eligible e
      LEFT JOIN recent r ON r.user_id = e.user_id
      LEFT JOIN LATERAL (
-       SELECT ne.amount::text AS amount
+       SELECT ne.amount::text AS amount, ne.hash
        FROM normalized_events ne
        JOIN classifications c ON c.event_id = ne.id AND c.superseded_at IS NULL
        WHERE e.event_count = 1 AND ne.user_id = e.user_id AND ${OPEN_UNKNOWN}

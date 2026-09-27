@@ -8,6 +8,7 @@ import { getPreviousAnswers } from './traces.js';
 import { getLedgerStatus } from '../ledger/status.js';
 import { getEventsForReview, getEventWithClassification, resolveEventRef } from '../corrections/store.js';
 import { applyCorrection, describeRuleOutcome } from '../corrections/handler.js';
+import { txLink, withLink } from '../ledger/links.js';
 import { ClassificationLabel, CLASSIFICATION_LABELS, WALLET_ROLES, SUPPORTED_CHAINS } from '../types/index.js';
 import { requestAudit, auditRequestForModel, movementStatus, amountText, isMissing } from '../ledger/audit-runs.js';
 import { traceTransaction } from '../ledger/trace.js';
@@ -332,7 +333,7 @@ export async function prepareWriteAction(
     return {
       ok: false,
       error: 'More than one transfer matches. Ask the operator which one, then use its id.',
-      candidates: ref.candidates,
+      candidates: ref.candidates.map(withLink),
     };
   }
   return { ok: true, args: { ...args, event_id: ref.event.id, tx_hash: ref.event.hash } };
@@ -410,11 +411,11 @@ export async function executeTool(
         limit,
       });
       if (label) {
-        return { events };
+        return { events: events.map(withLink) };
       }
       // No label filter: use getEventsForReview for all recent events
       const allEvents = await getEventsForReview({ userId, limit });
-      return { events: allEvents };
+      return { events: allEvents.map(withLink) };
     }
 
     case 'get_wallets': {
@@ -464,18 +465,18 @@ export async function executeTool(
     case 'get_unknown_transactions': {
       const limit = (args.limit as number | undefined) ?? 20;
       const events = await getEventsForReview({ userId, label: 'unknown', limit });
-      return { unknown_count: events.length, events };
+      return { unknown_count: events.length, events: events.map(withLink) };
     }
 
     case 'get_transaction': {
       const ref = await resolveEventRef(userId, argText(args.event_id));
       if (ref.status === 'not_found') return { error: 'Transaction not found' };
       if (ref.status === 'ambiguous') {
-        return { error: 'More than one transfer matches; pick one by id', candidates: ref.candidates };
+        return { error: 'More than one transfer matches; pick one by id', candidates: ref.candidates.map(withLink) };
       }
       const event = await getEventWithClassification(ref.event.id, userId);
       if (!event) return { error: 'Transaction not found' };
-      return { event: { ...event, hash: ref.event.hash } };
+      return { event: withLink({ ...event, hash: ref.event.hash }) };
     }
 
     case 'apply_correction': {
@@ -496,7 +497,10 @@ export async function executeTool(
         reason,
         counterpartyName,
       });
-      return { success: true, event_id: ref.event.id, new_label: newLabel, note: describeRuleOutcome(result.rule) };
+      return {
+        success: true, event_id: ref.event.id, new_label: newLabel, link: txLink(ref.event.hash),
+        note: describeRuleOutcome(result.rule),
+      };
     }
 
     case 'get_financial_brief': {
@@ -595,6 +599,7 @@ export async function executeTool(
       }
       return {
         found: true,
+        link: txLink(hash),
         failed_on_chain: trace.status === 'failed',
         chain_checked: trace.checked_chain,
         movements: movements.map((m) => ({

@@ -51,6 +51,8 @@ describeDb('transaction trace and wallet audit (integration)', () => {
 
       const t = await traceTransaction(h, 'key');
       expect(t.verdict).toBe('complete');
+      // The summary opens with a tappable BaseScan link to the transaction
+      expect(describeTrace(t)[0]).toBe(`[${h.slice(0, 6)}…${h.slice(-4)}](https://basescan.org/tx/${h}): complete. Every movement reached the books.`);
       expect(t.status).toBe('success');
       expect(t.movements).toHaveLength(1);
       expect(t.movements[0]).toMatchObject({

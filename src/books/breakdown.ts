@@ -2,6 +2,7 @@ import { query } from '../db.js';
 import { usdValueSql } from '../ingestion/assets.js';
 import { BRIEF_CATEGORIES } from '../types/index.js';
 import { REVENUE_SQL, EXPENSES_SQL, GAS_SQL } from './query.js';
+import { txLink, txUrl, EXPLORER_TX_URL } from '../ledger/links.js';
 
 // Every transaction behind one figure, so any number Luca gives can be traced to the
 // chain. Revenue, expenses and gas use the exact expressions getPnlSummary sums, so the
@@ -112,12 +113,12 @@ export async function getFigureBreakdown(
     total_usd: first?.total != null ? parseFloat(first.total) : 0,
     count: first?.n ?? 0,
     rows: res.rows.map((r) => {
-      const basescan = `https://basescan.org/tx/${r.hash}`;
+      const basescan = txUrl(r.hash) ?? `${EXPLORER_TX_URL}${r.hash}`;
       return {
         date: r.date, direction: r.direction, asset: r.asset, amount: r.amount,
         amount_display: r.amount != null ? `${significant(parseFloat(r.amount))} ${r.asset ?? ''}`.trim() : null,
         usd_display: r.usd != null ? usdDisplay(parseFloat(r.usd)) : null,
-        link: `[${r.hash.slice(0, 6)}…${r.hash.slice(-4)}](${basescan})`,
+        link: txLink(r.hash),
         usd: r.usd, price_source: r.price_source, price_ref: r.price_ref, label: r.label, status: r.status,
         counterparty: r.counterparty, hash: r.hash, basescan,
       };
