@@ -285,6 +285,7 @@ describe('a change is asked about in Luca\'s words, not the model\'s', () => {
       'It is now labeled revenue.', 'Please confirm below.', 'Tap Confirm to apply.', "I've started tracking that wallet.",
       // Sep 27: the model copied Luca's own question form, with a role nobody asked for
       'Track wallet 0x042455f9990098e11592be1fbd72e6dc68419b13 on Base as "Test" (operations)?',
+      'Track wallet 0x042455f9990098e11592be1fbd72e6dc68419b13 on Base as “Test” (operations)?',
       'Sure.\nLabel the 12 USDC you received on Sep 27 as revenue?', 'Make these 2 changes?']) {
       expect(restatesChange(t), t).toBe(true);
     }
