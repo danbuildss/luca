@@ -8,6 +8,7 @@ import {
   auditRange, auditableRange, safeBlock, ProviderUnavailableError, type AuditItem, type WalletAudit,
 } from './audit.js';
 import type { TraceLayer } from './trace.js';
+import { txLink } from './links.js';
 
 // "Are my books complete?" from chat. A check compares everything the chain and the data
 // providers know for an operator's wallets with what reached the books (src/ledger/audit.ts),
@@ -438,7 +439,7 @@ export function amountText(e: { raw_amount: string | null; asset: string | null 
 function entryText(e: AuditEntry, timezone: string | undefined): string {
   const when = fmtDate(e.time, timezone) ?? `block ${e.block ?? '?'}`;
   const what = e.source_key === 'gas' ? `network fee of ${amountText(e)}` : `${amountText(e)}${e.direction ? ` ${e.direction}` : ''}`;
-  return `${when}, ${what} (${e.hash.slice(0, 6)}…${e.hash.slice(-4)})`;
+  return `${when}, ${what} (${txLink(e.hash)})`;
 }
 
 // "everything I've tracked since Sep 1 across your 2 wallets"

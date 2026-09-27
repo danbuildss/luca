@@ -76,6 +76,51 @@ export function chunkMessage(text: string, max = TELEGRAM_MAX_LENGTH): string[] 
   return chunks;
 }
 
+// BaseScan links (src/ledger/links.ts) written as Markdown, "[0xf5a2…a0e3](https://basescan.org/tx/0x…)",
+// turned into Telegram link entities over plain text. Used where a message is not sent as
+// Markdown, so its links stay tappable without escaping anything else in the text.
+// Only explorer transaction links are converted; any other bracketed text is left as is.
+const EXPLORER_LINK = /\[([^[\]\n]{1,40})\]\((https:\/\/basescan\.org\/tx\/0x[0-9a-fA-F]{64})\)/g;
+
+export type TextLink = { type: 'text_link'; offset: number; length: number; url: string };
+
+export function linksToEntities(text: string): { text: string; entities: TextLink[] } {
+  const entities: TextLink[] = [];
+  let out = '';
+  let last = 0;
+  for (const m of text.matchAll(EXPLORER_LINK)) {
+    out += text.slice(last, m.index);
+    // Offsets count UTF-16 code units, which is what JavaScript string lengths count
+    entities.push({ type: 'text_link', offset: out.length, length: m[1].length, url: m[2] });
+    out += m[1];
+    last = m.index + m[0].length;
+  }
+  out += text.slice(last);
+  return { text: out, entities };
+}
+
+// A plain-text chunk with its explorer links as entities, and no link preview cards
+function plainChunk(chunk: string, extra: Record<string, unknown>): [string, Record<string, unknown>] {
+  const { text, entities } = linksToEntities(chunk);
+  return [text, { ...extra, ...(entities.length > 0 ? { entities } : {}) }];
+}
+
+// Send plain text (never parsed as Markdown) with tappable explorer links: for messages
+// that carry text Luca did not write, such as alerts and check results.
+export async function sendPlainWithLinks<T>(
+  send: (text: string, extra: Record<string, unknown>) => Promise<T>,
+  text: string,
+  extra: Record<string, unknown> = {},
+): Promise<T | null> {
+  const chunks = chunkMessage(text.trim() === '' ? '…' : text);
+  let last: T | null = null;
+  for (let i = 0; i < chunks.length; i++) {
+    const chunkExtra = { link_preview_options: { is_disabled: true }, ...(i === chunks.length - 1 ? extra : {}) };
+    last = await send(...plainChunk(chunks[i], chunkExtra));
+  }
+  return last;
+}
+
 function isParseError(err: unknown): boolean {
   const desc = (err as { description?: string; message?: string } | null);
   return /can't parse entities/i.test(desc?.description ?? desc?.message ?? '');
@@ -100,7 +145,8 @@ export async function sendMarkdownSafe<T>(
       last = await send(chunks[i], { ...chunkExtra, parse_mode: 'Markdown' });
     } catch (err) {
       if (!isParseError(err)) throw err;
-      last = await send(chunks[i], chunkExtra);
+      // Plain text instead, keeping the explorer links tappable
+      last = await send(...plainChunk(chunks[i], chunkExtra));
     }
   }
   return last;
@@ -118,6 +164,11 @@ export function replyMarkdownSafe(
     text,
     extra,
   );
+}
+
+// Convenience wrapper: sendPlainWithLinks via ctx.reply
+export function replyPlainWithLinks(ctx: Context, text: string, extra: Record<string, unknown> = {}) {
+  return sendPlainWithLinks((t, x) => ctx.reply(t, x as Parameters<Context['reply']>[1]), text, extra);
 }
 
 export function signedUsd(amount: number, direction: 'in' | 'out' | null): string {

@@ -28,6 +28,9 @@ import { recoverAudits, setAuditNotifier } from '../../src/ledger/audit-runs.js'
 import { executeTool } from '../../src/agent/tools.js';
 import { executeAdminTool } from '../../src/agent/admin-tools.js';
 
+// Every transaction the check lists is a tappable BaseScan link
+const link = (h: string): string => `[${h.slice(0, 6)}…${h.slice(-4)}](https://basescan.org/tx/${h})`;
+
 const sent: Array<{ to: string; text: string }> = [];
 setAuditNotifier((to, text) => { sent.push({ to, text }); return Promise.resolve(); });
 
@@ -106,7 +109,7 @@ describeDb('books check from chat (integration)', () => {
     record('One transaction genuinely missing', text);
     expect(text).toContain('2 transactions, 2 supported financial movements');
     expect(text).toContain('1 movement is missing from your books:');
-    expect(text).toContain(`12.00 USDC in (${missed.slice(0, 6)}…${missed.slice(-4)}): my data provider never delivered it, so it's missing from your books.`);
+    expect(text).toContain(`12.00 USDC in (${link(missed)}): my data provider never delivered it, so it's missing from your books.`);
     expect(text).toContain("I haven't changed anything in your books.");
     expect(text).not.toContain('Every supported movement reached');
   });
@@ -195,7 +198,7 @@ describeDb('books check from chat (integration)', () => {
       record('New on-chain transaction not in the database (sync behind)', text);
       expect(text).not.toContain('Every supported movement reached');
       expect(text).toContain('2 transactions, 2 supported financial movements');
-      expect(text).toContain(`7.00 USDC in (${late.slice(0, 6)}…${late.slice(-4)}): I haven't synced it yet (my last sync of this wallet reached `);
+      expect(text).toContain(`7.00 USDC in (${link(late)}): I haven't synced it yet (my last sync of this wallet reached `);
       // Only the new blocks were checked, on top of the earlier result
       const run = await sql<{ base_run_id: string | null; to_block: number }>(
         `SELECT base_run_id, (result->'wallets'->0->>'to_block')::int AS to_block FROM audit_runs ORDER BY started_at DESC LIMIT 1`);
@@ -217,7 +220,7 @@ describeDb('books check from chat (integration)', () => {
       expect(await executeTool(user.id, 'check_books_complete', {})).toMatchObject({ status: 'started' });
       const text = await finished(2);
       record('New on-chain transaction the sync lost', text);
-      expect(text).toContain(`9.00 USDC in (${lost.slice(0, 6)}…${lost.slice(-4)}): my data provider never delivered it, so it's missing from your books.`);
+      expect(text).toContain(`9.00 USDC in (${link(lost)}): my data provider never delivered it, so it's missing from your books.`);
     });
 
     it('a stored USD value changes (non-null to a different non-null): not reused, checked again in full', async () => {
@@ -261,7 +264,7 @@ describeDb('books check from chat (integration)', () => {
       const text = await finished();
       record('Inbound ETH missed by Alchemy, found via Blockscout', text);
       expect(text).toContain('1 transaction, 1 supported financial movement');
-      expect(text).toContain(`0.01 ETH in (${eth.slice(0, 6)}…${eth.slice(-4)}): my data provider never delivered it, so it's missing from your books.`);
+      expect(text).toContain(`0.01 ETH in (${link(eth)}): my data provider never delivered it, so it's missing from your books.`);
       expect(text).not.toContain('Every supported movement reached');
     });
 
@@ -292,7 +295,7 @@ describeDb('books check from chat (integration)', () => {
       await executeTool(wallet.userId, 'check_books_complete', {});
       const text = await finished();
       record('Failed zero-value sent transaction found for its fee', text);
-      expect(text).toContain(`network fee of 0.0000001 ETH (${hash.slice(0, 6)}…${hash.slice(-4)}): I haven't synced it yet`);
+      expect(text).toContain(`network fee of 0.0000001 ETH (${link(hash)}): I haven't synced it yet`);
     });
   });
 
@@ -333,9 +336,10 @@ describeDb('books check from chat (integration)', () => {
 
     const forBob = await executeTool(bob.user.id, 'check_transaction', { hash: h });
     expect(forBob).toMatchObject({ found: false });
+    expect(forBob).not.toHaveProperty('link');
     const forAlice = await executeTool(alice.user.id, 'check_transaction', { hash: h });
     // Stored but not labeled yet: in the books, not missing
-    expect(forAlice).toMatchObject({ found: true, movements: [{ amount: '1.00 USDC', direction: 'in', missing: false, status: "it's in your books but not labeled yet" }] });
+    expect(forAlice).toMatchObject({ found: true, link: link(h), movements: [{ amount: '1.00 USDC', direction: 'in', missing: false, status: "it's in your books but not labeled yet" }] });
   });
 
   it('an admin can check another operator\'s books by username; the result names them', async () => {

@@ -1,4 +1,4 @@
-import { Telegraf } from 'telegraf';
+import { Telegraf, type Telegram } from 'telegraf';
 import { config, requireProductionConfig } from '../../src/config.js';
 import { closeDb, query } from '../../src/db.js';
 import { logger } from '../../src/logger.js';
@@ -13,7 +13,7 @@ import { handleOps } from '../../src/telegram/commands/ops.js';
 import { touchUserActivity } from '../../src/ops/db.js';
 import { handleCallback, agentConfirmKeyboard } from '../../src/telegram/callbacks.js';
 import { sendPendingAlerts } from '../../src/telegram/alerts.js';
-import { replyMarkdownSafe } from '../../src/telegram/format.js';
+import { replyMarkdownSafe, sendPlainWithLinks } from '../../src/telegram/format.js';
 import { UserRateLimiter, singleFlight } from '../../src/telegram/ratelimit.js';
 import { describePendingAction } from '../../src/agent/pending.js';
 import { generateDailyBrief, generateWeeklyBrief } from '../../src/briefs/generate.js';
@@ -412,7 +412,8 @@ async function start() {
   setAuditNotifier(async (requesterId, text) => {
     const u = await query<{ telegram_id: string }>(`SELECT telegram_id::text AS telegram_id FROM users WHERE id = $1`, [requesterId]);
     if (!u.rows[0]) return;
-    await bot.telegram.sendMessage(Number(u.rows[0].telegram_id), text);
+    // Plain text with tappable BaseScan links for anything the check lists
+    await sendPlainWithLinks((t, x) => bot.telegram.sendMessage(Number(u.rows[0].telegram_id), t, x as Parameters<Telegram['sendMessage']>[2]), text);
     await saveMessage({ userId: requesterId, role: 'assistant', content: text });
   });
   const recovered = await recoverAudits();

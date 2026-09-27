@@ -2,6 +2,7 @@ import { Telegram } from 'telegraf';
 import { query } from '../db.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
+import { sendPlainWithLinks } from '../telegram/format.js';
 
 type UndeliveredAlert = {
   id: string;
@@ -52,7 +53,12 @@ export async function deliverPendingAlerts(userId: string): Promise<void> {
 
   for (const alert of alerts) {
     try {
-      await telegram.sendMessage(Number(alert.telegram_id), alert.message);
+      // Plain text: alert messages carry labels and names Luca did not write. Any
+      // BaseScan link in them is kept tappable.
+      await sendPlainWithLinks(
+        (t, x) => telegram.sendMessage(Number(alert.telegram_id), t, x as Parameters<Telegram['sendMessage']>[2]),
+        alert.message,
+      );
       await markAlertSent(alert.id);
     } catch (err) {
       if (isPermanentDeliveryError(err)) {

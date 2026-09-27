@@ -10,7 +10,7 @@ import { query } from '../../db.js';
 import { getLedgerHealth } from '../../ledger/status.js';
 import { getPriceSourceChecks } from '../../pricing/onchain.js';
 import { BASE_BNKR } from '../../ingestion/assets.js';
-import { escapeLegacyMarkdown, replyMarkdownSafe } from '../format.js';
+import { escapeLegacyMarkdown, replyMarkdownSafe, replyPlainWithLinks } from '../format.js';
 import { traceTransaction, describeTrace } from '../../ledger/trace.js';
 import { config } from '../../config.js';
 
@@ -238,7 +238,7 @@ async function handleOpsTrace(ctx: Context, hash: string | undefined): Promise<v
     return;
   }
   const trace = await traceTransaction(hash, config.ALCHEMY_API_KEY);
-  await ctx.reply(describeTrace(trace).join('\n'));
+  await replyPlainWithLinks(ctx, describeTrace(trace).join('\n'));
 }
 
 export async function handleOps(ctx: Context, user: AuthedUser, args: string[]): Promise<void> {

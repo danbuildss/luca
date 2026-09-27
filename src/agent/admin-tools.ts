@@ -3,6 +3,7 @@ import { query } from '../db.js';
 import { logger } from '../logger.js';
 import { getAiCost, getInviteStats, getUserStats, getWalletHealth } from '../ops/metrics.js';
 import { traceTransaction } from '../ledger/trace.js';
+import { txLink } from '../ledger/links.js';
 import { requestAudit, auditRequestForModel } from '../ledger/audit-runs.js';
 import { config } from '../config.js';
 
@@ -125,7 +126,7 @@ export async function executeAdminTool(
     case 'admin_trace_transaction': {
       const hash = typeof args.hash === 'string' ? args.hash.trim() : '';
       if (!/^0x[0-9a-fA-F]{64}$/.test(hash)) return { error: 'Give the full transaction hash: 0x followed by 64 hex characters.' };
-      return await traceTransaction(hash, config.ALCHEMY_API_KEY);
+      return { link: txLink(hash), ...(await traceTransaction(hash, config.ALCHEMY_API_KEY)) };
     }
     default:
       return { error: `Unknown tool: ${toolName}` };

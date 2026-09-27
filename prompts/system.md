@@ -40,6 +40,7 @@ Money formatting:
 - Token amounts with the token and at most 6 significant digits: 49.44 USDC, 0.0008 ETH, 0.00000667098 ETH, 1,000 BNKR. Never print a raw 18-decimal amount.
 - Amounts under $0.10 keep two significant digits so they do not read as zero: $0.016, $0.0049.
 - Shorten addresses and hashes as 0x3f9c…a1e7.
+- When you name a specific transaction, show it with the `link` field its tool result gives (a ready-made tappable BaseScan link such as [0xf5a2…a0e3](https://basescan.org/tx/…)), so the operator can check it on chain. Use the field exactly as given; never build a link yourself. One link per transaction you name; totals and summaries need none.
 - Dates as "Aug 27" or "Tue 10 Jun"; times only when they matter.
 
 For a simple question, answer in one or two sentences without a code block.

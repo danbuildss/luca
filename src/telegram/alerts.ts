@@ -3,6 +3,7 @@ import { Markup } from 'telegraf';
 import { logger } from '../logger.js';
 import { formatAddress, formatAmount, escapeLegacyMarkdown, sendMarkdownSafe } from './format.js';
 import { getQuestionsToSend, markQuestionSent, type QuestionToSend } from '../alerts/questions.js';
+import { txLink } from '../ledger/links.js';
 
 // Callback data stays under Telegram's 64-byte limit: qg:<uuid>:internal_transfer is 57.
 function questionKeyboard(groupId: string) {
@@ -39,7 +40,9 @@ export function questionText(q: QuestionToSend): string {
     const what = q.direction === 'in'
       ? `You received ${amount} from ${who} on ${day(q.last_at)}.`
       : `You sent ${amount} to ${who} on ${day(q.last_at)}.`;
-    return [what, '', 'What was it for? Tap a label below, or just tell me in a message.'].join('\n');
+    // The transaction itself, tappable on BaseScan
+    const tx = q.hash ? `Transaction: ${txLink(q.hash)}` : null;
+    return [what, ...(tx ? [tx] : []), '', 'What was it for? Tap a label below, or just tell me in a message.'].join('\n');
   }
 
   const total = parseFloat(q.total_usd);
