@@ -173,6 +173,9 @@ const CHANGE_TALK = new RegExp(
     String.raw`\b(?:i'?ll|i will|let me|i can|i'?m going to|going to)\s+(?:re)?(?:label|track|add|mark|update|change|record|correct)\b`,
     String.raw`\bconfirm\b`, String.raw`\b(?:shall|should) i\b`, String.raw`\b(?:do you )?want me to\b`,
     String.raw`\btap\b`, String.raw`\bbuttons?\b`,
+    // The model asking in Luca's own form, copied from earlier in the chat
+    // ("Track wallet 0x… on Base as "Test" (operations)?", Sep 27)
+    String.raw`(?:^|[.!?\n]\s*)(?:track wallet|start tracking|label (?:the|those|that|this|it)|make (?:these|this|that)(?: \d+)? changes?)\b`,
   ].join('|'),
   'i',
 );
