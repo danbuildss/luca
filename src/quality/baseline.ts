@@ -43,10 +43,11 @@ export type QualityBaseline = {
     high_confidence: Rate & { mistakes: Mistake[] };
     by_label: Array<{ label: string; reviewed: number; confirmed: number; precision: Rate; actually: Record<string, number> }>;
     internal: { wrongly_internal: number; missed_internal: number };
-    rules_learned: number;
+    rules_learned: number;         // rules that can take effect
+    rules_learned_inert: number;   // rules for addresses Luca does not book
   };
   rules: {
-    rules: number; matched: number; reviewed: number; confirmed: number; corrected: number; unreviewed: number;
+    rules: number; inert: number; matched: number; reviewed: number; confirmed: number; corrected: number; unreviewed: number;
     precision: Rate;
     repeated_mistakes: Array<{ hash: string; luca: string; taught: string }>;
   };
@@ -55,6 +56,16 @@ export type QualityBaseline = {
 };
 
 const COUNTERPARTY = (a: string): string => `LOWER(CASE WHEN ${a}.direction = 'in' THEN ${a}.from_address ELSE ${a}.to_address END)`;
+
+// A rule can only take effect for an address Luca books transfers with, in its direction.
+// Rules for addresses whose transfers Luca does not book (for example labels given to
+// spam-token transfers before Luca tracked only ETH, USDC and BNKR) can never label
+// anything; they are reported separately and not counted as learned rules.
+const EFFECTIVE = (r: string): string => `EXISTS (
+  SELECT 1 FROM normalized_events be
+  WHERE be.user_id = ${r}.user_id AND be.supported IS TRUE
+    AND ${COUNTERPARTY('be')} = LOWER(${r}.address)
+    AND (${r}.direction IS NULL OR be.direction = ${r}.direction))`;
 
 // Every operator decision with Luca's label just before it. $1 = user (NULL: everyone)
 const DECISIONS = `
@@ -100,14 +111,16 @@ export async function getQualityBaseline(p: { userId: string | null; days: numbe
     ),
     // Decision clock: what operators decided in the period
     query<DecisionRow>(`SELECT * FROM (${DECISIONS}) d WHERE d.decided_at >= NOW() - INTERVAL '1 day' * $2 ORDER BY d.decided_at DESC`, scope),
-    query<{ n: number }>(
-      `SELECT COUNT(*)::int AS n FROM counterparty_rules
-       WHERE ($1::uuid IS NULL OR user_id = $1) AND created_at >= NOW() - INTERVAL '1 day' * $2`,
+    query<{ n: number; inert: number }>(
+      `SELECT COUNT(*) FILTER (WHERE ${EFFECTIVE('r')})::int AS n,
+              COUNT(*) FILTER (WHERE NOT ${EFFECTIVE('r')})::int AS inert
+       FROM counterparty_rules r
+       WHERE ($1::uuid IS NULL OR r.user_id = $1) AND r.created_at >= NOW() - INTERVAL '1 day' * $2`,
       scope,
     ),
     // Learned rules, since each was learned: the later transfers each one labeled, and
     // what operators decided about those labels
-    query<{ rules: number; matched: number; reviewed: number; confirmed: number; corrected: number }>(
+    query<{ rules: number; inert: number; matched: number; reviewed: number; confirmed: number; corrected: number }>(
       `WITH d AS (${DECISIONS}),
        m AS (
          SELECT DISTINCT r.id AS rule_id, c.event_id
@@ -122,7 +135,8 @@ export async function getQualityBaseline(p: { userId: string | null; days: numbe
          WHERE d.outcome IN ('confirmed', 'corrected')
          ORDER BY m.rule_id, m.event_id, d.decided_at ASC
        )
-       SELECT (SELECT COUNT(*)::int FROM counterparty_rules r WHERE ($1::uuid IS NULL OR r.user_id = $1)) AS rules,
+       SELECT (SELECT COUNT(*)::int FROM counterparty_rules r WHERE ($1::uuid IS NULL OR r.user_id = $1) AND ${EFFECTIVE('r')}) AS rules,
+              (SELECT COUNT(*)::int FROM counterparty_rules r WHERE ($1::uuid IS NULL OR r.user_id = $1) AND NOT ${EFFECTIVE('r')}) AS inert,
               (SELECT COUNT(*)::int FROM m) AS matched,
               (SELECT COUNT(*)::int FROM rv) AS reviewed,
               (SELECT COUNT(*)::int FROM rv WHERE outcome = 'confirmed') AS confirmed,
@@ -206,9 +220,10 @@ export async function getQualityBaseline(p: { userId: string | null; days: numbe
         missed_internal: predictions.filter((x) => x.prior_label !== 'internal_transfer' && x.answer === 'internal_transfer').length,
       },
       rules_learned: rulesLearned.rows[0].n,
+      rules_learned_inert: rulesLearned.rows[0].inert,
     },
     rules: {
-      rules: r.rules, matched: r.matched, reviewed: r.reviewed, confirmed: r.confirmed, corrected: r.corrected,
+      rules: r.rules, inert: r.inert, matched: r.matched, reviewed: r.reviewed, confirmed: r.confirmed, corrected: r.corrected,
       unreviewed: r.matched - r.reviewed,
       precision: rate(r.confirmed, r.reviewed),
       repeated_mistakes: repeated.rows,
@@ -252,6 +267,11 @@ function rateText(r: Rate, numWord: string, denNoun: string): string {
   return r.rate === null ? `too few to judge: ${counts} (needs at least ${MIN_SAMPLE})` : `${pctText(r.rate)}: ${counts}`;
 }
 
+// " (17 more are for addresses Luca does not book and cannot take effect; not counted)"
+function inertText(n: number): string {
+  return n === 0 ? '' : ` (${n} more ${n === 1 ? 'is' : 'are'} for addresses Luca does not book, such as unsupported tokens, and cannot take effect; not counted)`;
+}
+
 export function describeQuality(q: QualityBaseline, subject: string): string {
   const days = q.scope.days;
   const period = days === 1 ? 'the last day' : `the last ${days} days`;
@@ -280,11 +300,11 @@ export function describeQuality(q: QualityBaseline, subject: string): string {
     lines.push(`  - ${labelText(l.label)}: ${rateText(l.precision, 'confirmed', 'reviewed')}${wrong ? `; the corrected ones were ${wrong}` : ''}`);
   }
   lines.push(`- Internal transfers: ${d.internal.wrongly_internal} wrongly called internal, ${d.internal.missed_internal} internal ${d.internal.missed_internal === 1 ? 'transfer' : 'transfers'} missed`);
-  lines.push(`- Rules learned: ${d.rules_learned}`);
+  lines.push(`- Rules learned: ${d.rules_learned}${inertText(d.rules_learned_inert)}`);
 
   const r = q.rules;
   lines.push('', 'Learned rules, since each was learned:');
-  lines.push(`- ${plural(r.rules, 'rule')}; ${plural(r.matched, 'later transfer')} labeled by them: ${r.reviewed} reviewed (${r.confirmed} confirmed, ${r.corrected} corrected), ${r.unreviewed} unreviewed`);
+  lines.push(`- ${plural(r.rules, 'rule')}${inertText(r.inert)}; ${plural(r.matched, 'later transfer')} labeled by them: ${r.reviewed} reviewed (${r.confirmed} confirmed, ${r.corrected} corrected), ${r.unreviewed} unreviewed`);
   lines.push(`- Reviewed rule precision: ${rateText(r.precision, 'confirmed', 'reviewed rule matches')}`);
   lines.push(`- Repeated mistakes after being taught: ${r.repeated_mistakes.length}`);
   for (const m of r.repeated_mistakes.slice(0, 5)) lines.push(`  - ${txLink(m.hash)}: labeled ${labelText(m.luca)} after being taught ${labelText(m.taught)}`);
@@ -309,7 +329,7 @@ export function describeQualityShort(q: QualityBaseline): string[] {
     `  Transfers in the period: ${a.movements}  |  Unknown: ${a.still_unknown}${a.movements > 0 ? ` (${pctText(a.still_unknown / a.movements)})` : ''}  |  Never reviewed: ${a.unreviewed}`,
     `  Decisions in the period: ${d.reviewed} reviewed (${d.confirmed} confirmed, ${d.corrected} corrected)  |  Unknowns answered: ${d.unknown_answered}`,
     `  High-confidence wrong: ${short(hc)}  |  Correction rate: ${short(d.correction_rate)}`,
-    `  Rules: ${r.rules}  |  Later transfers labeled: ${r.matched} (${r.reviewed} reviewed, ${r.unreviewed} unreviewed)  |  Repeated mistakes: ${r.repeated_mistakes.length}`,
+    `  Rules: ${r.rules}${r.inert > 0 ? ` (+${r.inert} that cannot take effect)` : ''}  |  Later transfers labeled: ${r.matched} (${r.reviewed} reviewed, ${r.unreviewed} unreviewed)  |  Repeated mistakes: ${r.repeated_mistakes.length}`,
     `  Warnings: ${q.warnings.length === 0 ? 'none' : q.warnings.length}`,
   ];
 }
