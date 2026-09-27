@@ -13,6 +13,7 @@ import { executeTool } from '../agent/tools.js';
 import { saveMessage } from '../agent/context.js';
 import { pendingActions, describePendingAction } from '../agent/pending.js';
 import type { AuthedUser } from './auth.js';
+import { replyPlainWithLinks } from './format.js';
 
 // Confirm / Cancel keyboard for a write action the agent proposed.
 export function agentConfirmKeyboard(actionId: string) {
@@ -117,7 +118,7 @@ async function handleLabelCallback(ctx: Context, user: AuthedUser, data: string)
         : `Labeled as ${labelValue}.`,
     );
     const note = describeRuleOutcome(result.rule);
-    if (note) await ctx.reply(note);
+    if (note) await sendNote(ctx, user.userId, note);
     if (result.wasCorrection) {
       await ctx.reply(
         'What did I get wrong? This helps me improve.',
@@ -167,7 +168,7 @@ async function handleQuestionGroupCallback(ctx: Context, user: AuthedUser, data:
   await ctx.answerCbQuery('Labeled.');
   const what = answer.labeled === 1 ? 'that transfer' : `all ${answer.labeled} transfers`;
   const note = describeRuleOutcome(answer.rule);
-  await ctx.reply([`Done. I labeled ${what} as ${LABEL_WORDS[label] ?? label}.`, note].filter(Boolean).join(' '));
+  await sendNote(ctx, user.userId, [`Done. I labeled ${what} as ${LABEL_WORDS[label] ?? label}.`, note].filter(Boolean).join(' '));
 }
 
 async function getEventIdForAlert(alertId: string, userId: string): Promise<string | null> {
@@ -224,7 +225,7 @@ async function handleAlertLabelShortCallback(ctx: Context, user: AuthedUser, dat
     await ctx.answerCbQuery(`Labeled as ${labelValue}.`);
     await ctx.editMessageReplyMarkup(undefined);
     const note = describeRuleOutcome(result.rule);
-    if (note) await ctx.reply(note);
+    if (note) await sendNote(ctx, user.userId, note);
     if (result.wasCorrection) {
       await ctx.reply('What did I get wrong? This helps me improve.', FAILURE_REASON_KEYBOARD(result.correctionId));
     }
@@ -261,7 +262,7 @@ async function handleAlertLabelCallback(ctx: Context, user: AuthedUser, data: st
     await ctx.answerCbQuery(`Labeled as ${labelValue}.`);
     await ctx.editMessageReplyMarkup(undefined);
     const note = describeRuleOutcome(result.rule);
-    if (note) await ctx.reply(note);
+    if (note) await sendNote(ctx, user.userId, note);
     if (result.wasCorrection) {
       await ctx.reply('What did I get wrong? This helps me improve.', FAILURE_REASON_KEYBOARD(result.correctionId));
     }
@@ -322,6 +323,14 @@ async function handleFailureReasonCallback(ctx: Context, user: AuthedUser, data:
   await setFailureReason(correctionId, user.userId, reason as FailureReason);
   await ctx.answerCbQuery('Noted, thank you.');
   try { await ctx.editMessageReplyMarkup(undefined); } catch { /* already edited */ }
+}
+
+// What a label answer did beyond the transfer itself. It may end with a question about
+// earlier transfers (each with its BaseScan link); it is kept in the conversation so a
+// reply to it ("yes", "only the last two") has its context.
+async function sendNote(ctx: Context, userId: string, note: string): Promise<void> {
+  await replyPlainWithLinks(ctx, note);
+  await recordAgentOutcome(userId, note);
 }
 
 async function recordAgentOutcome(userId: string, content: string): Promise<void> {
@@ -391,11 +400,15 @@ async function handleAgentActionCallback(
 
   const text = errorMsg
     ? `I could not complete this: ${desc}\n${errorMsg}`
-    : `Done: ${desc}${note ? `\n${note}` : ''}`;
+    : `Done: ${desc}`;
   try {
     await ctx.editMessageText(text);
   } catch {
     try { await ctx.reply(text); } catch (err) { logger.warn({ err }, 'Failed to report agent action result'); }
+  }
+  // Its own message: it may ask about earlier transfers, each with its BaseScan link
+  if (!errorMsg && note) {
+    try { await replyPlainWithLinks(ctx, note); } catch (err) { logger.warn({ err }, 'Failed to send the follow-up question'); }
   }
   await recordAgentOutcome(
     user.userId,

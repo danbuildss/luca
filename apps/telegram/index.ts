@@ -13,7 +13,7 @@ import { handleOps } from '../../src/telegram/commands/ops.js';
 import { touchUserActivity } from '../../src/ops/db.js';
 import { handleCallback, agentConfirmKeyboard } from '../../src/telegram/callbacks.js';
 import { sendPendingAlerts } from '../../src/telegram/alerts.js';
-import { replyMarkdownSafe, sendPlainWithLinks } from '../../src/telegram/format.js';
+import { replyMarkdownSafe, replyPlainWithLinks, sendPlainWithLinks } from '../../src/telegram/format.js';
 import { UserRateLimiter, singleFlight } from '../../src/telegram/ratelimit.js';
 import { describePendingAction } from '../../src/agent/pending.js';
 import { generateDailyBrief, generateWeeklyBrief } from '../../src/briefs/generate.js';
@@ -215,15 +215,17 @@ bot.command('label', async (ctx) => {
     await ctx.reply(`Invalid label. Valid: ${CLASSIFICATION_LABELS.join(', ')}`);
     return;
   }
-  const { applyCorrection, EventNotFoundError } = await import('../../src/corrections/handler.js');
+  const { applyCorrection, describeRuleOutcome, EventNotFoundError } = await import('../../src/corrections/handler.js');
   try {
-    await applyCorrection({
+    const result = await applyCorrection({
       userId: user.userId,
       eventId,
       newLabel: labelValue as import('../../src/types/index.js').ClassificationLabel,
       reason: 'Telegram /label command',
     });
-    await ctx.reply(`Labeled as ${labelValue}.`);
+    const note = describeRuleOutcome(result.rule);
+    await replyPlainWithLinks(ctx, [`Labeled as ${labelValue}.`, note].filter(Boolean).join('\n\n'));
+    if (note) await saveMessage({ userId: user.userId, role: 'assistant', content: note });
   } catch (err) {
     if (err instanceof EventNotFoundError) {
       await ctx.reply('I could not find that transaction.');

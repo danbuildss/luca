@@ -94,11 +94,11 @@ describeDb('corrections (integration)', () => {
 
       await applyCorrection({ userId: user.id, eventId: inEv.id, newLabel: 'revenue' });
       const off = await applyCorrection({ userId: user.id, eventId: inEv.id, newLabel: 'x402_income' });
-      expect(off.rule).toEqual({ kind: 'switched_off', sentBack: 0 });
+      expect(off.rule).toEqual({ kind: 'switched_off', proposal: null });
       expect(await getCounterpartyRules(user.id)).toEqual([]);
 
       const again = await applyCorrection({ userId: user.id, eventId: inEv.id, newLabel: 'x402_income' });
-      expect(again.rule).toEqual({ kind: 'learned', relabeled: 0 });
+      expect(again.rule).toEqual({ kind: 'learned', proposal: null });
       const rules = await getCounterpartyRules(user.id);
       expect(rules.map((r) => [r.direction, r.label])).toEqual([['in', 'x402_income']]);
       // Still one row per address and direction

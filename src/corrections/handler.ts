@@ -2,8 +2,9 @@ import { pool } from '../db.js';
 import { ClassificationLabel } from '../types/index.js';
 import {
   getEventWithClassification, upsertCounterpartyRule, getActiveRule, disableRule, isSwapVenue,
-  relabelEvents, eventsForRule, eventsLabeledByRule,
+  eventsForRule, eventsLabeledByRule,
 } from './store.js';
+import { createProposal, supersedeProposals, type ProposalSummary } from './proposals.js';
 
 export type FailureReason =
   | 'bad_rule'
@@ -21,15 +22,16 @@ export type ApplyCorrectionParams = {
   failureReason?: FailureReason;
 };
 
-// What the correction did to the rule for this address and direction.
-//   learned    - a rule now labels this address; `relabeled` earlier transfers were updated
-//   switched_off - it contradicted an active rule, which is now off; `sentBack` transfers
-//                  that rule had labeled are unknown again and will be asked about
-//   swap_venue - no rule: the address is an exchange contract
-//   none       - no rule (no counterparty, or the label was unknown)
+// What the correction did to the rule for this address and direction. Earlier transfers
+// are never changed here: when the rule would change them, `proposal` is the question to
+// ask the operator (src/corrections/proposals.ts), and only a yes changes them.
+//   learned      - a rule now labels future transfers with this address
+//   switched_off - it contradicted an active rule, which is now off
+//   swap_venue   - no rule: the address is an exchange contract
+//   none         - no rule (no counterparty, or the label was unknown)
 export type RuleOutcome =
-  | { kind: 'learned'; relabeled: number }
-  | { kind: 'switched_off'; sentBack: number }
+  | { kind: 'learned'; proposal: ProposalSummary | null }
+  | { kind: 'switched_off'; proposal: ProposalSummary | null }
   | { kind: 'swap_venue' }
   | { kind: 'none' };
 
@@ -127,48 +129,45 @@ export async function applyCorrection(params: ApplyCorrectionParams): Promise<Co
       name: params.counterpartyName ?? null,
       direction: event.direction,
     });
-    // One answer labels them all: earlier transfers to or from this address too
+    // Earlier transfers the rule covers change only if the operator says yes
     const earlier = await eventsForRule(params.userId, counterparty, event.direction, params.newLabel, params.eventId);
-    const relabeled = await relabelEvents(params.userId, earlier, {
-      label: params.newLabel,
-      confidence: 1.0,
-      method: 'counterparty',
-      evidence: `Counterparty "${params.counterpartyName ?? `${counterparty.slice(0, 10)}…`}" matches a rule learned from your answer`,
-      shape: 'single',
-      rule_id: ruleId,
-      source: null,
+    const proposal = await createProposal({
+      userId: params.userId, kind: 'apply_rule', ruleId, correctionId, sourceEventId: params.eventId,
+      address: counterparty, direction: event.direction, label: params.newLabel, eventIds: earlier,
     });
-    rule = { kind: 'learned', relabeled };
+    rule = { kind: 'learned', proposal };
   } else if (counterparty && plan === 'switch_off' && activeRule) {
     await disableRule(activeRule.id, params.userId, `Contradicted by a correction to ${params.newLabel}`);
+    // What the switched-off rule labeled goes back to unknown only if the operator says yes
     const labeled = await eventsLabeledByRule(params.userId, activeRule.id, counterparty, event.direction, params.eventId);
-    const sentBack = await relabelEvents(params.userId, labeled, {
-      label: ClassificationLabel.UNKNOWN,
-      confidence: 0,
-      method: 'counterparty',
-      evidence: `The rule for this address was switched off after you relabeled a transfer as ${params.newLabel}; needs your answer`,
-      shape: 'single',
-      rule_id: null,
-      source: null,
+    const proposal = await createProposal({
+      userId: params.userId, kind: 'send_back', ruleId: activeRule.id, correctionId, sourceEventId: params.eventId,
+      address: counterparty, direction: event.direction, label: activeRule.label, eventIds: labeled,
     });
-    rule = { kind: 'switched_off', sentBack };
+    rule = { kind: 'switched_off', proposal };
   } else if (plan === 'swap_venue') {
     rule = { kind: 'swap_venue' };
+  }
+  // A new answer for this address replaces any question still open about it
+  if (counterparty && rule.kind !== 'learned' && rule.kind !== 'switched_off') {
+    await supersedeProposals(params.userId, counterparty, event.direction);
   }
 
   return { correctionId, wasCorrection, rule };
 }
 
-// One sentence for the operator on what happened beyond the transfer itself.
+// What happened beyond the transfer itself, for the operator. When earlier transfers would
+// change, it ends with the question (each transfer with its BaseScan link); nothing earlier
+// has changed yet.
 export function describeRuleOutcome(rule: RuleOutcome): string | null {
   switch (rule.kind) {
     case 'learned':
-      return rule.relabeled > 0
-        ? `Also relabeled ${rule.relabeled} earlier ${rule.relabeled === 1 ? 'transfer' : 'transfers'} with this address, and future ones will be labeled the same way.`
-        : 'Future transfers with this address will be labeled the same way.';
+      return rule.proposal
+        ? `New transfers with this address will be labeled the same way. I haven't changed any earlier ones.\n\n${rule.proposal.question}`
+        : 'New transfers with this address will be labeled the same way.';
     case 'switched_off':
-      return rule.sentBack > 0
-        ? `That contradicts the rule I had for this address, so I switched it off. ${rule.sentBack} other ${rule.sentBack === 1 ? 'transfer it labeled needs' : 'transfers it labeled need'} your answer; I will ask about them together.`
+      return rule.proposal
+        ? `That contradicts the rule I had for this address, so I switched it off.\n\n${rule.proposal.question}`
         : 'That contradicts the rule I had for this address, so I switched it off.';
     case 'swap_venue':
       return 'I did not make a rule for this address because it is an exchange contract.';
