@@ -93,6 +93,25 @@ export const buildingData: BuildingData = {
   ],
 
   buildLog: [
+    // Drafts for Dan's review: not on the page until `draft: false`
+    {
+      date: '2026-09-27',
+      title: "Luca no longer says it changed something it didn't",
+      description: 'Real-wallet testing caught Luca replying "Confirmed" to a request it had not carried out. Luca now only says a change happened after it has been made, and otherwise asks again.',
+      status: 'fixed',
+      evidenceLink: 'https://github.com/danbuildss/luca/pull/90',
+      public: true,
+      draft: true,
+    },
+    {
+      date: '2026-09-27',
+      title: 'The ACCUM fee view can be shared',
+      description: 'The owner of the ACCUM fee wallet can let other Luca users see the fee figures Luca verifies. Nothing else of theirs is shared.',
+      status: 'shipped',
+      evidenceLink: 'https://github.com/danbuildss/luca/pull/94',
+      public: true,
+      draft: true,
+    },
     {
       date: '2026-09-27',
       title: 'Corrections now ask before changing history',

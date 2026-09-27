@@ -66,7 +66,7 @@ describe('/building', () => {
     expect(() => renderBuildingPage(bad)).toThrow(/lastUpdated[\s\S]*unknown status: done[\s\S]*2026-02-30[\s\S]*evidenceLink/);
 
     const data = clone();
-    data.buildLog[0].title = '<script>alert(1)</script>';
+    data.buildLog.find((e) => e.public && !e.draft)!.title = '<script>alert(1)</script>';
     const html = renderBuildingPage(data);
     expect(html).not.toContain('<script>alert(1)</script>');
     expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
