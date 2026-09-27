@@ -77,6 +77,7 @@ export type SaveClassificationRow = {
   evidence: string;
   shape?: TxShape | null;
   rule_id?: string | null;
+  fee_source_id?: string | null;
   // Set → store a retryable failure placeholder instead of a real classification
   failure?: ClassificationFailure;
   // Active classification id seen when the event was read (null = none). When provided,
@@ -172,9 +173,9 @@ export async function saveManyClassifications(results: SaveClassificationRow[]):
         [r.event_id],
       );
       await client.query(
-        `INSERT INTO classifications (event_id, user_id, label, confidence, method, evidence, shape, rule_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [r.event_id, r.user_id, r.label, r.confidence, r.method, r.evidence, r.shape ?? null, r.rule_id ?? null],
+        `INSERT INTO classifications (event_id, user_id, label, confidence, method, evidence, shape, rule_id, fee_source_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [r.event_id, r.user_id, r.label, r.confidence, r.method, r.evidence, r.shape ?? null, r.rule_id ?? null, r.fee_source_id ?? null],
       );
       written++;
     }
@@ -210,6 +211,7 @@ export type ActiveLabel = {
   method: ClassificationMethod;
   source: string | null;
   shape: TxShape | null;
+  fee_source_id: string | null;
 };
 
 export type TxLeg = Leg & {
@@ -229,12 +231,13 @@ export async function getTransactionLegs(userId: string, hashes: string[]): Prom
   const res = await query<Omit<TxLeg, 'active' | 'amount'> & {
     amount: string | null;
     c_id: string | null; c_label: ClassificationLabel | null; c_method: ClassificationMethod | null;
-    c_source: string | null; c_shape: TxShape | null;
+    c_source: string | null; c_shape: TxShape | null; c_fee_source_id: string | null;
   }>(
     `SELECT ne.id, ne.hash, ne.user_id, ne.wallet_id, ne.log_index, ne.block_time, ne.direction,
             ne.asset, LOWER(ne.token_address) AS token_address, ne.supported, ne.amount::text AS amount,
             ne.source_key, ne.from_address, ne.to_address,
-            c.id AS c_id, c.label AS c_label, c.method AS c_method, c.source AS c_source, c.shape AS c_shape
+            c.id AS c_id, c.label AS c_label, c.method AS c_method, c.source AS c_source, c.shape AS c_shape,
+            c.fee_source_id AS c_fee_source_id
      FROM normalized_events ne
      LEFT JOIN classifications c ON c.event_id = ne.id AND c.superseded_at IS NULL
      WHERE ne.user_id = $1 AND LOWER(ne.hash) = ANY($2::text[])
@@ -242,14 +245,14 @@ export async function getTransactionLegs(userId: string, hashes: string[]): Prom
     [userId, hashes.map((h) => h.toLowerCase())],
   );
   for (const r of res.rows) {
-    const { c_id, c_label, c_method, c_source, c_shape, amount, ...leg } = r;
+    const { c_id, c_label, c_method, c_source, c_shape, c_fee_source_id, amount, ...leg } = r;
     const key = r.hash.toLowerCase();
     const list = out.get(key) ?? [];
     list.push({
       ...leg,
       amount: amount != null ? parseFloat(amount) : null,
       active: c_id && c_label && c_method
-        ? { id: c_id, label: c_label, method: c_method, source: c_source, shape: c_shape }
+        ? { id: c_id, label: c_label, method: c_method, source: c_source, shape: c_shape, fee_source_id: c_fee_source_id }
         : null,
     });
     out.set(key, list);

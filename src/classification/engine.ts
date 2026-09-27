@@ -19,6 +19,8 @@ import {
 } from './store.js';
 import type { SaveClassificationRow } from './store.js';
 import type { ClassificationResult, UnclassifiedEvent } from './types.js';
+import { getFeeSources, type FeeSource } from '../fees/sources.js';
+import { getFeeChecks, feeLabel } from '../fees/claims.js';
 
 type WorkItem = {
   event: UnclassifiedEvent;
@@ -84,6 +86,16 @@ function classifyByShape(item: WorkItem, wallets: string[]): ClassificationResul
   return null;
 }
 
+// A fee-asset transfer into a wallet that receives creator fees (migration 025): it is
+// labeled from its claim check, never by rules or the model.
+function feeSourceFor(item: WorkItem, sources: FeeSource[]): FeeSource | null {
+  if (sources.length === 0 || item.event.direction !== 'in') return null;
+  const leg = item.legs.find((l) => l.id === item.event.id);
+  const to = item.event.to_address?.toLowerCase();
+  return sources.find((s) => s.wallet_id === item.event.wallet_id && s.wallet_address === to
+    && leg?.supported === true && leg.token_address?.toLowerCase() === s.fee_token) ?? null;
+}
+
 // An automated label that can stay as it is once its shape is known: a rule's label, or
 // an AI label of a kind the AI may still choose.
 function keepsLabel(current: ActiveLabel): boolean {
@@ -126,11 +138,16 @@ export async function classifyPendingEvents(userId: string): Promise<number> {
     work.set(e.id, { event: e, current: null, shape, tx, legs });
   }
 
+  const feeSources = await getFeeSources(userId);
+  const feeChecks = await getFeeChecks(
+    [...work.values()].filter((i) => feeSourceFor(i, feeSources)).map((i) => i.event.id),
+  );
+
   const toSave: SaveClassificationRow[] = [];
   const shapeOnly: Array<{ id: string; shape: TxShape }> = [];
   const save = (item: WorkItem, result: ClassificationResult): void => {
     const c = item.current;
-    if (c && c.label === result.label && c.method === result.method) {
+    if (c && c.label === result.label && c.method === result.method && c.fee_source_id === (result.fee_source_id ?? null)) {
       shapeOnly.push({ id: c.id, shape: result.shape ?? item.shape });
       return;
     }
@@ -147,6 +164,15 @@ export async function classifyPendingEvents(userId: string): Promise<number> {
   for (const item of work.values()) {
     const byShape = classifyByShape(item, wallets);
     if (byShape) { save(item, byShape); continue; }
+
+    const feeSource = feeSourceFor(item, feeSources);
+    if (feeSource) {
+      const check = feeChecks.get(item.event.id);
+      // Not checked yet: it waits for its receipt to be read (src/fees/claims.ts)
+      if (!check) continue;
+      const fee = feeLabel(feeSources.find((s) => s.id === check.fee_source_id) ?? feeSource, check);
+      if (fee) { save(item, fee); continue; }
+    }
 
     if (item.current && keepsLabel(item.current)) {
       shapeOnly.push({ id: item.current.id, shape: item.shape });

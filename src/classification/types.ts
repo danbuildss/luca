@@ -28,6 +28,8 @@ export type ClassificationResult = {
   shape?: TxShape;
   // The learned rule that produced this label
   rule_id?: string | null;
+  // The creator-fee source a verified claim belongs to (src/fees/claims.ts)
+  fee_source_id?: string | null;
 };
 
 export type CounterpartyRuleRow = {
