@@ -6,6 +6,8 @@ import { repriceMissing, upgradePrices, priceSwaps } from '../../src/ingestion/r
 import { checkUsdcPeg } from '../../src/pricing/peg.js';
 import { reconcileDueWallets } from '../../src/ledger/reconcile.js';
 import { classifyAllUsers } from '../../src/classification/engine.js';
+import { readDueFeeSources, allActiveSources } from '../../src/fees/sources.js';
+import { checkFeeClaims } from '../../src/fees/claims.js';
 import { getDistinctUserIds } from '../../src/classification/store.js';
 import { refreshQuestionGroups } from '../../src/alerts/questions.js';
 import { runAlertDetectors } from '../../src/alerts/engine.js';
@@ -50,6 +52,14 @@ async function runCycle(): Promise<void> {
 
   if (!shuttingDown) {
     await repriceMissing(50, apiKey).catch((err: unknown) => logger.error({ err }, 'Re-pricing failed'));
+    // Creator fees: what Bankr reports (hourly), and which transfers the chain shows
+    // are claims, checked before classification labels them
+    await readDueFeeSources().catch((err: unknown) => logger.error({ err }, 'Fee source reading failed'));
+    if (apiKey) {
+      await allActiveSources()
+        .then((sources) => checkFeeClaims(apiKey, sources))
+        .catch((err: unknown) => logger.error({ err }, 'Fee claim check failed'));
+    }
     await classifyAllUsers();
     // After classification: swaps are known, so BNKR in a swap takes the traded price
     await priceSwaps().catch((err: unknown) => logger.error({ err }, 'Swap pricing failed'));
