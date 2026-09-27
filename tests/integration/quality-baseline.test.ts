@@ -133,6 +133,27 @@ describeDb('classification-quality baseline (integration)', () => {
     expect(text).not.toMatch(/stayed correct/i);
   });
 
+  it('rules for addresses Luca does not book cannot take effect: listed separately, never counted as learned', async () => {
+    const { user, wallet } = await seedUserWithWallet();
+    const spam = addr();
+    const vendor = addr();
+    const oneWay = addr();
+    await insertEvent({ wallet, direction: 'in', counterparty: spam, asset: 'SCAM', amount: 1000000 });   // unsupported token
+    await insertEvent({ wallet, direction: 'out', counterparty: vendor, amount: 5 });
+    await insertEvent({ wallet, direction: 'out', counterparty: oneWay, amount: 5 });
+    await insertCounterpartyRule({ userId: user.id, address: spam, label: 'revenue', direction: 'in' });
+    await insertCounterpartyRule({ userId: user.id, address: vendor, label: 'expense', direction: 'out' });
+    await insertCounterpartyRule({ userId: user.id, address: oneWay, label: 'revenue', direction: 'in' });  // only outgoing transfers booked
+    await insertCounterpartyRule({ userId: user.id, address: addr(), label: 'gas', direction: null });      // no transfers at all
+
+    const q = await getQualityBaseline({ userId: user.id, days: 7 });
+    expect(q.decisions).toMatchObject({ rules_learned: 1, rules_learned_inert: 3 });
+    expect(q.rules).toMatchObject({ rules: 1, inert: 3 });
+    const text = describeQuality(q, 'your wallets');
+    expect(text).toContain('- Rules learned: 1 (3 more are for addresses Luca does not book, such as unsupported tokens, and cannot take effect; not counted)');
+    expect(describeQualityShort(q)[3]).toMatch(/^ {2}Rules: 1 \(\+3 that cannot take effect\)/);
+  });
+
   it('a repeated mistake counts only where the learned rule was meant to apply', async () => {
     const { user, wallet } = await seedUserWithWallet();
     const vendor = addr();
