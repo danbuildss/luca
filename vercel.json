@@ -3,6 +3,9 @@
   "outputDirectory": "landing",
   "installCommand": null,
   "framework": null,
+  "rewrites": [
+    { "source": "/building", "destination": "/building/index.html" }
+  ],
   "headers": [
     {
       "source": "/(.*)",
