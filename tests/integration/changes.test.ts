@@ -237,4 +237,16 @@ describeDb('changes by chat, no buttons (integration)', () => {
     expect(done.text).toBe('Done. Started tracking wallet 0xb540…6fdb as "Luca wallet".');
     expect(await sql(`SELECT 1 FROM wallets WHERE address = $1 AND user_id = $2`, [wallet, user.id])).toHaveLength(1);
   });
+
+  it('the model copying the question, with a role nobody asked for, never reaches the operator (Sep 27)', async () => {
+    const { user } = await seedUserWithWallet();
+    const wallet = '0x042455f9990098e11592be1fbd72e6dc68419b13';
+    responses = [
+      calls(['register_wallet', { address: wallet, label: 'Test', chain: 'base' }]),
+      say(`Track wallet ${wallet} on Base as "Test" (operations)?`),
+    ];
+    const q = await says(user.id, `track wallet ${wallet} label Test`);
+    expect(q.text).toBe(`Track wallet ${wallet} on Base as "Test"?`);
+    expect(await sql(`SELECT 1 FROM wallets WHERE address = $1`, [wallet])).toHaveLength(0);
+  });
 });

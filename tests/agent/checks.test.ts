@@ -282,10 +282,15 @@ describe('recent transactions cover everything unless a category is named', () =
 describe('a change is asked about in Luca\'s words, not the model\'s', () => {
   it('recognises model text that talks about the change itself', () => {
     for (const t of ['Done! I have labeled it as revenue.', "I'll label that as revenue for you.", 'Should I label it as revenue?',
-      'It is now labeled revenue.', 'Please confirm below.', 'Tap Confirm to apply.', "I've started tracking that wallet."]) {
+      'It is now labeled revenue.', 'Please confirm below.', 'Tap Confirm to apply.', "I've started tracking that wallet.",
+      // Sep 27: the model copied Luca's own question form, with a role nobody asked for
+      'Track wallet 0x042455f9990098e11592be1fbd72e6dc68419b13 on Base as "Test" (operations)?',
+      'Track wallet 0x042455f9990098e11592be1fbd72e6dc68419b13 on Base as “Test” (operations)?',
+      'Sure.\nLabel the 12 USDC you received on Sep 27 as revenue?', 'Make these 2 changes?']) {
       expect(restatesChange(t), t).toBe(true);
     }
-    for (const t of ['You paid $0.01 in network fees this week.', 'Revenue this week was $840.', '']) {
+    for (const t of ['You paid $0.01 in network fees this week.', 'Revenue this week was $840.', '',
+      'Labeled transfers this week: 4.', "You're tracking 2 wallets on Base."]) {
       expect(restatesChange(t), t).toBe(false);
     }
   });
