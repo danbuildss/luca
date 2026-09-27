@@ -15,6 +15,8 @@ import {
   CLAIM_CORRECTION, NO_CHECK_STARTED, VERDICT_CORRECTION, TOOL_LEAK_CORRECTION, TOOL_LEAK_FALLBACK,
 } from './checks.js';
 import { answerBooksCheck, startBooksCheck } from './books-check.js';
+import { answerProposalReply, bareAnswer, explicitAnswer } from './proposals-chat.js';
+import { answerProposal } from '../corrections/proposals.js';
 
 export type AgentResult = {
   text: string;
@@ -75,6 +77,14 @@ export async function runAgent(params: {
     return finish(direct.text);
   }
 
+  // "yes" / "no" to Luca's question about earlier transfers is answered in code, never
+  // guessed: only the one current question, otherwise Luca asks which one
+  const answered = await answerProposalReply({ userId, message: userMessage });
+  if (answered) {
+    used.push({ name: 'answer_proposal', args: answered.args });
+    return finish(answered.text);
+  }
+
   const messages: ChatCompletionMessageParam[] = [
     { role: 'system', content: systemPrompt },
     ...history,
@@ -87,6 +97,8 @@ export async function runAgent(params: {
   let corrected = false;
   // A reply stating whether the books are complete, with no check behind it, gets one
   let verdictCorrected = false;
+  // An answered question about earlier transfers: its own wording is the reply
+  let proposalText: string | null = null;
   // A reply showing raw tool input instead of making the call gets one forced retry
   let leakCorrected = false;
   let forceTool = false;
@@ -174,6 +186,21 @@ export async function runAgent(params: {
 
       let result: unknown;
       try {
+        if (toolName === 'answer_proposal') {
+          // Changes earlier transfers: only when the operator's own words give that answer
+          const accept = toolArgs.accept === true;
+          const id = typeof toolArgs.proposal_id === 'string' ? toolArgs.proposal_id : '';
+          if (bareAnswer(userMessage) !== null || !explicitAnswer(userMessage, accept)) {
+            result = { error: 'The operator has not clearly answered this question. Ask them which question they mean and what they want; nothing was changed.' };
+          } else {
+            const r = await answerProposal({ userId, proposalId: id, accept });
+            used.push({ name: toolName, args: { proposal_id: id, accept } });
+            if (r.ok) proposalText = r.text;
+            result = { done: r.ok, message: r.text };
+          }
+          messages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify(result) });
+          continue;
+        }
         const prepared = isWriteTool(toolName)
           ? await prepareWriteAction(userId, toolName, toolArgs)
           : null;
@@ -217,6 +244,8 @@ export async function runAgent(params: {
         content: JSON.stringify(result),
       });
     }
+    // What changed in the books is said exactly as the change reported it
+    if (proposalText) return finish(proposalText);
   }
 
   // Exceeded MAX_STEPS — ask model to wrap up with what it has

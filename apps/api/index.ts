@@ -104,14 +104,16 @@ app.post('/corrections', async (req, reply) => {
   }
 
   try {
-    await applyCorrection({
+    const result = await applyCorrection({
       userId,
       eventId: body.event_id,
       newLabel: body.label as ClassificationLabel,
       reason: body.reason,
       counterpartyName: body.counterparty_name,
     });
-    return reply.status(200).send({ ok: true });
+    // Earlier transfers are never changed here; a proposal waits for the operator's yes in chat
+    const proposal = result.rule.kind === 'learned' || result.rule.kind === 'switched_off' ? result.rule.proposal : null;
+    return reply.status(200).send({ ok: true, rule: result.rule.kind, proposal: proposal ? { id: proposal.id, count: proposal.count } : null });
   } catch (err) {
     if (err instanceof EventNotFoundError) {
       return reply.status(404).send({ error: err.message });

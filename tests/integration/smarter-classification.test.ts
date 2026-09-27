@@ -30,6 +30,7 @@ import {
   getOpenUnknowns,
 } from '../../src/alerts/questions.js';
 import { questionText } from '../../src/telegram/alerts.js';
+import { answerProposal } from '../../src/corrections/proposals.js';
 
 const UNISWAP = '0x2626664c2603336e57b271c5c0b26f421741e481';
 
@@ -166,7 +167,7 @@ describeDb('smarter classification (integration)', () => {
   });
 
   describe('rules', () => {
-    it('one answer labels earlier transfers with the address too, never ones the operator set', async () => {
+    it('an answer asks before changing earlier transfers with the address, and never touches ones the operator set', async () => {
       const { user, wallet } = await seedUserWithWallet();
       const vendor = addr();
       const a = await insertClassifiedEvent({ wallet, direction: 'out', counterparty: vendor, label: 'unknown', method: 'model' });
@@ -177,7 +178,13 @@ describeDb('smarter classification (integration)', () => {
 
       const result = await applyCorrection({ userId: user.id, eventId: latest.id, newLabel: 'expense', counterpartyName: 'Hosting' });
 
-      expect(result.rule).toEqual({ kind: 'learned', relabeled: 2 });
+      // Nothing earlier changes until the operator says yes
+      expect(result.rule).toMatchObject({ kind: 'learned', proposal: { count: 2 } });
+      expect((await active(a.id)).label).toBe('unknown');
+      expect((await active(b.id)).label).toBe('revenue');
+      const proposalId = (result.rule as { proposal: { id: string } }).proposal.id;
+      expect(await answerProposal({ userId: user.id, proposalId, accept: true })).toMatchObject({ ok: true, changed: 2, skipped: 0 });
+
       expect(await active(a.id)).toMatchObject({ label: 'expense', status: 'confirmed', method: 'counterparty' });
       expect((await active(b.id)).label).toBe('expense');
       expect(await active(mine.id)).toMatchObject({ label: 'refund', source: 'user' });
@@ -220,7 +227,11 @@ describeDb('smarter classification (integration)', () => {
       expect(await active(x.id)).toMatchObject({ label: 'expense', method: 'counterparty', status: 'confirmed' });
 
       const result = await applyCorrection({ userId: user.id, eventId: x.id, newLabel: 'refund' });
-      expect(result.rule).toEqual({ kind: 'switched_off', sentBack: 1 });
+      expect(result.rule).toMatchObject({ kind: 'switched_off', proposal: { count: 1 } });
+      // The rule's earlier label stays until the operator says yes
+      expect((await active(y.id)).label).toBe('expense');
+      const proposalId = (result.rule as { proposal: { id: string } }).proposal.id;
+      expect(await answerProposal({ userId: user.id, proposalId, accept: true })).toMatchObject({ ok: true, changed: 1 });
       expect(await active(y.id)).toMatchObject({ label: 'unknown', status: 'unknown' });
       expect(await active(first.id)).toMatchObject({ label: 'expense', source: 'user' });
       const rule = await sql<{ active: boolean }>(`SELECT active FROM counterparty_rules WHERE user_id = $1`, [user.id]);

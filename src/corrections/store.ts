@@ -217,9 +217,12 @@ export async function relabelEvents(userId: string, eventIds: string[], l: NewLa
 
 const COUNTERPARTY_SQL = `LOWER(CASE WHEN ne.direction = 'in' THEN ne.from_address ELSE ne.to_address END)`;
 
-// Earlier automated labels for this address and direction that a new rule should replace:
-// single transfers only (never gas, internal transfers, swaps or complex transactions)
-// and never a label the operator set.
+// Earlier automated labels a rule for this address and direction covers, by the same
+// conditions the classifier applies a rule under (src/classification/engine.ts): the
+// counterparty and direction match, and the transfer is a single transfer that no
+// whole-transaction check decided (never gas, internal transfers, swaps or complex
+// transactions). Never a label the operator set, and never a transfer still waiting for
+// its first label (the classifier gives it the rule's label as new).
 export async function eventsForRule(
   userId: string, address: string, direction: 'in' | 'out', label: ClassificationLabel, exceptEventId: string,
 ): Promise<string[]> {
@@ -228,7 +231,7 @@ export async function eventsForRule(
      JOIN classifications c ON c.event_id = ne.id AND c.superseded_at IS NULL
      WHERE ne.user_id = $1 AND ne.supported IS TRUE AND ne.direction = $3
        AND ${COUNTERPARTY_SQL} = $2 AND ne.id <> $5
-       AND c.source IS DISTINCT FROM 'user'
+       AND c.source IS NULL
        AND COALESCE(c.shape, 'single') = 'single'
        AND c.method <> 'deterministic'
        AND c.label <> $4::classification_label`,

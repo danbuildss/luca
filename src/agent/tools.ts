@@ -238,6 +238,21 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
   {
     type: 'function',
     function: {
+      name: 'answer_proposal',
+      description: 'Answer one of your open questions about earlier transfers (listed under "Open Questions") when the operator\'s message clearly answers it, for example "yes, update those 6 payments" or "no, leave the old ones as they are". Never call it for a bare "yes" or "no", and never when it is unclear which question they mean: ask instead. The result says exactly what changed; relay it as given.',
+      parameters: {
+        type: 'object',
+        properties: {
+          proposal_id: { type: 'string', description: 'The id of the open question the operator answered.' },
+          accept: { type: 'boolean', description: 'true when they said yes, false when they said no.' },
+        },
+        required: ['proposal_id', 'accept'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'check_books_complete',
       description: "Check that everything the chain shows for the operator's own wallets reached their books: nothing missing, nothing stuck unlabeled or unpriced. Use for \"are my books complete?\", \"are you missing anything?\", \"check my wallets\", \"check everything\". By default it checks everything Luca has tracked: leave days out unless the operator names a period. The check runs in the background and its result is sent as its own message; a recent result is returned directly when nothing has changed.",
       parameters: {
@@ -571,6 +586,10 @@ export async function executeTool(
 
       return { success: true, wallet_id: walletId, address, chain, label, role };
     }
+
+    case 'answer_proposal':
+      // Answered only in the agent loop, against the operator's own message (src/agent/run.ts)
+      return { error: 'This can only be answered from the operator\'s own message.' };
 
     case 'check_books_complete': {
       const days = typeof args.days === 'number' ? args.days : null;
