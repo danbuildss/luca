@@ -32,9 +32,10 @@ vi.mock('../../src/ledger/audit-runs.js', async (importOriginal) => ({
 }));
 
 import { runAgent } from '../../src/agent/run.js';
+import { saveAnswerTrace } from '../../src/agent/traces.js';
 import * as db from '../../src/db.js';
 import {
-  namesPeriod, checkArgs, claimsCheck, claimsVerdict, asksCompleteness, periodDays, leaksToolCall,
+  namesPeriod, checkArgs, activityArgs, claimsCheck, claimsVerdict, asksCompleteness, periodDays, leaksToolCall,
   CLAIM_CORRECTION, NO_CHECK_STARTED, VERDICT_CORRECTION, TOOL_LEAK_CORRECTION, TOOL_LEAK_FALLBACK,
 } from '../../src/agent/checks.js';
 
@@ -251,5 +252,29 @@ describe('tool input never reaches the operator', () => {
     const r = await runAgent({ userId: USER, userMessage: 'show me my recent transactions', role: 'operator' });
     expect(r.text).toBe(TOOL_LEAK_FALLBACK);
     expect(r.text).not.toMatch(/[{}]|tool/i);
+  });
+});
+
+describe('recent transactions cover everything unless a category is named', () => {
+  beforeEach(() => { vi.clearAllMocks(); seen.length = 0; });
+
+  it('keeps a label only when the operator named that category', () => {
+    expect(activityArgs('show me my recent transactions', { label: 'unknown', period_days: 7 })).toEqual({ period_days: 7 });
+    expect(activityArgs('what happened this week?', { label: 'revenue' })).toEqual({});
+    expect(activityArgs('show me my expenses this week', { label: 'expense' })).toEqual({ label: 'expense' });
+    expect(activityArgs('anything that still needs context?', { label: 'unknown' })).toEqual({ label: 'unknown' });
+    expect(activityArgs('what did I spend on gas?', { label: 'gas' })).toEqual({ label: 'gas' });
+    expect(activityArgs('show me my swaps', { label: 'swap' })).toEqual({ label: 'swap' });
+    expect(activityArgs('show me recent transactions', { period_days: 7 })).toEqual({ period_days: 7 });
+  });
+
+  it('the Sep 27 case: the model asks for unknowns only, the tool runs without the filter', async () => {
+    script(
+      callTool('get_recent_activity', { label: 'unknown', limit: 20, period_days: 7 }),
+      say('All 2 transactions in the last 7 days: ...'),
+    );
+    await runAgent({ userId: USER, userMessage: 'show me my recent transactions', role: 'operator' });
+    const trace = (saveAnswerTrace as unknown as Mock).mock.calls[0][0] as { tools: Array<{ name: string; args: Record<string, unknown> }> };
+    expect(trace.tools).toEqual([{ name: 'get_recent_activity', args: { limit: 20, period_days: 7 } }]);
   });
 });

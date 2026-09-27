@@ -124,3 +124,35 @@ export const TOOL_LEAK_CORRECTION =
 
 export const TOOL_LEAK_FALLBACK =
   "Something went wrong on my side while looking that up, so I don't have an answer yet. Ask me again in a moment.";
+
+// ---------------------------------------------------------------------------
+// "Recent transactions" means all of them unless the operator names a category
+// ---------------------------------------------------------------------------
+// The model answered "show me my recent transactions" by asking for unknowns only and
+// then said only one transaction happened that week, leaving out a swap. A label filter
+// on recent activity is kept only when the operator's own words name that category.
+
+const LABEL_WORDS: Record<string, RegExp> = {
+  revenue: /\b(revenue|income|earn(ed|ings?)?|sales?)\b/i,
+  expense: /\b(expenses?|spen[dt]|spending|costs?|paid out|outgoing payments?)\b/i,
+  internal_transfer: /\b(internal|between (my|our) wallets|own wallets)\b/i,
+  treasury: /\btreasury\b/i,
+  gas: /\b(gas|network fees?|fees?)\b/i,
+  x402_income: /\bx402\b/i,
+  x402_spend: /\bx402\b/i,
+  refund: /\brefund(s|ed)?\b/i,
+  swap: /\b(swaps?|swapped|conver(t|ted|sions?)|trades?)\b/i,
+  unknown: /\b(unknowns?|unlabell?ed|unclassified|need(s|ing)? (context|attention|your answer|labels?)|not labell?ed|uncategori[sz]ed)\b/i,
+};
+
+export function namesLabel(message: string, label: string): boolean {
+  return LABEL_WORDS[label]?.test(message) ?? false;
+}
+
+// The arguments recent activity actually runs with: `label` only when the operator named it
+export function activityArgs(message: string, args: Record<string, unknown>): Record<string, unknown> {
+  if (typeof args.label !== 'string' || namesLabel(message, args.label)) return args;
+  const { label: _ignored, ...rest } = args;
+  void _ignored;
+  return rest;
+}

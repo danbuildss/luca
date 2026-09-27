@@ -11,7 +11,7 @@ import { saveAnswerTrace, type ToolUse } from './traces.js';
 import { ADMIN_TOOL_DEFINITIONS, executeAdminTool, isAdminTool } from './admin-tools.js';
 import { logAgentSpend } from './spend.js';
 import {
-  CHECK_TOOLS, checkArgs, claimsCheck, claimsVerdict, leaksToolCall,
+  CHECK_TOOLS, checkArgs, activityArgs, claimsCheck, claimsVerdict, leaksToolCall,
   CLAIM_CORRECTION, NO_CHECK_STARTED, VERDICT_CORRECTION, TOOL_LEAK_CORRECTION, TOOL_LEAK_FALLBACK,
 } from './checks.js';
 import { answerBooksCheck, startBooksCheck } from './books-check.js';
@@ -167,6 +167,8 @@ export async function runAgent(params: {
       }
       // A check covers everything tracked unless the operator named a period
       if (CHECK_TOOLS.has(toolName)) toolArgs = checkArgs(userMessage, toolArgs);
+      // Recent activity covers everything unless the operator named a category
+      if (toolName === 'get_recent_activity') toolArgs = activityArgs(userMessage, toolArgs);
 
       logger.debug({ userId, toolName, toolArgs }, 'agent tool call');
 

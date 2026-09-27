@@ -27,12 +27,12 @@ describeDb('BaseScan links (integration)', () => {
     const unknown = await insertClassifiedEvent({ wallet, direction: 'in', amount: 13.71, usdValue: 13.71, label: 'unknown' });
     const revenue = await insertClassifiedEvent({ wallet, direction: 'in', amount: 49.44, usdValue: 49.44, label: 'revenue' });
 
-    const recent = await executeTool(user.id, 'get_recent_activity', {}) as { events: Row[] };
-    expect(recent.events).toHaveLength(2);
-    for (const e of recent.events) expect(e.link).toBe(link(e.hash));
+    const recent = await executeTool(user.id, 'get_recent_activity', {}) as { transactions: Row[] };
+    expect(recent.transactions).toHaveLength(2);
+    for (const t of recent.transactions) expect(t.link).toBe(link(t.hash));
 
-    const byLabel = await executeTool(user.id, 'get_recent_activity', { label: 'revenue' }) as { events: Row[] };
-    expect(byLabel.events).toEqual([expect.objectContaining({ hash: revenue.hash, link: link(revenue.hash) })]);
+    const byLabel = await executeTool(user.id, 'get_recent_activity', { label: 'revenue' }) as { transactions: Row[] };
+    expect(byLabel.transactions).toEqual([expect.objectContaining({ hash: revenue.hash, link: link(revenue.hash) })]);
 
     const open = await executeTool(user.id, 'get_unknown_transactions', {}) as { events: Row[] };
     expect(open.events).toEqual([expect.objectContaining({ hash: unknown.hash, link: link(unknown.hash) })]);
