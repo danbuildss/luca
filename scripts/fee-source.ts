@@ -6,11 +6,15 @@
 //       fee contract and fee asset are taken from Bankr's public data and checked.
 //   node dist/scripts/fee-source.js status
 //       What Bankr reports, what the chain shows, and whether they agree.
+//   node dist/scripts/fee-source.js share 0xWallet 0xToken on|off [userId]
+//       The owner's choice: let other Luca users ask about these fees. They get the fee
+//       view only (Bankr's readings, verified claims, the fee wallet's balance of the
+//       fee asset), nothing else of the owner's. Off unless turned on.
 import { closeDb, query } from '../src/db.js';
-import { addFeeSource, feeSourceStatus, type FeeSourceStatus } from '../src/fees/sources.js';
+import { addFeeSource, feeSourceStatus, setFeeSourceSharing, type FeeSourceStatus } from '../src/fees/sources.js';
 
-const [cmd, a, b, c] = process.argv.slice(2);
-const usage = 'Usage: node dist/scripts/fee-source.js add 0x<wallet> 0x<token> [userId] | status';
+const [cmd, a, b, c, d] = process.argv.slice(2);
+const usage = 'Usage: node dist/scripts/fee-source.js add 0x<wallet> 0x<token> [userId] | status | share 0x<wallet> 0x<token> on|off [userId]';
 
 const iso = (d: Date): string => new Date(d).toISOString().replace('.000Z', 'Z');
 
@@ -20,6 +24,7 @@ function describe(s: FeeSourceStatus): string[] {
     `${src.token_symbol} creator fees (${src.token_address}) paid to ${src.wallet_address}`,
     `  pool ${src.pool_id}`,
     `  fee contract ${src.fee_contract}, paid in ${src.fee_asset}`,
+    `  Shared with other Luca users: ${src.shared ? 'yes (the fee view only)' : 'no'}`,
   ];
   if (s.reported) {
     lines.push(`  Reported by Bankr at ${iso(s.reported.read_at)}${s.reported_stale ? ' (stale)' : ''}: claimable ${s.reported.claimable} ${src.fee_asset}, claimed ${s.reported.claimed} ${src.fee_asset} in ${s.reported.claim_count} claims`);
@@ -50,6 +55,16 @@ try {
       for (const s of await feeSourceStatus(res.source.user_id)) {
         if (s.source.id === res.source.id) console.log(describe(s).join('\n'));
       }
+    }
+  } else if (cmd === 'share' && a && b && (c === 'on' || c === 'off')) {
+    const res = await setFeeSourceSharing({ walletAddress: a, token: b, shared: c === 'on', userId: d });
+    if (!res.ok) {
+      console.error(res.error);
+      process.exitCode = 1;
+    } else {
+      console.log(c === 'on'
+        ? 'Shared. Other Luca users who ask about these fees now get the fee view (nothing else of yours).'
+        : 'Not shared. Only you see these fees.');
     }
   } else if (cmd === 'status') {
     const users = (await query<{ user_id: string }>(`SELECT DISTINCT user_id FROM fee_sources WHERE active`)).rows;

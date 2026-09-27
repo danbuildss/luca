@@ -2,7 +2,7 @@
 // wording from the database, never the model's figures; Bankr's numbers are "reported
 // by Bankr", claims are "verified on-chain", and a mismatch or a failed read is said
 // plainly. Real Postgres; the model and Bankr are scripted.
-import { it, expect, vi, beforeEach } from 'vitest';
+import { it, expect, vi, beforeEach, describe } from 'vitest';
 
 vi.hoisted(() => { process.env.AGENT_MODEL = 'gpt-4o'; });
 let responses: unknown[] = [];
@@ -19,10 +19,10 @@ vi.mock('../../src/ingestion/price.js', () => ({
   enrichUsdValue: vi.fn(),
 }));
 
-import { describeDb, useIntegrationDb, insertUser, insertWallet, insertWatchJob, insertEvent, sql, type WalletFx } from './helpers/db.js';
+import { describeDb, useIntegrationDb, insertUser, insertWallet, insertWatchJob, insertEvent, insertClassification, sql, addr, type WalletFx } from './helpers/db.js';
 import { ACCUM, ACCUM_RESPONSE } from '../fees/fixtures.js';
 import { parseTokenFees, BankrUnavailable } from '../../src/fees/bankr.js';
-import { addFeeSource, readDueFeeSources, allActiveSources } from '../../src/fees/sources.js';
+import { addFeeSource, readDueFeeSources, allActiveSources, setFeeSourceSharing } from '../../src/fees/sources.js';
 import { checkFeeClaims } from '../../src/fees/claims.js';
 import { NO_FEE_SOURCES } from '../../src/fees/report.js';
 import { runAgent } from '../../src/agent/run.js';
@@ -46,7 +46,7 @@ const bankr = (claimed = { token0: '0.000000', token1: '0.000000', count: 0 }) =
 const at = (text: string): string => text.replace(/[A-Z][a-z]{2} \d{1,2}, \d{2}:\d{2} [A-Z]{2,5}/g, 'TIME');
 
 async function setup(): Promise<{ userId: string; wallet: WalletFx }> {
-  const user = await insertUser({ timezone: 'UTC' });
+  const user = await insertUser({ timezone: 'UTC', username: 'fee_owner' });
   const wallet = await insertWallet({ userId: user.id, address: LUCA_WALLET });
   await insertWatchJob({ userId: user.id, walletId: wallet.id, lastSyncedAt: '5 minutes' });
   const added = await addFeeSource({ walletAddress: LUCA_WALLET, token: ACCUM }, bankr());
@@ -138,5 +138,80 @@ describeDb('ACCUM creator fees in chat (integration)', () => {
     const other = await insertUser();
     responses = [calls('get_creator_fees'), say('')];
     expect((await ask(other.id, 'how are the ACCUM fees?')).text).toBe(NO_FEE_SOURCES);
+  });
+
+  describe('sharing the fee view with other Luca users (the owner\'s choice)', () => {
+    // The owner's books hold far more than the fees: none of it may reach anyone else
+    async function ownerWithBooks() {
+      const { userId, wallet } = await setup();
+      const claim = await insertEvent({ wallet, direction: 'in', counterparty: FEES, asset: 'BNKR', amount: '1000', usdValue: '0.6' });
+      await sql(`UPDATE normalized_events SET raw_amount = 1000 * 10::numeric ^ 18 WHERE id = $1`, [claim.id]);
+      await checkFeeClaims('key', await allActiveSources(), () => Promise.resolve({ status: 'success', raw: { logs: [] } } as unknown as TxReceipt));
+      const client = '0x' + 'c1'.repeat(20);
+      const sale = await insertEvent({ wallet, direction: 'in', counterparty: client, asset: 'USDC', amount: '98765.43', usdValue: '98765.43' });
+      await insertClassification({ eventId: sale.id, userId, label: 'revenue', method: 'counterparty', source: 'user' });
+      const treasury = await insertWallet({ userId, address: '0x' + 'aa'.repeat(20), label: 'Secret treasury' });
+      await sql(`INSERT INTO balance_snapshots (wallet_id, user_id, asset, balance, snapshot_at) VALUES ($1, $2, 'USDC', 424242, NOW())`, [treasury.id, userId]);
+      return { userId, wallet, claim, client, treasury };
+    }
+
+    it('off by default: nobody else sees anything', async () => {
+      await ownerWithBooks();
+      const other = await insertUser();
+      responses = [calls('get_creator_fees'), say('')];
+      expect((await ask(other.id, 'how are the ACCUM fees?')).text).toBe(NO_FEE_SOURCES);
+    });
+
+    it('shared: another user gets the fee view, marked as shared, and nothing else of the owner\'s', async () => {
+      const { userId, claim, client, treasury } = await ownerWithBooks();
+      expect(await setFeeSourceSharing({ walletAddress: LUCA_WALLET, token: ACCUM, shared: true })).toMatchObject({ ok: true, source: { shared: true } });
+
+      const other = await insertUser({ timezone: 'UTC' });
+      responses = [calls('get_creator_fees'), say('')];
+      const r = at((await ask(other.id, 'how are the ACCUM fees?')).text);
+      expect(r).toMatch(/^\*ACCUM creator fees\*, paid in BNKR to 0xb540…6fdb, shared by the owner of that wallet\n/);
+      expect(r).toContain(`- 1 claim, 1,000 BNKR ($0.60 when claimed); the last on TIME, [${claim.hash.slice(0, 6)}…${claim.hash.slice(-4)}](https://basescan.org/tx/${claim.hash})`);
+      expect(r).toContain('BNKR in 0xb540…6fdb: 5,000 ($2.50), as of TIME');
+      expect(r).not.toContain('You share this view');
+      for (const secret of ['98,765', '98765', client.slice(0, 6), treasury.address.slice(0, 6), 'Secret treasury', '424,242', 'fee_owner']) {
+        expect(r, secret).not.toContain(secret);
+      }
+
+      responses = [calls('get_creator_fees'), say('')];
+      const m = (await ask(other.id, 'send the machine report')).text;
+      expect(m).toContain('"view": "shared_by_owner"');
+      for (const secret of ['98765', client, treasury.address, 'Secret treasury', '424242', 'fee_owner', userId]) {
+        expect(m, secret).not.toContain(secret);
+      }
+
+      // The owner still sees their own view, once, and that it is shared
+      responses = [calls('get_creator_fees'), say('')];
+      const own = (await ask(userId, 'how are the ACCUM fees?')).text;
+      expect(own.match(/creator fees\*/g)).toHaveLength(1);
+      expect(own).toMatch(/\nYou share this view with other Luca users \(nothing else of yours\)\.$/);
+    });
+
+    it('turned off again: gone for everyone else', async () => {
+      await ownerWithBooks();
+      await setFeeSourceSharing({ walletAddress: LUCA_WALLET, token: ACCUM, shared: true });
+      expect(await setFeeSourceSharing({ walletAddress: LUCA_WALLET, token: ACCUM, shared: false })).toMatchObject({ ok: true, source: { shared: false } });
+      const other = await insertUser();
+      responses = [calls('get_creator_fees'), say('')];
+      expect((await ask(other.id, 'how are the ACCUM fees?')).text).toBe(NO_FEE_SOURCES);
+    });
+
+    it('the switch refuses to guess: no source, or several owners of the same fees', async () => {
+      expect(await setFeeSourceSharing({ walletAddress: addr(), token: ACCUM, shared: true }))
+        .toEqual({ ok: false, error: 'No fee source for that wallet and token' });
+      await setup();
+      const second = await insertUser();
+      await insertWallet({ userId: second.id, address: LUCA_WALLET });
+      expect(await addFeeSource({ walletAddress: LUCA_WALLET, token: ACCUM, userId: second.id }, bankr())).toMatchObject({ ok: true });
+      expect(await setFeeSourceSharing({ walletAddress: LUCA_WALLET, token: ACCUM, shared: true }))
+        .toEqual({ ok: false, error: 'More than one user follows these fees; pass the user id' });
+      expect(await sql(`SELECT 1 FROM fee_sources WHERE shared`)).toHaveLength(0);
+      expect(await setFeeSourceSharing({ walletAddress: LUCA_WALLET, token: ACCUM, shared: true, userId: second.id })).toMatchObject({ ok: true });
+      expect(await sql(`SELECT user_id FROM fee_sources WHERE shared`)).toEqual([{ user_id: second.id }]);
+    });
   });
 });
