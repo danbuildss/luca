@@ -52,10 +52,14 @@ type PagedResponse<T> = {
   next_page_params: Record<string, unknown> | null;
 };
 
+// A request that has not answered by then is abandoned and retried: a slow Blockscout
+// must not hold up the whole worker cycle (Sep 28: cycles of up to 9.6 minutes)
+export const BLOCKSCOUT_TIMEOUT_MS = 20_000;
+
 async function get<T>(url: string): Promise<T> {
   return pRetry(
     async () => {
-      const res = await axios.get<T>(url);
+      const res = await axios.get<T>(url, { timeout: BLOCKSCOUT_TIMEOUT_MS });
       return res.data;
     },
     {
