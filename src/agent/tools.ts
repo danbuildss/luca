@@ -2,7 +2,9 @@ import type { ChatCompletionTool } from 'openai/resources/chat/completions.js';
 import { query } from '../db.js';
 import { getPnlSummary, getBooksSummary } from '../books/query.js';
 import { getRecentActivity } from '../books/activity.js';
-import { getValuedBalances } from '../books/balances.js';
+import { getValuedBalances, getWalletReadStates } from '../books/balances.js';
+import { snapshotBalances } from '../ingestion/snapshot.js';
+import { logger } from '../logger.js';
 import { getOverview } from '../books/overview.js';
 import { getFigureBreakdown, FIGURES, significant, type Figure } from '../books/breakdown.js';
 import { getPreviousAnswers } from './traces.js';
@@ -26,7 +28,7 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
     type: 'function',
     function: {
       name: 'get_cash_position',
-      description: 'Get the current ETH, USDC and BNKR balances across all registered wallets, each valued in USD at live prices, plus the total. Use this to answer "how much do we have?" or "what is our cash position?"',
+      description: 'Get the current ETH, USDC and BNKR balances across all registered wallets, each valued in USD at live prices, plus the total, and whether Luca has finished its first read of each wallet. Use this to answer "how much do we have?", "what is our cash position?" or "what balance do you see?"',
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
@@ -369,6 +371,28 @@ export type PreparedWrite =
   | { ok: true; args: Record<string, unknown> }
   | { ok: false; error: string; candidates?: unknown[] };
 
+// How long tracking a wallet waits for its first balance reading before answering
+export const BALANCE_READ_WAIT_MS = 8_000;
+
+// True when the wallet's balances were stored within BALANCE_READ_WAIT_MS. A slower read
+// carries on and is stored when it finishes; a failed one is only logged.
+async function readBalancesNow(userId: string, walletId: string, address: string): Promise<boolean> {
+  const read = snapshotBalances(config.ALCHEMY_API_KEY, walletId, userId, address).then(
+    () => true,
+    (err: unknown) => {
+      logger.warn({ err, walletId }, 'Balance reading on tracking failed; the first sync will take it');
+      return false;
+    },
+  );
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), BALANCE_READ_WAIT_MS); });
+  try {
+    return await Promise.race([read, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function prepareWriteAction(
   userId: string,
   toolName: string,
@@ -436,9 +460,16 @@ export async function executeTool(
 ): Promise<ToolResult> {
   switch (toolName) {
     case 'get_cash_position': {
-      const [valued, ledger] = await Promise.all([getValuedBalances(userId), getLedgerStatus(userId)]);
+      const [valued, ledger, wallets] = await Promise.all([getValuedBalances(userId), getLedgerStatus(userId), getWalletReadStates(userId)]);
       return {
         ledger,
+        // A wallet whose first read is in progress may have no balance yet: that is not an empty wallet
+        wallets: wallets.map((w) => ({
+          address: w.address,
+          label: w.label,
+          tracking_since: w.tracking_since,
+          first_read: w.first_read,
+        })),
         balances: valued.balances.map((b) => ({
           address: b.wallet_address,
           label: b.wallet_label,
@@ -647,7 +678,17 @@ export async function executeTool(
         );
       }
 
-      return { success: true, wallet_id: walletId, address, chain, label, role };
+      // Read the balances now, so they exist before the worker's first sync of the wallet
+      // (its last 30 days of transactions) finishes a few minutes later. Tracking never
+      // depends on it: a failed or slow read is left to that sync.
+      const balancesRead = await readBalancesNow(userId, walletId, address);
+
+      return {
+        success: true, wallet_id: walletId, address, chain, label, role,
+        note: balancesRead
+          ? "I've read its current balances; its transactions from the last 30 days take a few minutes."
+          : "I'm reading it now; its balances and transactions from the last 30 days take a few minutes.",
+      };
     }
 
     case 'label_question_group':

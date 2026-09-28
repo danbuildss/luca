@@ -12,8 +12,15 @@ vi.mock('openai', () => ({
 }));
 vi.mock('../../src/config.js', async (importOriginal) => {
   const orig = await importOriginal<{ config: Record<string, unknown> }>();
-  return { ...orig, config: { ...orig.config, OPENAI_API_KEY: 'test' } };
+  return { ...orig, config: { ...orig.config, OPENAI_API_KEY: 'test', ALCHEMY_API_KEY: 'test' } };
 });
+// The balance reading taken when tracking starts (src/ingestion/snapshot.ts)
+const chain = vi.hoisted(() => ({ fail: false }));
+vi.mock('../../src/ingestion/alchemy.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getEthBalance: vi.fn(() => (chain.fail ? Promise.reject(new Error('rpc down')) : Promise.resolve(0.25))),
+  getErc20Balance: vi.fn(() => (chain.fail ? Promise.reject(new Error('rpc down')) : Promise.resolve(40))),
+}));
 vi.mock('../../src/agent/system.js', () => ({ buildSystemPrompt: vi.fn(() => Promise.resolve('system')) }));
 vi.mock('../../src/ingestion/price.js', () => ({
   getSpotPrices: vi.fn(() => Promise.resolve({ ETH: 4000, BNKR: 0.001 })),
@@ -48,7 +55,7 @@ const says = (userId: string, text: string) => runAgent({ userId, userMessage: t
 
 describeDb('changes by chat, no buttons (integration)', () => {
   useIntegrationDb();
-  beforeEach(() => { create.mockClear(); responses = []; });
+  beforeEach(() => { create.mockClear(); responses = []; chain.fail = false; });
 
   it('a correction becomes Luca\'s own question; nothing changes until "yes"', async () => {
     const { user, wallet } = await seedUserWithWallet({ timezone: 'UTC' });
@@ -234,7 +241,7 @@ describeDb('changes by chat, no buttons (integration)', () => {
 
     // Asked again, so a plain "yes" answers it
     const done = await says(user.id, 'yes');
-    expect(done.text).toBe('Done. Started tracking wallet 0xb540…6fdb as "Luca wallet".');
+    expect(done.text).toBe(`Done. Started tracking wallet 0xb540…6fdb as "Luca wallet". I've read its current balances; its transactions from the last 30 days take a few minutes.`);
     expect(await sql(`SELECT 1 FROM wallets WHERE address = $1 AND user_id = $2`, [wallet, user.id])).toHaveLength(1);
   });
 
@@ -248,5 +255,41 @@ describeDb('changes by chat, no buttons (integration)', () => {
     const q = await says(user.id, `track wallet ${wallet} label Test`);
     expect(q.text).toBe(`Track wallet ${wallet} on Base as "Test"?`);
     expect(await sql(`SELECT 1 FROM wallets WHERE address = $1`, [wallet])).toHaveLength(0);
+  });
+
+  it('the Sep 28 new operator: a balance question right after "yes" finds the balances, and says the first read is still going', async () => {
+    const { user } = await seedUserWithWallet();
+    const wallet = '0x9a958557d906f10aca9ed0a8509cf9366059e511';
+    responses = [calls(['register_wallet', { address: wallet }]), say('')];
+    await says(user.id, wallet);
+    await says(user.id, 'Yes');
+
+    const cash = await executeTool(user.id, 'get_cash_position', {}) as {
+      balances: Array<{ address: string; asset: string; balance: number }>;
+      wallets: Array<{ address: string; first_read: string }>;
+    };
+    expect(cash.balances.filter((b) => b.address === wallet).map((b) => [b.asset, b.balance]).sort())
+      .toEqual([['BNKR', 40], ['ETH', 0.25], ['USDC', 40]]);
+    expect(cash.wallets.find((w) => w.address === wallet)?.first_read).toBe('in_progress');
+    // The operator's first wallet (seeded as already synced) is not affected
+    expect(cash.wallets.filter((w) => w.address !== wallet).map((w) => w.first_read)).toEqual(['done']);
+
+    // The worker's first sync finishes
+    await sql(`UPDATE watch_jobs SET last_synced_at = NOW() WHERE wallet_id = (SELECT id FROM wallets WHERE address = $1)`, [wallet]);
+    const after = await executeTool(user.id, 'get_cash_position', {}) as { wallets: Array<{ address: string; first_read: string }> };
+    expect(after.wallets.find((w) => w.address === wallet)?.first_read).toBe('done');
+  });
+
+  it('a failed balance reading never stops tracking; the first sync takes the balances', async () => {
+    const { user } = await seedUserWithWallet();
+    const wallet = '0x9a958557d906f10aca9ed0a8509cf9366059e511';
+    chain.fail = true;
+    responses = [calls(['register_wallet', { address: wallet }]), say('')];
+    await says(user.id, wallet);
+    const done = await says(user.id, 'yes');
+
+    expect(done.text).toBe(`Done. Started tracking wallet 0x9a95…e511. I'm reading it now; its balances and transactions from the last 30 days take a few minutes.`);
+    expect(await sql(`SELECT 1 FROM wallets w JOIN watch_jobs wj ON wj.wallet_id = w.id WHERE w.address = $1 AND w.user_id = $2 AND wj.status = 'active'`, [wallet, user.id])).toHaveLength(1);
+    expect(await sql(`SELECT 1 FROM balance_snapshots bs JOIN wallets w ON w.id = bs.wallet_id WHERE w.address = $1`, [wallet])).toHaveLength(0);
   });
 });

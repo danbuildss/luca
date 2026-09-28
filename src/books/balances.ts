@@ -57,3 +57,26 @@ export async function getValuedBalances(userId: string): Promise<ValuedBalances>
 
   return { balances, total_usd: total, total_incomplete: incomplete, prices };
 }
+
+// Whether Luca has finished its first read of each active wallet. A wallet's first sync
+// reads its last 30 days of transactions and takes a few minutes; until it finishes, its
+// balances (if any) come only from the reading taken when tracking started.
+export type WalletReadState = {
+  address: string;
+  label: string | null;
+  tracking_since: Date;
+  first_read: 'done' | 'in_progress';
+  last_synced_at: Date | null;
+};
+
+export async function getWalletReadStates(userId: string): Promise<WalletReadState[]> {
+  const res = await query<{ address: string; label: string | null; tracking_since: Date; last_synced_at: Date | null }>(
+    `SELECT w.address, w.label, w.created_at AS tracking_since, wj.last_synced_at
+     FROM wallets w
+     LEFT JOIN watch_jobs wj ON wj.wallet_id = w.id
+     WHERE w.user_id = $1 AND w.active = TRUE
+     ORDER BY w.created_at`,
+    [userId],
+  );
+  return res.rows.map((r) => ({ ...r, first_read: r.last_synced_at ? 'done' : 'in_progress' }));
+}
