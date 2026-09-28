@@ -5,6 +5,7 @@ import {
   describeDb, useIntegrationDb, insertUser, insertWallet, insertWatchJob, sql,
 } from './helpers/db.js';
 import { detectStaleWallets, detectWorkerStale } from '../../src/health/detectors.js';
+import { pingWorkerHeartbeat, touchWorkerHeartbeat } from '../../src/health/monitor.js';
 
 describeDb('health alerts (integration)', () => {
   useIntegrationDb();
@@ -33,5 +34,16 @@ describeDb('health alerts (integration)', () => {
     expect(await detectWorkerStale(user.id)).toBe(1);
     const rows = await sql<{ type: string }>(`SELECT type FROM alerts WHERE user_id = $1`, [user.id]);
     expect(rows).toEqual([{ type: 'worker_stale' }]);
+  });
+
+  it('a slow cycle that is still working checks in mid-cycle: no alert, and the cycle count is unchanged (Sep 28)', async () => {
+    const user = await insertUser({});
+    await pingWorkerHeartbeat();
+    await sql(`UPDATE worker_heartbeat SET last_ping_at = NOW() - INTERVAL '9 minutes' WHERE id = 1`);
+    const before = (await sql<{ loop_count: string }>(`SELECT loop_count::text FROM worker_heartbeat WHERE id = 1`))[0].loop_count;
+
+    await touchWorkerHeartbeat();
+    expect(await detectWorkerStale(user.id)).toBe(0);
+    expect((await sql<{ loop_count: string }>(`SELECT loop_count::text FROM worker_heartbeat WHERE id = 1`))[0].loop_count).toBe(before);
   });
 });

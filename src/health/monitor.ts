@@ -16,6 +16,12 @@ export async function pingWorkerHeartbeat(): Promise<void> {
   );
 }
 
+// Mid-cycle "still working": moves the time only, so the loop count stays one per cycle
+// (/ops shows it) and a slow but working cycle is not reported as a stopped worker
+export async function touchWorkerHeartbeat(): Promise<void> {
+  await query(`UPDATE worker_heartbeat SET last_ping_at = NOW() WHERE id = 1`, []);
+}
+
 export async function getWorkerHeartbeat(): Promise<{ last_ping_at: Date; loop_count: number } | null> {
   const res = await query<{ last_ping_at: Date; loop_count: string }>(
     `SELECT last_ping_at, loop_count FROM worker_heartbeat WHERE id = 1`,

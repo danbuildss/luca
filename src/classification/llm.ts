@@ -111,7 +111,9 @@ export async function classifyWithLlmDetailed(
     return { results, failures };
   }
 
-  const openai = new OpenAI({ apiKey: config.OPENAI_API_KEY });
+  // The client's default is a 10-minute timeout with 2 retries; a stuck call must not
+  // hold up the worker cycle. A failed batch is retried next cycle (not counted).
+  const openai = new OpenAI({ apiKey: config.OPENAI_API_KEY, timeout: 60_000, maxRetries: 1 });
 
   for (let i = 0; i < events.length; i += LLM_BATCH_SIZE) {
     const batch = events.slice(i, i + LLM_BATCH_SIZE);

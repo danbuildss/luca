@@ -13,7 +13,7 @@ import { refreshQuestionGroups } from '../../src/alerts/questions.js';
 import { runAlertDetectors } from '../../src/alerts/engine.js';
 import { deliverPendingAlerts } from '../../src/alerts/deliver.js';
 import { startBriefScheduler } from '../../src/briefs/scheduler.js';
-import { pingWorkerHeartbeat } from '../../src/health/monitor.js';
+import { pingWorkerHeartbeat, touchWorkerHeartbeat } from '../../src/health/monitor.js';
 import { detectStaleWallets, detectDiskPressure } from '../../src/health/detectors.js';
 import { takeHeartbeatSnapshot } from '../../src/heartbeat/snapshot.js';
 
@@ -31,6 +31,10 @@ const POLL_INTERVAL_MS = 60_000;
 let shuttingDown = false;
 let currentCycle: Promise<void> | null = null;
 
+// Still working: between steps of a cycle, so a slow cycle is not mistaken for a stopped
+// worker. A step that hangs still stops these and is reported.
+const alive = (): Promise<void> => touchWorkerHeartbeat().catch(() => { /* non-fatal */ });
+
 async function runCycle(): Promise<void> {
   await pingWorkerHeartbeat().catch(() => { /* non-fatal */ });
 
@@ -44,10 +48,12 @@ async function runCycle(): Promise<void> {
     } catch (err) {
       logger.error({ err, wallet_id: job.wallet_id }, 'Sync failed — wallet marked error');
     }
+    await alive();
   }
 
   if (!shuttingDown && apiKey) {
     await reconcileDueWallets(apiKey).catch((err: unknown) => logger.error({ err }, 'Balance check failed'));
+    await alive();
   }
 
   if (!shuttingDown) {
@@ -60,7 +66,9 @@ async function runCycle(): Promise<void> {
         .then((sources) => checkFeeClaims(apiKey, sources))
         .catch((err: unknown) => logger.error({ err }, 'Fee claim check failed'));
     }
+    await alive();
     await classifyAllUsers();
+    await alive();
     // After classification: swaps are known, so BNKR in a swap takes the traded price
     await priceSwaps().catch((err: unknown) => logger.error({ err }, 'Swap pricing failed'));
     if (apiKey) {
@@ -82,6 +90,7 @@ async function runCycle(): Promise<void> {
     // Each step is isolated: one failing detector must not stop alert delivery
     // for this user or skip the users after them.
     for (const userId of userIds) {
+      await alive();
       for (const [name, step] of steps) {
         try {
           await step(userId);

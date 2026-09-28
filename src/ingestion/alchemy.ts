@@ -39,6 +39,10 @@ function rpcUrl(apiKey: string): string {
   return `https://base-mainnet.g.alchemy.com/v2/${apiKey}`;
 }
 
+// A request that has not answered by then is abandoned and retried, never waited on
+// forever (axios has no timeout by default)
+export const RPC_TIMEOUT_MS = 30_000;
+
 async function rpc<T>(apiKey: string, method: string, params: unknown[]): Promise<T> {
   return pRetry(
     async () => {
@@ -47,7 +51,7 @@ async function rpc<T>(apiKey: string, method: string, params: unknown[]): Promis
         jsonrpc: '2.0',
         method,
         params,
-      });
+      }, { timeout: RPC_TIMEOUT_MS });
       if (res.data.error) {
         throw new AbortError(new RpcError(method, res.data.error.code, res.data.error.message));
       }
