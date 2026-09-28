@@ -108,6 +108,10 @@ PostgreSQL (Supabase)    (source of financial truth)
 | `OPENAI_API_KEY` | Fallback API key |
 | `AGENT_BASE_URL` | Base URL for OpenAI-compatible gateway (e.g. Bankr). If set, also passes key as `X-API-Key` header. |
 | `AGENT_MODEL` | Model ID. Default `gpt-4o`. |
+| `CLASSIFIER_MODEL` | Classifier model ID. Default: `AGENT_MODEL` on a gateway, `gpt-4o-mini` on OpenAI. |
+
+The transaction classifier (`src/classification/llm.ts`) uses the same key and endpoint
+as the agent (`src/llm/client.ts`).
 
 ### Available agent tools
 
