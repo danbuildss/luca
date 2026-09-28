@@ -14,13 +14,15 @@ const schema = z.object({
   ALCHEMY_API_KEY: z.string().min(1, 'ALCHEMY_API_KEY is required').optional(),
   BASE_RPC_URL: z.string().url('BASE_RPC_URL must be a valid URL').optional(),
 
-  // LLM — OpenAI (gpt-4o-mini) for classification, gpt-4o for agent
+  // LLM — one provider for the agent and the classifier (src/llm/client.ts)
   OPENAI_API_KEY: z.string().optional(),
   AGENT_MODEL: z.string().default('gpt-4o'),
-  // Agent LLM override — use a different key/endpoint for the agent (e.g. Bankr LLM Gateway)
-  // If unset, OPENAI_API_KEY + standard OpenAI endpoint are used.
+  // Use a different key/endpoint (e.g. Bankr LLM Gateway) for both the agent and the
+  // classifier. If unset, OPENAI_API_KEY + standard OpenAI endpoint are used.
   AGENT_LLM_KEY: z.string().optional(),
   AGENT_BASE_URL: z.string().url().optional(),
+  // Classifier model. Default: AGENT_MODEL on a gateway, gpt-4o-mini on OpenAI.
+  CLASSIFIER_MODEL: z.string().min(1).optional(),
 
   // Optional
   BASESCAN_API_KEY: z.string().optional(),
@@ -62,7 +64,7 @@ export function requireProductionConfig() {
   if (!config.TELEGRAM_BOT_TOKEN) missing.push('TELEGRAM_BOT_TOKEN');
   if (!config.ALCHEMY_API_KEY) missing.push('ALCHEMY_API_KEY');
   if (!config.BASE_RPC_URL) missing.push('BASE_RPC_URL');
-  // OPENAI_API_KEY is optional — classification degrades gracefully without it
+  // The LLM key is optional — classification degrades gracefully without it
   if (missing.length > 0) {
     console.error(`Luca cannot start in production — missing:\n${missing.map(k => `  ${k}`).join('\n')}`);
     process.exit(1);

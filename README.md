@@ -84,8 +84,9 @@ npm run dev               # worker, bot and API with reload
 | `DATABASE_URL` | yes | PostgreSQL connection string |
 | `TELEGRAM_BOT_TOKEN` | yes | Telegram bot token |
 | `ALCHEMY_API_KEY` | yes | Base RPC, transfers, receipts, logs and on-chain prices |
-| `OPENAI_API_KEY` | yes | Classification model, and the agent unless `AGENT_LLM_KEY` is set |
-| `AGENT_LLM_KEY` / `AGENT_BASE_URL` / `AGENT_MODEL` | no | Use a different key, OpenAI-compatible endpoint or model for the chat agent |
+| `OPENAI_API_KEY` | one LLM key | The agent and the classifier on OpenAI, unless `AGENT_LLM_KEY` is set |
+| `AGENT_LLM_KEY` / `AGENT_BASE_URL` / `AGENT_MODEL` | one LLM key | Use an OpenAI-compatible gateway (key, endpoint, model) for both the agent and the classifier |
+| `CLASSIFIER_MODEL` | no | Classifier model (default: `AGENT_MODEL` on a gateway, `gpt-4o-mini` on OpenAI) |
 | `COINGECKO_API_KEY` / `COINGECKO_API_TIER` | no | Fallback prices; works without a key at a lower rate limit |
 | `LLM_DAILY_SPEND_CAP_USD` | no | Daily AI spend cap (default $1.00) |
 | `LUCA_ADMIN_KEY` | no | Admin key for invite management over the API |

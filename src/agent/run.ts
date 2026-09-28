@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions.js';
-import { config } from '../config.js';
+import { llmClientOptions } from '../llm/client.js';
 import { logger } from '../logger.js';
 import { buildSystemPrompt } from './system.js';
 import { loadConversationHistory, saveMessage } from './context.js';
@@ -31,14 +31,8 @@ const AGENT_MODEL = process.env.AGENT_MODEL ?? 'gpt-4o';
 let _openai: OpenAI | null = null;
 function getOpenAI(): OpenAI {
   if (!_openai) {
-    const apiKey = config.AGENT_LLM_KEY ?? config.OPENAI_API_KEY;
-    if (!apiKey) throw new Error('No LLM key configured — set AGENT_LLM_KEY or OPENAI_API_KEY');
-    const opts: ConstructorParameters<typeof OpenAI>[0] = { apiKey };
-    if (config.AGENT_BASE_URL) {
-      opts.baseURL = config.AGENT_BASE_URL;
-      // Bankr (and some other gateways) use X-API-Key in addition to Bearer
-      opts.defaultHeaders = { 'X-API-Key': apiKey };
-    }
+    const opts = llmClientOptions();
+    if (!opts) throw new Error('No LLM key configured — set AGENT_LLM_KEY or OPENAI_API_KEY');
     _openai = new OpenAI(opts);
   }
   return _openai;

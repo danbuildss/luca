@@ -11,6 +11,7 @@ export const logger = pino({
       'ALCHEMY_API_KEY',
       'ANTHROPIC_API_KEY',
       'OPENAI_API_KEY',
+      'AGENT_LLM_KEY',
       'key_hash',
       'token',
       'privateKey',

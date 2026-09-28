@@ -5,15 +5,12 @@ import { logger } from '../logger.js';
 import type { ClassificationFailure, ClassificationResult, UnclassifiedEvent } from './types.js';
 import { parseLlmClassificationResponse } from './llmParse.js';
 import { MODEL_LABELS } from '../types/index.js';
+import { CAP_PRICE_PER_MTOK, classifierModel, llmCallCost, llmClientOptions, usesGateway } from '../llm/client.js';
 
-const LLM_MODEL = 'gpt-4o-mini';
 const LLM_BATCH_SIZE = 20;
-// ~20 items × (UUID + label + confidence + one-sentence evidence) ≈ 2k tokens; leave headroom
-// so the JSON is never truncated mid-array.
-const LLM_MAX_OUTPUT_TOKENS = 4096;
-// gpt-4o-mini pricing (per token)
-const INPUT_COST_PER_TOKEN = 0.15 / 1_000_000;
-const OUTPUT_COST_PER_TOKEN = 0.60 / 1_000_000;
+// No output token limit is sent: ~20 items × (UUID + label + confidence + one-sentence
+// evidence) ≈ 2k tokens, well inside every model's default, and a reasoning model spends
+// part of any limit on reasoning, which would truncate the JSON mid-array.
 
 const SYSTEM_PROMPT = `You are a financial transaction classifier for an on-chain business.
 Network fees, transfers between the operator's own wallets and swaps are already handled
@@ -56,11 +53,17 @@ export type LlmClassificationOutcome = {
   failures: Map<string, ClassificationFailure>;
 };
 
+// Today's AI spend for the cap. Classification calls on a model with no known price are
+// logged at $0 (so the cost figures show them as unpriced) and counted here at the dearest
+// listed price, so the cap still holds on any model.
 async function getDailySpendUsd(): Promise<number> {
   const res = await query<{ total: string }>(
-    `SELECT COALESCE(SUM(cost_usd), 0)::text AS total
+    `SELECT COALESCE(SUM(CASE WHEN purpose = 'classification' AND cost_usd = 0
+                              THEN (input_tokens * $1::numeric + output_tokens * $2::numeric) / 1000000
+                              ELSE cost_usd END), 0)::text AS total
      FROM llm_spend_log
      WHERE created_at >= date_trunc('day', NOW())`,
+    [CAP_PRICE_PER_MTOK.input, CAP_PRICE_PER_MTOK.output],
   );
   return parseFloat(res.rows[0].total);
 }
@@ -87,11 +90,13 @@ function markFailed(
   for (const id of ids) failures.set(id, failure);
 }
 
-// Permanent request rejections (4xx other than 429) count toward the attempt cap so a
-// poison event can't retry forever; transient errors (network, 429, 5xx) don't.
-function isPermanentApiError(err: unknown): boolean {
+// Permanent request rejections (4xx) count toward the attempt cap so a poison event can't
+// retry forever. Transient errors (network, 429, 5xx) don't, and neither do rejections of
+// the key or the model (401, 403, 404): those are the provider's settings, not the events,
+// and must not use up the attempts of every event waiting to be labelled.
+export function isPermanentApiError(err: unknown): boolean {
   const status = (err as { status?: unknown } | null)?.status;
-  return typeof status === 'number' && status >= 400 && status < 500 && status !== 429;
+  return typeof status === 'number' && status >= 400 && status < 500 && ![401, 403, 404, 429].includes(status);
 }
 
 export async function classifyWithLlmDetailed(
@@ -103,7 +108,8 @@ export async function classifyWithLlmDetailed(
   const failures = new Map<string, ClassificationFailure>();
   if (events.length === 0) return { results, failures };
 
-  if (!config.OPENAI_API_KEY) {
+  const clientOptions = llmClientOptions({ timeout: 60_000, maxRetries: 1 });
+  if (!clientOptions) {
     markFailed(failures, events.map((e) => e.id), {
       countsAsAttempt: false,
       reason: 'No rule matched and LLM unavailable (no API key)',
@@ -111,9 +117,11 @@ export async function classifyWithLlmDetailed(
     return { results, failures };
   }
 
-  // The client's default is a 10-minute timeout with 2 retries; a stuck call must not
-  // hold up the worker cycle. A failed batch is retried next cycle (not counted).
-  const openai = new OpenAI({ apiKey: config.OPENAI_API_KEY, timeout: 60_000, maxRetries: 1 });
+  // The same provider as the chat agent (src/llm/client.ts). The client's default is a
+  // 10-minute timeout with 2 retries; a stuck call must not hold up the worker cycle. A
+  // failed batch is retried next cycle (not counted).
+  const openai = new OpenAI(clientOptions);
+  const model = classifierModel();
 
   for (let i = 0; i < events.length; i += LLM_BATCH_SIZE) {
     const batch = events.slice(i, i + LLM_BATCH_SIZE);
@@ -145,16 +153,17 @@ export async function classifyWithLlmDetailed(
 
     const response = await openai.chat.completions
       .create({
-        model: LLM_MODEL,
-        max_tokens: LLM_MAX_OUTPUT_TOKENS,
-        response_format: { type: 'json_object' },
+        model,
+        // JSON mode on OpenAI; a gateway may not pass it on for every model, and the
+        // prompt asks for JSON anyway (the parser also accepts it in a code fence)
+        ...(usesGateway() ? {} : { response_format: { type: 'json_object' as const } }),
         messages: [
           { role: 'system', content: SYSTEM_PROMPT },
           { role: 'user', content: JSON.stringify(payload) },
         ],
       })
       .catch((err: unknown) => {
-        logger.error({ err, batchStart: i }, 'LLM classification batch failed');
+        logger.error({ err, batchStart: i, model }, 'LLM classification batch failed');
         markFailed(failures, batchIds, {
           countsAsAttempt: isPermanentApiError(err),
           reason: 'LLM request failed',
@@ -166,8 +175,8 @@ export async function classifyWithLlmDetailed(
     try {
       const inputTokens = response.usage?.prompt_tokens ?? 0;
       const outputTokens = response.usage?.completion_tokens ?? 0;
-      const costUsd = inputTokens * INPUT_COST_PER_TOKEN + outputTokens * OUTPUT_COST_PER_TOKEN;
-      await logSpend({ userId, model: LLM_MODEL, inputTokens, outputTokens, costUsd });
+      const costUsd = llmCallCost(model, inputTokens, outputTokens);
+      await logSpend({ userId, model, inputTokens, outputTokens, costUsd });
     } catch (err) {
       logger.error({ err }, 'Failed to log LLM spend');
     }
