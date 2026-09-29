@@ -142,6 +142,9 @@ const LABEL_WORDS: Record<string, RegExp> = {
   x402_spend: /\bx402\b/i,
   refund: /\brefund(s|ed)?\b/i,
   swap: /\b(swaps?|swapped|conver(t|ted|sions?)|trades?)\b/i,
+  staked: /\b(stak(e|ed|es|ing)|lock(ed)? up)\b/i,
+  unstaked: /\b(unstak(e|ed|es|ing)|withdr[ae]w(n|als?)? from staking)\b/i,
+  staking_reward: /\b(staking rewards?|rewards?|yield)\b/i,
   unknown: /\b(unknowns?|unlabell?ed|unclassified|need(s|ing)? (context|attention|your answer|labels?)|not labell?ed|uncategori[sz]ed)\b/i,
 };
 

@@ -35,7 +35,7 @@ export type OpenQuestion = { id: string; kind: ProposalKind | 'changes'; questio
 const LABEL_WORDS: Record<string, string> = {
   revenue: 'revenue', expense: 'expense', internal_transfer: 'internal transfer', treasury: 'treasury',
   gas: 'network fee', x402_income: 'x402 income', x402_spend: 'x402 spend', refund: 'refund',
-  swap: 'swap', unknown: 'unknown',
+  swap: 'swap', staked: 'staked', unstaked: 'unstaked', staking_reward: 'staking reward', unknown: 'unknown',
 };
 export const labelWords = (l: string): string => LABEL_WORDS[l] ?? l;
 

@@ -307,6 +307,11 @@ export async function getBlock(apiKey: string, blockNumber: number, withTransact
 }
 
 // A read-only contract call at a block (or the latest one). Reverts throw RpcError.
+// Deployed code at an address; '0x' for a plain account
+export async function getCode(apiKey: string, address: string): Promise<string> {
+  return rpc<string>(apiKey, 'eth_getCode', [address, 'latest']);
+}
+
 export async function ethCall(apiKey: string, to: string, data: string, block: number | 'latest'): Promise<string> {
   return rpc<string>(apiKey, 'eth_call', [{ to, data }, block === 'latest' ? 'latest' : blockToHex(block)]);
 }

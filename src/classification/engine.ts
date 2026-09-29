@@ -21,6 +21,7 @@ import type { SaveClassificationRow } from './store.js';
 import type { ClassificationResult, UnclassifiedEvent } from './types.js';
 import { getFeeSources, type FeeSource } from '../fees/sources.js';
 import { getFeeChecks, feeLabel } from '../fees/claims.js';
+import { getStakeChecks, knownStakingContracts, stakeLabel } from '../staking/checks.js';
 
 type WorkItem = {
   event: UnclassifiedEvent;
@@ -143,6 +144,11 @@ export async function classifyPendingEvents(userId: string): Promise<number> {
     [...work.values()].filter((i) => feeSourceFor(i, feeSources)).map((i) => i.event.id),
   );
 
+  // Transfers to or from staking contracts (src/staking/checks.ts)
+  const counterparty = (i: WorkItem): string => ((i.event.direction === 'out' ? i.event.to_address : i.event.from_address) ?? '').toLowerCase();
+  const stakingContracts = await knownStakingContracts([...work.values()].map(counterparty));
+  const stakeChecks = await getStakeChecks([...work.values()].filter((i) => stakingContracts.has(counterparty(i))).map((i) => i.event.id));
+
   const toSave: SaveClassificationRow[] = [];
   const shapeOnly: Array<{ id: string; shape: TxShape }> = [];
   const save = (item: WorkItem, result: ClassificationResult): void => {
@@ -172,6 +178,14 @@ export async function classifyPendingEvents(userId: string): Promise<number> {
       if (!check) continue;
       const fee = feeLabel(feeSources.find((s) => s.id === check.fee_source_id) ?? feeSource, check);
       if (fee) { save(item, fee); continue; }
+    }
+
+    if (stakingContracts.has(counterparty(item))) {
+      const check = stakeChecks.get(item.event.id);
+      // Not checked yet: it waits for the contract's staked amounts to be read
+      if (!check) continue;
+      const stake = stakeLabel(check);
+      if (stake) { save(item, stake); continue; }
     }
 
     if (item.current && keepsLabel(item.current)) {
