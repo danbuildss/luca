@@ -126,7 +126,7 @@ describeDb('changes by chat, no buttons (integration)', () => {
     // Before the answer, one of them stops being a transaction Luca books
     await sql(`UPDATE normalized_events SET supported = FALSE WHERE id = $1`, [b.id]);
     const done = await says(user.id, 'yes');
-    expect(done.text).toMatch(/^I made 2 of the 3 changes:\n- Labeled the 12 USDC you received on .+ as revenue\n- Started tracking wallet 0x\w{4}…\w{4} as "ops"\n\nNot made:\n- Label the 5 USDC you sent on .+ as expense: I could not find that transaction in your books any more/);
+    expect(done.text).toMatch(/^I made 2 of the 3 changes:\n- Labeled the 12 USDC you received on .+ as revenue\n- I'm reading 0x\w{4}…\w{4} on Base as "ops"\n\nNot made:\n- Label the 5 USDC you sent on .+ as expense: I could not find that transaction in your books any more/);
     expect((await label(a.id)).label).toBe('revenue');
     expect((await label(b.id)).label).toBe('unknown');
     expect(await sql(`SELECT 1 FROM wallets WHERE user_id = $1 AND address = $2`, [user.id, other])).toHaveLength(1);
@@ -241,7 +241,7 @@ describeDb('changes by chat, no buttons (integration)', () => {
 
     // Asked again, so a plain "yes" answers it
     const done = await says(user.id, 'yes');
-    expect(done.text).toBe(`Done. Started tracking wallet 0xb540…6fdb as "Luca wallet". I've read its current balances; its transactions from the last 30 days take a few minutes.`);
+    expect(done.text).toBe(`Done. I'm reading 0xb540…6fdb on Base as "Luca wallet". I can already see 0.25 ETH, 40 USDC and 40 BNKR. I'll message you when your books are ready.`);
     expect(await sql(`SELECT 1 FROM wallets WHERE address = $1 AND user_id = $2`, [wallet, user.id])).toHaveLength(1);
   });
 
@@ -257,7 +257,7 @@ describeDb('changes by chat, no buttons (integration)', () => {
     expect(await sql(`SELECT 1 FROM wallets WHERE address = $1`, [wallet])).toHaveLength(0);
   });
 
-  it('the Sep 28 new operator: a balance question right after "yes" finds the balances, and says the first read is still going', async () => {
+  it('the Sep 28 new operator: a balance question right after "yes" finds the balances, and says the books are not ready yet', async () => {
     const { user } = await seedUserWithWallet();
     const wallet = '0x9a958557d906f10aca9ed0a8509cf9366059e511';
     responses = [calls(['register_wallet', { address: wallet }]), say('')];
@@ -266,18 +266,13 @@ describeDb('changes by chat, no buttons (integration)', () => {
 
     const cash = await executeTool(user.id, 'get_cash_position', {}) as {
       balances: Array<{ address: string; asset: string; balance: number }>;
-      wallets: Array<{ address: string; first_read: string }>;
+      wallets: Array<{ address: string; books_ready: boolean; balances_read: boolean }>;
     };
     expect(cash.balances.filter((b) => b.address === wallet).map((b) => [b.asset, b.balance]).sort())
       .toEqual([['BNKR', 40], ['ETH', 0.25], ['USDC', 40]]);
-    expect(cash.wallets.find((w) => w.address === wallet)?.first_read).toBe('in_progress');
-    // The operator's first wallet (seeded as already synced) is not affected
-    expect(cash.wallets.filter((w) => w.address !== wallet).map((w) => w.first_read)).toEqual(['done']);
-
-    // The worker's first sync finishes
-    await sql(`UPDATE watch_jobs SET last_synced_at = NOW() WHERE wallet_id = (SELECT id FROM wallets WHERE address = $1)`, [wallet]);
-    const after = await executeTool(user.id, 'get_cash_position', {}) as { wallets: Array<{ address: string; first_read: string }> };
-    expect(after.wallets.find((w) => w.address === wallet)?.first_read).toBe('done');
+    expect(cash.wallets.find((w) => w.address === wallet)).toMatchObject({ books_ready: false, balances_read: true });
+    // The operator's first wallet (established) is not affected
+    expect(cash.wallets.filter((w) => w.address !== wallet).map((w) => w.books_ready)).toEqual([true]);
   });
 
   it('a failed balance reading never stops tracking; the first sync takes the balances', async () => {
@@ -288,7 +283,7 @@ describeDb('changes by chat, no buttons (integration)', () => {
     await says(user.id, wallet);
     const done = await says(user.id, 'yes');
 
-    expect(done.text).toBe(`Done. Started tracking wallet 0x9a95…e511. I'm reading it now; its balances and transactions from the last 30 days take a few minutes.`);
+    expect(done.text).toBe(`Done. I'm reading 0x9a95…e511 on Base. I'll message you when your books are ready.`);
     expect(await sql(`SELECT 1 FROM wallets w JOIN watch_jobs wj ON wj.wallet_id = w.id WHERE w.address = $1 AND w.user_id = $2 AND wj.status = 'active'`, [wallet, user.id])).toHaveLength(1);
     expect(await sql(`SELECT 1 FROM balance_snapshots bs JOIN wallets w ON w.id = bs.wallet_id WHERE w.address = $1`, [wallet])).toHaveLength(0);
   });

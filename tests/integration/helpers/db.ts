@@ -263,16 +263,18 @@ export async function insertWatchJob(opts: {
   status?: 'active' | 'paused' | 'error';
   lastSyncedAt?: At | null;
   errorMessage?: string | null;
+  // An established wallet (past onboarding, migration 028) unless a test says otherwise
+  onboarded?: boolean;
 }): Promise<string> {
-  const params: unknown[] = [opts.userId, opts.walletId, opts.status ?? 'active', opts.errorMessage ?? null];
+  const params: unknown[] = [opts.userId, opts.walletId, opts.status ?? 'active', opts.errorMessage ?? null, opts.onboarded ?? true];
   let synced = 'NULL';
   if (opts.lastSyncedAt != null) {
     params.push(opts.lastSyncedAt);
     synced = atExpr(opts.lastSyncedAt, params.length);
   }
   const rows = await sql<{ id: string }>(
-    `INSERT INTO watch_jobs (user_id, wallet_id, status, error_message, last_synced_at)
-     VALUES ($1, $2, $3, $4, ${synced}) RETURNING id`,
+    `INSERT INTO watch_jobs (user_id, wallet_id, status, error_message, ready_notified_at, last_synced_at)
+     VALUES ($1, $2, $3, $4, CASE WHEN $5::boolean THEN NOW() END, ${synced}) RETURNING id`,
     params,
   );
   return rows[0].id;
