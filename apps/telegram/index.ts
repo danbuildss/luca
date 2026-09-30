@@ -2,8 +2,8 @@ import { Telegraf, type Telegram } from 'telegraf';
 import { config, requireProductionConfig } from '../../src/config.js';
 import { closeDb, query } from '../../src/db.js';
 import { logger } from '../../src/logger.js';
-import type { AuthedUser } from '../../src/telegram/auth.js';
-import { resolveTelegramUser, inviteUsername, revokeUsername } from '../../src/telegram/onboarding.js';
+import { inviteUsername, revokeUsername } from '../../src/telegram/onboarding.js';
+import { requireUser, handleStart } from '../../src/telegram/access.js';
 import { handleSummary } from '../../src/telegram/commands/summary.js';
 import { handleReview } from '../../src/telegram/commands/review.js';
 import { handleBalance } from '../../src/telegram/commands/balance.js';
@@ -35,56 +35,12 @@ if (!config.TELEGRAM_BOT_TOKEN) {
 
 const bot = new Telegraf(config.TELEGRAM_BOT_TOKEN);
 
-// ---------------------------------------------------------------------------
-// Auth — resolves the sender to a user, signing up invited beta testers on first
-// contact. Replies with the refusal itself, so callers just return on null.
-// ---------------------------------------------------------------------------
-const NOT_INVITED_MSG =
-  "Luca is in private beta and you're not on the invite list yet. Message @danbuildss to request access.";
-const REVOKED_MSG =
-  'Your Luca beta access has been turned off. Message @danbuildss if you think this is a mistake.';
-const WELCOME_MSG = [
-  "Welcome to Luca. You're in.",
-  '',
-  "Send me the Base wallet address you'd like me to watch and I'll start keeping your books.",
-  '',
-  'After that, just ask me anything: how the month went, what you hold, or what a payment was for.',
-].join('\n');
-
 const ADMIN_ONLY_MSG = 'That one is for admins only.';
-
-async function requireUser(ctx: Parameters<typeof handleSummary>[0]): Promise<AuthedUser | null> {
-  const from = ctx.from;
-  if (!from) return null;
-  const access = await resolveTelegramUser({ id: from.id, username: from.username });
-  if (access.status === 'ok') {
-    if (access.created) await ctx.reply(WELCOME_MSG);
-    return access.user;
-  }
-  const msg = access.status === 'revoked' ? REVOKED_MSG : NOT_INVITED_MSG;
-  if (ctx.callbackQuery) await ctx.answerCbQuery(msg);
-  else await ctx.reply(msg);
-  return null;
-}
 
 // ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
-bot.command('start', async (ctx) => {
-  const user = await requireUser(ctx);
-  if (!user) return;
-  const lines = [
-    "Hi, I'm Luca. I keep the books on your on-chain wallets.",
-    '',
-    "Just talk to me. Ask how the last month looked, what you hold, or what a payment was for, and tell me when I've labeled something wrong.",
-    '',
-    "If you haven't yet, send me the wallet address you'd like me to watch.",
-  ];
-  if (user.role === 'admin') {
-    lines.push('', 'Admin: /ops, /invite @user, /revoke @user, /quality, /goldset');
-  }
-  await ctx.reply(lines.join('\n'));
-});
+bot.command('start', (ctx) => handleStart(ctx));
 
 bot.command('summary', async (ctx) => {
   const user = await requireUser(ctx);
