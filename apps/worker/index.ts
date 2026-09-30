@@ -13,6 +13,7 @@ import { getDistinctUserIds } from '../../src/classification/store.js';
 import { refreshQuestionGroups } from '../../src/alerts/questions.js';
 import { runAlertDetectors } from '../../src/alerts/engine.js';
 import { deliverPendingAlerts } from '../../src/alerts/deliver.js';
+import { notifyWalletReadiness } from '../../src/onboarding/notify.js';
 import { startBriefScheduler } from '../../src/briefs/scheduler.js';
 import { pingWorkerHeartbeat, touchWorkerHeartbeat } from '../../src/health/monitor.js';
 import { detectStaleWallets, detectDiskPressure } from '../../src/health/detectors.js';
@@ -89,6 +90,8 @@ async function runCycle(): Promise<void> {
       ['alert detectors', runAlertDetectors],
       ['stale wallets', detectStaleWallets],
       ['disk pressure', detectDiskPressure],
+      // A new wallet's books are ready (or its first read could not finish)
+      ['wallet onboarding', notifyWalletReadiness],
       ['alert delivery', deliverPendingAlerts],
     ];
     // Each step is isolated: one failing detector must not stop alert delivery

@@ -2,7 +2,8 @@ import type { ChatCompletionTool } from 'openai/resources/chat/completions.js';
 import { query } from '../db.js';
 import { getPnlSummary, getBooksSummary } from '../books/query.js';
 import { getRecentActivity } from '../books/activity.js';
-import { getValuedBalances, getWalletReadStates } from '../books/balances.js';
+import { getValuedBalances } from '../books/balances.js';
+import { walletsNotReady, stillReadingText, balancesSeenText, ONLY_BASE } from '../onboarding/notify.js';
 import { snapshotBalances } from '../ingestion/snapshot.js';
 import { logger } from '../logger.js';
 import { getOverview } from '../books/overview.js';
@@ -453,22 +454,49 @@ function argText(v: unknown): string {
 
 type ToolResult = Record<string, unknown> | unknown[];
 
+// Answers that only mean something once a wallet's books are complete (totals, history,
+// "are my books complete?"). While a new wallet is still being read they are held back,
+// or, when other wallets are ready, marked as not covering it.
+const NEEDS_COMPLETE_BOOKS = new Set([
+  'get_overview', 'get_books_summary', 'get_figure_breakdown', 'get_recent_activity',
+  'get_unknown_transactions', 'get_financial_brief', 'check_books_complete',
+]);
+
 export async function executeTool(
+  userId: string,
+  toolName: string,
+  args: Record<string, unknown>,
+): Promise<ToolResult> {
+  if (!NEEDS_COMPLETE_BOOKS.has(toolName)) return runTool(userId, toolName, args);
+  const { all, waiting } = await walletsNotReady(userId);
+  if (waiting.length === 0) return runTool(userId, toolName, args);
+  const reading = waiting.map((w) => ({ address: w.address, state: w.state }));
+  if (waiting.length === all.length) {
+    return { books_ready: false, still_reading: reading, reply: stillReadingText(waiting) };
+  }
+  const result = await runTool(userId, toolName, args);
+  const coverage = { books_ready: false, still_reading: reading, note: `These figures do not fully cover ${waiting.map((w) => w.address).join(', ')} yet: ${stillReadingText(waiting)}` };
+  return Array.isArray(result) ? { results: result, ...coverage } : { ...result, ...coverage };
+}
+
+async function runTool(
   userId: string,
   toolName: string,
   args: Record<string, unknown>,
 ): Promise<ToolResult> {
   switch (toolName) {
     case 'get_cash_position': {
-      const [valued, ledger, wallets] = await Promise.all([getValuedBalances(userId), getLedgerStatus(userId), getWalletReadStates(userId)]);
+      const [valued, ledger, { all }] = await Promise.all([getValuedBalances(userId), getLedgerStatus(userId), walletsNotReady(userId)]);
+      const read = new Set(valued.balances.map((b) => b.wallet_address));
       return {
+        chain: 'Base',
         ledger,
-        // A wallet whose first read is in progress may have no balance yet: that is not an empty wallet
-        wallets: wallets.map((w) => ({
+        // A wallet not read yet has no balance: that is not an empty wallet, and never $0
+        wallets: all.map((w) => ({
           address: w.address,
           label: w.label,
-          tracking_since: w.tracking_since,
-          first_read: w.first_read,
+          books_ready: w.onboarded || w.state === 'ready',
+          balances_read: read.has(w.address),
         })),
         balances: valued.balances.map((b) => ({
           address: b.wallet_address,
@@ -478,8 +506,10 @@ export async function executeTool(
           usd_value: b.usd_value,
           snapshot_at: b.snapshot_at,
         })),
-        total_usd: valued.total_usd,
+        total_usd: valued.balances.length > 0 ? valued.total_usd : null,
         total_incomplete: valued.total_incomplete,
+        ...(valued.balances.length === 0 ? { note: "No balances read yet. Say you haven't read them yet; never $0." } : {}),
+        only_base: ONLY_BASE,
         live_prices_usd: valued.prices,
       };
     }
@@ -662,12 +692,13 @@ export async function executeTool(
       );
       const walletId = walletRes.rows[0].id;
 
-      await query(
+      const job = await query(
         `INSERT INTO watch_jobs (user_id, wallet_id, status)
          VALUES ($1, $2, 'active')
          ON CONFLICT (wallet_id) DO NOTHING`,
         [userId, walletId],
       );
+      const alreadyTracked = job.rowCount === 0;
 
       if (role) {
         await query(
@@ -682,12 +713,16 @@ export async function executeTool(
       // (its last 30 days of transactions) finishes a few minutes later. Tracking never
       // depends on it: a failed or slow read is left to that sync.
       const balancesRead = await readBalancesNow(userId, walletId, address);
+      const seen = balancesRead ? await balancesSeenText(walletId) : null;
+      const onboarded = alreadyTracked && (await query(
+        `SELECT 1 FROM watch_jobs WHERE wallet_id = $1 AND ready_notified_at IS NOT NULL`, [walletId],
+      )).rows.length > 0;
 
       return {
         success: true, wallet_id: walletId, address, chain, label, role,
-        note: balancesRead
-          ? "I've read its current balances; its transactions from the last 30 days take a few minutes."
-          : "I'm reading it now; its balances and transactions from the last 30 days take a few minutes.",
+        note: onboarded
+          ? 'I was already reading it, and its books are up to date.'
+          : [seen, "I'll message you when your books are ready."].filter(Boolean).join(' '),
       };
     }
 

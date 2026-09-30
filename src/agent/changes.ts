@@ -61,7 +61,7 @@ export async function describeChange(userId: string, tool: ChangeTool, args: Rec
     const label = str(args.label);
     const role = str(args.role);
     const extra = `${label ? ` as ${quoted(label)}` : ''}${role ? ` (${role})` : ''}`;
-    return { tool, args, ask: `Track wallet ${address} on Base${extra}`, done: `Started tracking wallet ${short(address)}${extra}` };
+    return { tool, args, ask: `Track wallet ${address} on Base${extra}`, done: `I'm reading ${short(address)} on Base${extra}` };
   }
   const g = (await query<{ counterparty_address: string; direction: 'in' | 'out'; asset: string | null; event_count: number; total_usd: string; first_at: Date; last_at: Date }>(
     `SELECT counterparty_address, direction, asset, event_count, total_usd::text AS total_usd, first_at, last_at

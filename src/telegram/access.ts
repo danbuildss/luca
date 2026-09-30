@@ -10,7 +10,7 @@ export const REVOKED_MSG =
 export const WELCOME_MSG = [
   "Welcome to Luca. You're in.",
   '',
-  "Send me the Base wallet address you'd like me to watch and I'll start keeping your books.",
+  "Send me the Base wallet address you'd like me to watch. I read ETH, USDC and BNKR on Base, and I'll start keeping your books.",
   '',
   'After that, just ask me anything: how the month went, what you hold, or what a payment was for.',
 ].join('\n');

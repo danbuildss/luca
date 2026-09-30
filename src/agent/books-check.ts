@@ -1,6 +1,7 @@
 import { query } from '../db.js';
 import { requestAudit, type AuditRequest } from '../ledger/audit-runs.js';
 import { asksCompleteness, periodDays } from './checks.js';
+import { walletsNotReady, stillReadingText } from '../onboarding/notify.js';
 
 // "Are my books complete?" is answered here, not by the model: the question starts a check
 // (or reuses a still-valid result) and the reply is fixed wording from the check itself.
@@ -53,6 +54,9 @@ export async function startBooksCheck(p: { userId: string; message: string }): P
       return { text: replyFor(r, days, `@${handle}'s`), args: { username: handle, days } };
     }
   }
+  // A wallet still being read cannot be proven complete yet
+  const { waiting } = await walletsNotReady(p.userId);
+  if (waiting.length > 0) return { text: stillReadingText(waiting), args: { days, still_reading: waiting.length } };
   const r = await requestAudit({ userId: p.userId, requestedBy: p.userId, days });
   return { text: replyFor(r, days), args: { days } };
 }
