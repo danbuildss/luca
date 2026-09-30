@@ -10,6 +10,9 @@ export const CLASSIFICATION_LABELS = [
   'x402_spend',
   'refund',
   'swap',
+  'staked',
+  'unstaked',
+  'staking_reward',
   'unknown',
 ] as const;
 
@@ -25,6 +28,9 @@ export const ClassificationLabel = {
   X402_SPEND: 'x402_spend',
   REFUND: 'refund',
   SWAP: 'swap',
+  STAKED: 'staked',
+  UNSTAKED: 'unstaked',
+  STAKING_REWARD: 'staking_reward',
   UNKNOWN: 'unknown',
 } as const satisfies Record<string, ClassificationLabel>;
 
@@ -51,10 +57,13 @@ export type CounterpartyAlertStatus = (typeof COUNTERPARTY_ALERT_STATUSES)[numbe
 
 // Brief aggregation: which labels combine into which brief categories
 export const BRIEF_CATEGORIES = {
-  revenue: ['revenue', 'x402_income'] as ClassificationLabel[],
+  // Staking rewards are income, kept apart from revenue by their own label
+  revenue: ['revenue', 'x402_income', 'staking_reward'] as ClassificationLabel[],
   expenses: ['expense', 'x402_spend'] as ClassificationLabel[],
   gas: ['gas'] as ClassificationLabel[],
-  internal: ['internal_transfer', 'treasury'] as ClassificationLabel[], // excluded from P&L
+  // Excluded from P&L: money that stays the operator's (including tokens moved into or
+  // out of staking)
+  internal: ['internal_transfer', 'treasury', 'staked', 'unstaked'] as ClassificationLabel[],
   unknown: ['unknown'] as ClassificationLabel[],
   refund: ['refund'] as ClassificationLabel[], // nets against revenue (sent) or expenses (received)
   conversion: ['swap'] as ClassificationLabel[], // excluded from P&L; only the swap's gas counts

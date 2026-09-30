@@ -6,6 +6,7 @@ import { repriceMissing, upgradePrices, priceSwaps } from '../../src/ingestion/r
 import { checkUsdcPeg } from '../../src/pricing/peg.js';
 import { reconcileDueWallets } from '../../src/ledger/reconcile.js';
 import { classifyAllUsers } from '../../src/classification/engine.js';
+import { alchemyChain, checkStakes } from '../../src/staking/checks.js';
 import { readDueFeeSources, allActiveSources } from '../../src/fees/sources.js';
 import { checkFeeClaims } from '../../src/fees/claims.js';
 import { getDistinctUserIds } from '../../src/classification/store.js';
@@ -65,6 +66,9 @@ async function runCycle(): Promise<void> {
       await allActiveSources()
         .then((sources) => checkFeeClaims(apiKey, sources))
         .catch((err: unknown) => logger.error({ err }, 'Fee claim check failed'));
+      // Staking: transfers to or from staking contracts, read from the contracts before
+      // classification labels them
+      await checkStakes(alchemyChain(apiKey)).catch((err: unknown) => logger.error({ err }, 'Stake check failed'));
     }
     await alive();
     await classifyAllUsers();

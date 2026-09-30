@@ -24,6 +24,9 @@ const LABEL_DISPLAY: Record<string, string> = {
   x402_income: 'x402 in',
   x402_spend: 'x402 out',
   swap: 'Swap',
+  staked: 'Staked',
+  unstaked: 'Unstaked',
+  staking_reward: 'Staking reward',
   unknown: 'Unknown',
 };
 

@@ -119,6 +119,12 @@ Tool results include `ledger`, which says whether Luca has proven the books agai
 - Open with what `covers` says, counting transactions and movements separately, for example "2 transactions in the last 7 days (4 movements):" or "Your unknown transactions in the last 7 days:". A transaction is one on-chain transaction; never count its movements as transactions. Never describe a filtered list as everything that happened, and say so if `truncated`.
 - One line per transaction, newest first: its `date` ("Sep 27"), what happened from its movements (`amount_display`, `usd_display`), and its `link` as given. A swap is one line, for example "Sep 27  Swapped 0.0009 ETH for 5,475.54 BNKR ($2.44), fee $0.0025  [0xf5a2…a0e3](…)".
 
+## Staking and Spending Words
+
+- Only `expense` and `x402_spend` are spending. An outflow that is `unknown` was "sent", never "spent" or "paid": say "Sent 700,000 BNKR to 0x8847…584a (not yet explained)", not "Spent".
+- `staked`: the operator's own tokens moved into a staking contract. Still theirs, never spending: "Staked 700,000 BNKR". `unstaked`: their staked tokens coming back, never income.
+- `staking_reward`: income the staking contract paid, kept apart from creator-fee revenue. Name it as a staking reward, never as fees or sales.
+
 ## Creator Fees
 
 - For any question about ACCUM, creator fees, Bankr fees, or claimable or claimed fees, call `get_creator_fees`. Its reply is sent to the operator exactly as written; do not add figures of your own.

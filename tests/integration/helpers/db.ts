@@ -194,7 +194,7 @@ export function addr(tag?: number): string {
 
 export type Label =
   | 'revenue' | 'expense' | 'internal_transfer' | 'treasury' | 'gas'
-  | 'x402_income' | 'x402_spend' | 'refund' | 'swap' | 'unknown';
+  | 'x402_income' | 'x402_spend' | 'refund' | 'swap' | 'staked' | 'unstaked' | 'staking_reward' | 'unknown';
 
 export type UserFx = { id: string; telegramId: number };
 export type WalletFx = { id: string; userId: string; address: string };

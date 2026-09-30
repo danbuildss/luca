@@ -45,9 +45,9 @@ describe('config validation', () => {
 });
 
 describe('classification labels', () => {
-  it('canonical 10-label set is complete', async () => {
+  it('canonical 13-label set is complete', async () => {
     const { CLASSIFICATION_LABELS } = await import('../src/types/index.js');
-    expect(CLASSIFICATION_LABELS).toHaveLength(10);
+    expect(CLASSIFICATION_LABELS).toHaveLength(13);
     expect(CLASSIFICATION_LABELS).toContain('revenue');
     expect(CLASSIFICATION_LABELS).toContain('expense');
     expect(CLASSIFICATION_LABELS).toContain('internal_transfer');
@@ -57,6 +57,9 @@ describe('classification labels', () => {
     expect(CLASSIFICATION_LABELS).toContain('x402_spend');
     expect(CLASSIFICATION_LABELS).toContain('refund');
     expect(CLASSIFICATION_LABELS).toContain('swap');
+    expect(CLASSIFICATION_LABELS).toContain('staked');
+    expect(CLASSIFICATION_LABELS).toContain('unstaked');
+    expect(CLASSIFICATION_LABELS).toContain('staking_reward');
     expect(CLASSIFICATION_LABELS).toContain('unknown');
   });
 
