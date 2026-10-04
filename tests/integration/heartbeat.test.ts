@@ -1,10 +1,10 @@
-// Integration: portfolio alerts compare only snapshots that cover the same wallets and
-// assets with complete data (src/heartbeat). See tests/integration/helpers/db.ts.
+// Integration: daily snapshots and what they may alert about (src/heartbeat).
+// See tests/integration/helpers/db.ts.
 import { describe, it, expect } from 'vitest';
 import {
   describeDb, useIntegrationDb, seedUserWithWallet, insertWallet, insertWatchJob, sql,
 } from './helpers/db.js';
-import { detectPortfolioChanges } from '../../src/heartbeat/detector.js';
+import { detectBooksAttention } from '../../src/heartbeat/detector.js';
 import { snapshotCoverage, SNAPSHOT_ASSETS } from '../../src/heartbeat/snapshot.js';
 
 const ASSETS = [...SNAPSHOT_ASSETS];
@@ -49,85 +49,46 @@ async function balance(userId: string, walletId: string, asset: string, age = '5
 describeDb('heartbeat (integration)', () => {
   useIntegrationDb();
 
-  describe('portfolio alerts', () => {
-    it('the Sep 25 case: $20,309 to $2.48 against a snapshot from before coverage tracking fires nothing', async () => {
+  describe('overnight alerts', () => {
+    it('the Oct 4 case: holdings "down 73.7%" after a stake sends nothing', async () => {
       const { user, wallet } = await seedUserWithWallet();
-      // Written before migration 020: complete defaults to FALSE, no wallet list, no reason
-      await insertSnapshot({ userId: user.id, daysAgo: 1, total: 20309.187505, complete: false, walletIds: null, assets: null });
-      await insertSnapshot({ userId: user.id, daysAgo: 0, total: 2.479372088551099, walletIds: [wallet.id] });
+      await insertSnapshot({ userId: user.id, daysAgo: 1, total: 852.43, walletIds: [wallet.id] });
+      await insertSnapshot({ userId: user.id, daysAgo: 0, total: 224.19, walletIds: [wallet.id] });
 
-      expect(await detectPortfolioChanges(user.id)).toBe(0);
+      expect(await detectBooksAttention(user.id)).toBe(0);
       expect(await alerts(user.id)).toEqual([]);
     });
 
-    it('does not compare when the wallet set changed between the two days', async () => {
+    it('a rise sends nothing, and there is no "positive week" alert (the Monday brief says it)', async () => {
       const { user, wallet } = await seedUserWithWallet();
-      const other = await insertWallet({ userId: user.id });
-      await insertSnapshot({ userId: user.id, daysAgo: 1, total: 20000, walletIds: [wallet.id, other.id] });
-      await insertSnapshot({ userId: user.id, daysAgo: 0, total: 2.48, walletIds: [wallet.id] });
+      await insertSnapshot({ userId: user.id, daysAgo: 1, total: 1000, walletIds: [wallet.id] });
+      await insertSnapshot({ userId: user.id, daysAgo: 0, total: 5000, walletIds: [wallet.id] });
+      await sql(`UPDATE financial_heartbeat_snapshots SET net_pnl_7d = 1176.38, revenue_7d = 1180 WHERE user_id = $1`, [user.id]);
 
-      expect(await detectPortfolioChanges(user.id)).toBe(0);
+      expect(await detectBooksAttention(user.id)).toBe(0);
       expect(await alerts(user.id)).toEqual([]);
     });
 
-    it('does not compare when the asset set changed', async () => {
-      const { user, wallet } = await seedUserWithWallet();
-      await insertSnapshot({ userId: user.id, daysAgo: 1, total: 5000, walletIds: [wallet.id], assets: ['ETH', 'USDC'] });
-      await insertSnapshot({ userId: user.id, daysAgo: 0, total: 1000, walletIds: [wallet.id] });
-      expect(await detectPortfolioChanges(user.id)).toBe(0);
-    });
-
-    it('does not compare snapshots that are not on consecutive days', async () => {
-      const { user, wallet } = await seedUserWithWallet();
-      await insertSnapshot({ userId: user.id, daysAgo: 3, total: 5000, walletIds: [wallet.id] });
-      await insertSnapshot({ userId: user.id, daysAgo: 0, total: 1000, walletIds: [wallet.id] });
-      expect(await detectPortfolioChanges(user.id)).toBe(0);
-    });
-
-    it('alerts on a real drop when both days are complete and cover the same wallets and assets', async () => {
-      const { user, wallet } = await seedUserWithWallet();
-      await insertSnapshot({ userId: user.id, daysAgo: 1, total: 5000, walletIds: [wallet.id] });
-      await insertSnapshot({ userId: user.id, daysAgo: 0, total: 3000, walletIds: [wallet.id] });
-
-      expect(await detectPortfolioChanges(user.id)).toBe(1);
-      const [alert] = await alerts(user.id);
-      expect(alert.type).toBe('portfolio_down');
-      expect(alert.certainty).toBe('verified');
-      expect(alert.message).toContain('down $2000.00 (-40.0%)');
-    });
-
-    it('an incomplete day (missing price or stale balances) fires no portfolio alert', async () => {
-      const { user, wallet } = await seedUserWithWallet();
-      await insertSnapshot({ userId: user.id, daysAgo: 1, total: 5000, walletIds: [wallet.id] });
-      await insertSnapshot({
-        userId: user.id, daysAgo: 0, total: 2.48, walletIds: [wallet.id], complete: false,
-        reason: 'a live price is unavailable', createdHoursAgo: 1,
-      });
-
-      expect(await detectPortfolioChanges(user.id)).toBe(0);
-      expect(await alerts(user.id)).toEqual([]);
-    });
-
-    it('tells the operator once, as a data issue, when a day stays incomplete for 6 hours', async () => {
+    it('a day that stays incomplete sends the operator nothing', async () => {
       const { user, wallet } = await seedUserWithWallet();
       await insertSnapshot({
         userId: user.id, daysAgo: 0, total: 2.48, walletIds: [wallet.id], complete: false,
         reason: 'ETH balance is out of date', createdHoursAgo: 7,
       });
-
-      expect(await detectPortfolioChanges(user.id)).toBe(1);
-      expect(await detectPortfolioChanges(user.id)).toBe(0);
-      const [alert] = await alerts(user.id);
-      expect(alert.type).toBe('snapshot_incomplete');
-      expect(alert.certainty).toBe('data_issue');
-      expect(alert.message).toContain('ETH balance is out of date');
-      expect(alert.message).not.toMatch(/\$/);
+      expect(await detectBooksAttention(user.id)).toBe(0);
+      expect(await alerts(user.id)).toEqual([]);
     });
 
-    it('sends no incomplete notice for a row written before coverage tracking', async () => {
-      const { user } = await seedUserWithWallet();
-      await insertSnapshot({ userId: user.id, daysAgo: 0, total: 2.48, complete: false, walletIds: null, reason: null, createdHoursAgo: 12 });
-      expect(await detectPortfolioChanges(user.id)).toBe(0);
+    it('still says once a day when more than 10 transfers this week need context', async () => {
+      const { user, wallet } = await seedUserWithWallet();
+      await insertSnapshot({ userId: user.id, daysAgo: 0, total: 100, walletIds: [wallet.id] });
+      await sql(`UPDATE financial_heartbeat_snapshots SET unknown_count_7d = 12 WHERE user_id = $1`, [user.id]);
+
+      expect(await detectBooksAttention(user.id)).toBe(1);
+      expect(await detectBooksAttention(user.id)).toBe(0);
+      const [alert] = await alerts(user.id);
+      expect(alert.type).toBe('books_attention');
+      expect(alert.message).toContain('12 transfers this week still need context');
     });
   });
 

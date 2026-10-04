@@ -81,7 +81,6 @@ describeDb('ACCUM creator fees in chat (integration)', () => {
       "- Bankr's claimed figure matches the chain",
       '',
       'BNKR in 0xb540…6fdb: 5,000 ($2.50), as of TIME',
-      'Staking and rewards: not active.',
     ].join('\n'));
     expect(r.text).not.toMatch(/earned|generated/i);
   });
@@ -124,8 +123,8 @@ describeDb('ACCUM creator fees in chat (integration)', () => {
       unproven_fee_transfers: 0,
       reconciliation: { status: 'match', claimed: '0', count: 0 },
       fee_wallet_balance: { asset: 'BNKR', amount: '5000' },
-      staking: 'not_active',
-      rewards: 'not_active',
+      staking: [],
+      rewards: 'not_reported_yet',
     });
 
     // Not asked for: the summary, even if the model picks the machine format
@@ -189,6 +188,33 @@ describeDb('ACCUM creator fees in chat (integration)', () => {
       const own = (await ask(userId, 'how are the ACCUM fees?')).text;
       expect(own.match(/creator fees\*/g)).toHaveLength(1);
       expect(own).toMatch(/\nYou share this view with other Luca users \(nothing else of yours\)\.$/);
+    });
+
+    it("the owner sees what they have staked from the fee wallet; a shared view never does (Oct 4: no more 'not active')", async () => {
+      const { userId, wallet } = await ownerWithBooks();
+      const STAKE = '0x88470240ff0663faefa68b1d7621b472ddd9584a';
+      const BNKR = '0x22af33fe49fd1fa80c7149773dde5890d3c76f3b';
+      await sql(`INSERT INTO staking_contracts (address, is_staking, staking_token, reward_token, position_reader, reader_name)
+                 VALUES ($1, TRUE, $2, $2, '0x42623360', 'stakeOf(address)') ON CONFLICT (address) DO NOTHING`, [STAKE, BNKR]);
+      const stake = await insertEvent({ wallet, direction: 'out', counterparty: STAKE, asset: 'BNKR', amount: '686000', usdValue: '288' });
+      await sql(`INSERT INTO stake_checks (event_id, user_id, wallet_id, contract, verdict, amount_raw, block_number, evidence)
+                 VALUES ($1, $2, $3, $4, 'staked', 686000 * 10::numeric ^ 18, 2000, $5)`,
+        [stake.id, userId, wallet.id, STAKE, JSON.stringify({ contract: STAKE, reader: 'stakeOf(address)', block: '2000', staked_before: (700_000n * 10n ** 18n).toString(), staked_after: (1_386_000n * 10n ** 18n).toString(), principal_seen: '0', reason: 'test' })]);
+
+      responses = [calls('get_creator_fees'), say('')];
+      const own = at((await ask(userId, 'how are the ACCUM fees?')).text);
+      expect(own).toContain('Staked from 0xb540…6fdb: 1,386,000 BNKR ($693.00) in 0x8847…584a, as of TIME');
+      expect(own).not.toContain('not active');
+
+      await setFeeSourceSharing({ walletAddress: LUCA_WALLET, token: ACCUM, shared: true });
+      const other = await insertUser({ timezone: 'UTC' });
+      responses = [calls('get_creator_fees'), say('')];
+      const theirs = (await ask(other.id, 'how are the ACCUM fees?')).text;
+      expect(theirs).not.toMatch(/Staked|1,386,000|0x8847|not active/);
+      responses = [calls('get_creator_fees', { format: 'machine' }), say('')];
+      const m = (await ask(other.id, 'send the machine report')).text;
+      expect(m).toContain('"staking": "not_shared"');
+      expect(m).not.toContain('1386000');
     });
 
     it('turned off again: gone for everyone else', async () => {

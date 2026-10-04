@@ -7,7 +7,7 @@ import {
   detectUnusualGas,
   detectClassifierDegradation,
 } from './detectors.js';
-import { detectPortfolioChanges } from '../heartbeat/detector.js';
+import { detectBooksAttention } from '../heartbeat/detector.js';
 // Same staleness threshold /ops uses
 import { STALE_HOURS } from '../ops/metrics.js';
 
@@ -35,7 +35,7 @@ export async function runAlertDetectors(userId: string): Promise<number> {
     ['classifier_degradation', detectClassifierDegradation],
     // Guarded internally: fresh balances only, and complete comparable snapshots only
     ['treasury_floor', detectTreasuryFloor],
-    ['portfolio_changes', detectPortfolioChanges],
+    ['books_attention', detectBooksAttention],
     // Totals over the last 24 hours are wrong while a wallet is behind
     ...(stale ? [] : [
       ['spend_spike', detectSpendSpike],

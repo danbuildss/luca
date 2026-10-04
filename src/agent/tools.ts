@@ -14,6 +14,9 @@ import { getEventsForReview, getEventWithClassification, resolveEventRef } from 
 import { applyCorrection, describeRuleOutcome } from '../corrections/handler.js';
 import { txLink, withLink } from '../ledger/links.js';
 import { ClassificationLabel, CLASSIFICATION_LABELS, WALLET_ROLES, SUPPORTED_CHAINS } from '../types/index.js';
+import { stakedPositions } from '../staking/positions.js';
+import { getSpotPrices } from '../ingestion/price.js';
+import { setTimezone } from '../notify/timezone.js';
 import { requestAudit, auditRequestForModel, movementStatus, amountText, isMissing } from '../ledger/audit-runs.js';
 import { traceTransaction } from '../ledger/trace.js';
 import { config } from '../config.js';
@@ -29,7 +32,7 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
     type: 'function',
     function: {
       name: 'get_cash_position',
-      description: 'Get the current ETH, USDC and BNKR balances across all registered wallets, each valued in USD at live prices, plus the total, and whether Luca has finished its first read of each wallet. Use this to answer "how much do we have?", "what is our cash position?" or "what balance do you see?"',
+      description: 'Get the current ETH, USDC and BNKR balances across all registered wallets, each valued in USD at live prices, plus the total, and whether Luca has finished its first read of each wallet. Also what the operator has staked (`staked`, read from the staking contract at the last staking transfer, with its date): staked tokens are still theirs, so list them on their own line ("Staked: …") and give `total_with_staked_usd` as their holdings. Use this to answer "how much do we have?", "what is our cash position?" or "what balance do you see?"',
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
@@ -325,6 +328,20 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
   {
     type: 'function',
     function: {
+      name: 'set_timezone',
+      description: "Set the operator's timezone, when they tell you where they are or what time it is for them (\"I'm in London\", \"use Lagos time\"). Give the IANA name (e.g. Europe/London, Africa/Lagos, America/New_York). Luca uses it for times in its messages, the morning brief, and to send nothing between 22:00 and 08:00 their time. Saved straight away; the reply is sent to the operator exactly as the tool writes it.",
+      parameters: {
+        type: 'object',
+        properties: {
+          timezone: { type: 'string', description: 'IANA timezone name, e.g. Europe/London.' },
+        },
+        required: ['timezone'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'register_wallet',
       description: "Register a new wallet for tracking. Use this when the operator gives you a wallet address and asks you to watch it or start tracking it. This is a write operation.",
       parameters: {
@@ -486,8 +503,22 @@ async function runTool(
 ): Promise<ToolResult> {
   switch (toolName) {
     case 'get_cash_position': {
-      const [valued, ledger, { all }] = await Promise.all([getValuedBalances(userId), getLedgerStatus(userId), walletsNotReady(userId)]);
+      const [valued, ledger, { all }, positions] = await Promise.all([getValuedBalances(userId), getLedgerStatus(userId), walletsNotReady(userId), stakedPositions(userId)]);
       const read = new Set(valued.balances.map((b) => b.wallet_address));
+      // Staked tokens are still the operator's, listed apart from what is in the wallet.
+      // The wallets alone may not have needed a price for the staked token.
+      const prices = positions.some((p) => p.asset !== 'USDC' && valued.prices[p.asset] === null)
+        ? await getSpotPrices().catch(() => valued.prices)
+        : valued.prices;
+      const staked = positions.map((p) => {
+        const price = p.asset === 'USDC' ? 1 : prices[p.asset];
+        return {
+          address: p.wallet_address, label: p.wallet_label, asset: p.asset, amount: p.amount,
+          usd_value: price === null || price === undefined ? null : p.amount * price,
+          staking_contract: p.contract, as_of: p.as_of,
+        };
+      });
+      const stakedUsd = staked.reduce((t, s) => t + (s.usd_value ?? 0), 0);
       return {
         chain: 'Base',
         ledger,
@@ -507,7 +538,12 @@ async function runTool(
           snapshot_at: b.snapshot_at,
         })),
         total_usd: valued.balances.length > 0 ? valued.total_usd : null,
-        total_incomplete: valued.total_incomplete,
+        total_incomplete: valued.total_incomplete || staked.some((s) => s.usd_value === null),
+        ...(staked.length > 0 ? {
+          staked,
+          staked_usd: stakedUsd,
+          total_with_staked_usd: valued.balances.length > 0 ? valued.total_usd + stakedUsd : null,
+        } : {}),
         ...(valued.balances.length === 0 ? { note: "No balances read yet. Say you haven't read them yet; never $0." } : {}),
         only_base: ONLY_BASE,
         live_prices_usd: valued.prices,
@@ -748,6 +784,9 @@ async function runTool(
 
     case 'get_creator_fees':
       return { report: args.format === 'machine' ? await feeMachineReportText(userId) : await feeReport(userId) };
+
+    case 'set_timezone':
+      return { report: await setTimezone(userId, argText(args.timezone).trim()) };
 
     case 'check_transaction': {
       const hash = argText(args.hash).trim();

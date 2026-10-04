@@ -22,7 +22,7 @@ import { saveMessage } from '../../src/agent/context.js';
 import { saveBrief, markBriefSent } from '../../src/briefs/store.js';
 import { runAgent } from '../../src/agent/run.js';
 import { detectWorkerStale } from '../../src/health/detectors.js';
-import { getDistinctUserIds } from '../../src/classification/store.js';
+import { deliverWorkerStaleAlerts } from '../../src/alerts/deliver.js';
 
 if (config.NODE_ENV === 'production') {
   requireProductionConfig();
@@ -287,14 +287,9 @@ function scheduleHealthPoll() {
   healthTimer = setTimeout(() => {
     void (async () => {
       try {
-        const userIds = await getDistinctUserIds();
-        for (const userId of userIds) {
-          await detectWorkerStale(userId).catch((err: unknown) =>
-            logger.error({ err, userId }, 'Worker-stale check failed'));
-        }
-        // Worker stale alerts land in `alerts` table → delivered by deliverPendingAlerts in worker
-        // But if the worker is down, we need to deliver them here instead.
-        await sendPendingAlertsOnce();
+        // Admins only. Sent from here: a stopped worker cannot send it
+        await detectWorkerStale();
+        await deliverWorkerStaleAlerts(bot.telegram);
       } catch (err: unknown) {
         logger.error({ err }, 'Health poll error');
       }

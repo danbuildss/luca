@@ -3,6 +3,7 @@ import { txLink } from '../ledger/links.js';
 import { significant, usdDisplay } from '../books/breakdown.js';
 import { getSpotPrices } from '../ingestion/price.js';
 import { escapeLegacyMarkdown } from '../telegram/format.js';
+import { stakedPositions, type StakedPosition } from '../staking/positions.js';
 import { feeSourceStatus, sharedFeeSourceStatus, type FeeSource, type FeeSourceStatus } from './sources.js';
 
 // What Luca says about creator fees, in fixed wording written here, never the model's.
@@ -62,7 +63,7 @@ async function bnkrPrice(): Promise<number | null> {
   try { return (await getSpotPrices()).BNKR; } catch { return null; }
 }
 
-function describeOne(view: View, balance: Balance, at: (d: Date) => string, bnkrPrice: number | null): string {
+function describeOne(view: View, balance: Balance, at: (d: Date) => string, bnkrPrice: number | null, staked: StakedPosition[] = []): string {
   const s = view.status;
   const src = s.source;
   const sym = symbol(src.token_symbol);
@@ -115,7 +116,14 @@ function describeOne(view: View, balance: Balance, at: (d: Date) => string, bnkr
   if (balance) {
     lines.push(`${asset} in ${short(src.wallet_address)}: ${amount(balance.amount)}${balance.usd !== null ? ` (${usdDisplay(balance.usd)})` : ''}, as of ${at(balance.as_of)}`);
   }
-  lines.push('Staking and rewards: not active.');
+  // The owner's own staking from the fee wallet, as the staking contract reported it.
+  // Never in a shared view: it is not part of what an owner shares.
+  if (view.owned) {
+    for (const p of staked.filter((x) => x.asset === asset)) {
+      const usd = p.asset === 'BNKR' && bnkrPrice !== null ? ` (${usdDisplay(p.amount * bnkrPrice)})` : '';
+      lines.push(`Staked from ${short(src.wallet_address)}: ${amount(p.amount)} ${asset}${usd} in ${short(p.contract)}, as of ${at(p.as_of)}`);
+    }
+  }
   if (view.owned && src.shared) lines.push('You share this view with other Luca users (nothing else of yours).');
   return lines.join('\n');
 }
@@ -125,7 +133,10 @@ export async function feeReport(userId: string): Promise<string> {
   if (all.length === 0) return NO_FEE_SOURCES;
   const [at, price] = await Promise.all([clock(userId), bnkrPrice()]);
   const parts: string[] = [];
-  for (const v of all) parts.push(describeOne(v, await feeWalletBalance(v.status.source, price), at, price));
+  for (const v of all) {
+    const staked = v.owned ? await stakedPositions(userId, v.status.source.wallet_id) : [];
+    parts.push(describeOne(v, await feeWalletBalance(v.status.source, price), at, price, staked));
+  }
   return parts.join('\n\n');
 }
 
@@ -163,8 +174,13 @@ export async function feeMachineReport(userId: string, now: Date = new Date()): 
       unproven_fee_transfers: s.unclear,
       reconciliation: s.reconciliation,
       fee_wallet_balance: b ? { asset: s.source.fee_asset, amount: String(b.amount), as_of: new Date(b.as_of).toISOString() } : null,
-      staking: 'not_active',
-      rewards: 'not_active',
+      // What the staking contract reported for the fee wallet; the owner's only
+      staking: owned
+        ? (await stakedPositions(userId, s.source.wallet_id)).map((p) => ({
+          asset: p.asset, amount: String(p.amount), contract: p.contract, as_of: new Date(p.as_of).toISOString(), source: 'staking_contract',
+        }))
+        : 'not_shared',
+      rewards: 'not_reported_yet',
     });
   }
   return { report: 'luca.creator_fees.v1', generated_at: now.toISOString(), read_only: true, sources };

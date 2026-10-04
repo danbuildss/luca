@@ -1,7 +1,7 @@
 import type { Telegraf, Context, Telegram } from 'telegraf';
 import { logger } from '../logger.js';
 import { formatAddress, formatAmount, escapeLegacyMarkdown, sendMarkdownSafe } from './format.js';
-import { getQuestionsToSend, markQuestionSent, type QuestionToSend } from '../alerts/questions.js';
+import { getQuestionsToSend, markQuestionSent, notOvernight, type QuestionToSend } from '../alerts/questions.js';
 import { txLink } from '../ledger/links.js';
 import { saveMessage } from '../agent/context.js';
 
@@ -40,7 +40,7 @@ export function questionText(q: QuestionToSend): string {
 }
 
 export async function sendPendingAlerts(bot: Telegraf<Context>): Promise<void> {
-  const questions = await getQuestionsToSend();
+  const questions = notOvernight(await getQuestionsToSend());
   for (const q of questions) {
     try {
       const text = questionText(q);

@@ -286,7 +286,9 @@ describe('a change is asked about in Luca\'s words, not the model\'s', () => {
       // Sep 27: the model copied Luca's own question form, with a role nobody asked for
       'Track wallet 0x042455f9990098e11592be1fbd72e6dc68419b13 on Base as "Test" (operations)?',
       'Track wallet 0x042455f9990098e11592be1fbd72e6dc68419b13 on Base as “Test” (operations)?',
-      'Sure.\nLabel the 12 USDC you received on Sep 27 as revenue?', 'Make these 2 changes?']) {
+      'Sure.\nLabel the 12 USDC you received on Sep 27 as revenue?', 'Make these 2 changes?',
+      // Sep 30: narration of an answer before anything was confirmed
+      "I'm treating the 49.79 USDC from 0x8f10…a1b2 as revenue. I'm treating the 56.65 USDC from 0x20f6…1c3d as revenue."]) {
       expect(restatesChange(t), t).toBe(true);
     }
     for (const t of ['You paid $0.01 in network fees this week.', 'Revenue this week was $840.', '',
@@ -301,14 +303,26 @@ describe('Luca never says a change happened unless it did', () => {
 
   it('recognises a claim that a change was made, and nothing else', () => {
     for (const t of ['Confirmed. I\'ll track 0xb54081ff3f6a90a5a1057d8a5537f7f14e376fdb as "Luca wallet" on Base.', 'Done! I\'ve labeled it revenue.',
-      "I've started tracking it.", 'It is now labeled revenue.', "I'm now tracking that wallet.", 'Got it. Done.']) {
+      "I've started tracking it.", 'It is now labeled revenue.', "I'm now tracking that wallet.", 'Got it. Done.',
+      // Sep 30: after a "yes" with no question open; nothing had changed
+      "Got it. I'll treat it as a swap unless you want me to change it.",
+      "I'm treating the 49.79 USDC from 0x8f10…a1b2 as revenue.", "I'm counting that as an expense."]) {
       expect(claimsChange(t), t).toBe(true);
+    }
+    for (const t of ['If you say yes, I\'ll count it as revenue.', 'Should I treat it as revenue?', 'Once you confirm, I\'ll label it as revenue.']) {
+      expect(claimsChange(t), t).toBe(false);
     }
     for (const t of ['The gas total is small and fully confirmed.', "Tell me what it was and I'll label it.",
       'That payment has been labeled revenue since Sep 3.', "I'm tracking 2 wallets for you.", "You've done 3 swaps this week.",
       "I checked everything I've tracked across your wallets.", "I've recorded 14 transactions since Aug 27."]) {
       expect(claimsChange(t), t).toBe(false);
     }
+  });
+
+  it('Sep 30: "Yes" with no question open, and the model says it will treat it as a swap: replaced', async () => {
+    script(say("Got it. I'll treat it as a swap unless you want me to change it."));
+    const r = await runAgent({ userId: USER, userMessage: 'Yes', role: 'operator' });
+    expect(r.text).toBe(NO_CHANGE_MADE);
   });
 
   it('a claimed change with nothing made and nothing waiting is replaced', async () => {

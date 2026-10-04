@@ -30,7 +30,7 @@ describeDb('alert detectors (integration)', () => {
   useIntegrationDb();
 
   describe('detectLargeMovements', () => {
-    it('alerts on material movements in the last 24h only, once per event', async () => {
+    it('alerts on material movements in the last 24h only, once per transaction', async () => {
       const { user, wallet } = await seedUserWithWallet({ materialityUsd: 50 });
       const recentIn = await insertClassifiedEvent({ wallet, direction: 'in', label: 'revenue', amount: 100, usdValue: 100, at: '1 hour' });
       const recentOut = await insertClassifiedEvent({ wallet, direction: 'out', label: 'expense', amount: 75, usdValue: null, at: '2 hours' }); // USDC 1:1
@@ -43,9 +43,46 @@ describeDb('alert detectors (integration)', () => {
       const keys = (await sql<{ dedup_key: string }>(
         'SELECT dedup_key FROM alerts WHERE user_id = $1 ORDER BY dedup_key', [user.id],
       )).map((r) => r.dedup_key).sort();
-      expect(keys).toEqual([`large_inflow:${recentIn.id}`, `large_outflow:${recentOut.id}`].sort());
+      expect(keys).toEqual([`large_movement:${user.id}:${recentIn.hash}`, `large_movement:${user.id}:${recentOut.hash}`].sort());
 
       // Idempotent
+      expect(await detectLargeMovements(user.id)).toBe(0);
+    });
+
+    it('a swap, a stake and an unstake send no alert (the Oct 3 swap and stake)', async () => {
+      const { user, wallet } = await seedUserWithWallet({ materialityUsd: 50 });
+      const swapHash = `0x${'7283'.padEnd(64, 'a')}`;
+      const out = await insertClassifiedEvent({ wallet, direction: 'out', label: 'swap', asset: 'BNKR', amount: 832000, usdValue: 349, hash: swapHash, sourceKey: 'log:1', logIndex: 1 });
+      const back = await insertClassifiedEvent({ wallet, direction: 'in', label: 'swap', asset: 'USDC', amount: 349.12, usdValue: 349.12, hash: swapHash, sourceKey: 'log:2', logIndex: 2 });
+      await sql(`UPDATE classifications SET shape = 'swap' WHERE event_id = ANY($1::uuid[])`, [[out.id, back.id]]);
+      await insertClassifiedEvent({ wallet, direction: 'out', label: 'staked', asset: 'BNKR', amount: 686000, usdValue: 288 });
+      await insertClassifiedEvent({ wallet, direction: 'in', label: 'unstaked', asset: 'BNKR', amount: 1000, usdValue: 400 });
+
+      expect(await detectLargeMovements(user.id)).toBe(0);
+      expect(await sql('SELECT 1 FROM alerts WHERE user_id = $1', [user.id])).toEqual([]);
+    });
+
+    it('a transaction with several movements is one alert, with its time and thousands separators', async () => {
+      const { user, wallet } = await seedUserWithWallet({ materialityUsd: 50 });
+      await sql(`UPDATE users SET timezone = 'Europe/London' WHERE id = $1`, [user.id]);
+      const hash = `0x${'b1'.repeat(32)}`;
+      const to = '0x1231000000000000000000000000000000004eae';
+      await insertClassifiedEvent({ wallet, direction: 'out', label: 'expense', amount: 700, usdValue: 700, hash, counterparty: to, sourceKey: 'log:1', logIndex: 1 });
+      await insertClassifiedEvent({ wallet, direction: 'out', label: 'expense', amount: 475.57, usdValue: 475.57, hash, counterparty: to, sourceKey: 'log:2', logIndex: 2 });
+      await insertClassifiedEvent({ wallet, direction: 'out', label: 'expense', amount: 0.01, usdValue: 0.01, hash, counterparty: to, sourceKey: 'log:3', logIndex: 3 });
+
+      expect(await detectLargeMovements(user.id)).toBe(1);
+      const [alert] = await sql<{ type: string; message: string }>('SELECT type, message FROM alerts WHERE user_id = $1', [user.id]);
+      expect(alert.type).toBe('large_outflow');
+      const [title, line] = alert.message.split('\n');
+      expect(title).toBe('Large outflow');
+      expect(line).toMatch(/^\$1,175\.58 in USDC went out to 0x1231…4eae, on 0x[0-9a-f]{4}…[0-9a-f]{4}, [A-Z][a-z]{2} \d{1,2}, \d{2}:\d{2}\.$/);
+    });
+
+    it('an event already alerted on before this change is not alerted on again', async () => {
+      const { user, wallet } = await seedUserWithWallet({ materialityUsd: 50 });
+      const ev = await insertClassifiedEvent({ wallet, direction: 'in', label: 'revenue', amount: 100, usdValue: 100 });
+      await sql(`INSERT INTO alerts (user_id, type, message, dedup_key) VALUES ($1, 'large_inflow', 'old', $2)`, [user.id, `large_inflow:${ev.id}`]);
       expect(await detectLargeMovements(user.id)).toBe(0);
     });
 

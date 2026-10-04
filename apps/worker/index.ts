@@ -83,13 +83,15 @@ async function runCycle(): Promise<void> {
   }
 
   if (!shuttingDown) {
+    // The server's disk, told to admins once a cycle (not per operator)
+    await detectDiskPressure().catch((err: unknown) => logger.error({ err }, 'Disk pressure check failed'));
     const userIds = await getDistinctUserIds();
     const steps: Array<[string, (userId: string) => Promise<unknown>]> = [
       ['questions', refreshQuestionGroups],
       ['heartbeat snapshot', takeHeartbeatSnapshot],
       ['alert detectors', runAlertDetectors],
+      // Told to admins only, whoever's wallet it is
       ['stale wallets', detectStaleWallets],
-      ['disk pressure', detectDiskPressure],
       // A new wallet's books are ready (or its first read could not finish)
       ['wallet onboarding', notifyWalletReadiness],
       ['alert delivery', deliverPendingAlerts],

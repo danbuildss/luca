@@ -94,6 +94,22 @@ describeDb('changes by chat, no buttons (integration)', () => {
     expect((await label(ev.id)).label).toBe('unknown');
   });
 
+  it('Sep 30: one answer about the 49.79 USDC; the model narrates "I\'m treating" both transfers. Only Luca\'s one question is sent', async () => {
+    const { user, wallet } = await seedUserWithWallet();
+    const asked = await insertClassifiedEvent({ wallet, direction: 'in', counterparty: '0x8f10000000000000000000000000000000000001', amount: 49.79, usdValue: 49.79, label: 'unknown' });
+    const other = await insertClassifiedEvent({ wallet, direction: 'in', counterparty: '0x20f6000000000000000000000000000000000002', amount: 56.65, usdValue: 56.65, label: 'unknown' });
+    responses = [
+      calls(['apply_correction', { event_id: asked.id, new_label: 'revenue' }]),
+      say("I'm treating the 49.79 USDC from 0x8f10…0001 as revenue. I'm treating the 56.65 USDC from 0x20f6…0002 as revenue."),
+    ];
+    const r = await says(user.id, 'Rev from token sales');
+    expect(r.text).toMatch(/^Label the 49\.79 USDC you received on .+ as revenue\?$/);
+    expect(r.text).not.toMatch(/treating|56\.65/);
+    expect(await sql(`SELECT 1 FROM label_proposals WHERE user_id = $1 AND status = 'pending'`, [user.id])).toHaveLength(1);
+    expect((await label(asked.id)).label).toBe('unknown');
+    expect((await label(other.id)).label).toBe('unknown');
+  });
+
   it('keeps the answer to anything else they asked, and ends with the question', async () => {
     const { user, wallet } = await seedUserWithWallet();
     const ev = await insertClassifiedEvent({ wallet, direction: 'in', amount: 12, usdValue: 12, label: 'unknown' });
