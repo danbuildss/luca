@@ -28,6 +28,37 @@ export async function saveBrief(params: {
   return res.rows[0].id;
 }
 
+// A morning with nothing to say: done for the day, not sent (migration 029)
+export async function markBriefSkipped(briefId: string): Promise<void> {
+  await query(`UPDATE briefs SET skipped_at = NOW() WHERE id = $1`, [briefId]);
+}
+
+// What the operator held at this brief, for the next one to compare against
+export async function saveBriefHoldings(briefId: string, holdings: unknown): Promise<void> {
+  await query(`UPDATE briefs SET holdings = $2 WHERE id = $1`, [briefId, holdings === null ? null : JSON.stringify(holdings)]);
+}
+
+// Where the next morning message starts: the last one sent or skipped, of either type
+export async function lastMorning(userId: string): Promise<{ at: Date; holdings: unknown } | null> {
+  const row = (await query<{ at: Date; holdings: unknown }>(
+    `SELECT COALESCE(sent_at, skipped_at) AS at, holdings FROM briefs
+     WHERE user_id = $1 AND (sent_at IS NOT NULL OR skipped_at IS NOT NULL)
+     ORDER BY COALESCE(sent_at, skipped_at) DESC LIMIT 1`,
+    [userId],
+  )).rows[0];
+  return row ?? null;
+}
+
+// The holdings reading closest to `before` (at or earlier), for the week's comparison
+export async function holdingsBefore(userId: string, before: Date): Promise<unknown> {
+  return (await query<{ holdings: unknown }>(
+    `SELECT holdings FROM briefs
+     WHERE user_id = $1 AND holdings IS NOT NULL AND COALESCE(sent_at, skipped_at) <= $2
+     ORDER BY COALESCE(sent_at, skipped_at) DESC LIMIT 1`,
+    [userId, before],
+  )).rows[0]?.holdings ?? null;
+}
+
 export async function markBriefSent(briefId: string, telegramMessageId: number): Promise<void> {
   await query(
     `UPDATE briefs SET sent_at = NOW(), telegram_message_id = $1 WHERE id = $2`,
@@ -51,7 +82,7 @@ export async function updateBriefContent(params: {
 }
 
 export type BriefSlotStatus = {
-  sent: boolean;               // a brief of this type was sent since the slot opened
+  sent: boolean;               // a brief of this type was sent (or skipped as quiet) since the slot opened
   pendingBriefId: string | null; // latest unsent row created since the slot opened
 };
 
@@ -71,13 +102,13 @@ export async function getBriefSlotStatus(params: {
        EXISTS (
          SELECT 1 FROM briefs b
          WHERE b.user_id = $1 AND b.type = $2
-           AND b.sent_at IS NOT NULL
-           AND (b.sent_at AT TIME ZONE $5::text) >= ($3::date + $4::time)
+           AND COALESCE(b.sent_at, b.skipped_at) IS NOT NULL
+           AND (COALESCE(b.sent_at, b.skipped_at) AT TIME ZONE $5::text) >= ($3::date + $4::time)
        ) AS sent,
        (
          SELECT b.id FROM briefs b
          WHERE b.user_id = $1 AND b.type = $2
-           AND b.sent_at IS NULL
+           AND b.sent_at IS NULL AND b.skipped_at IS NULL
            AND (b.created_at AT TIME ZONE $5::text) >= ($3::date + $4::time)
          ORDER BY b.created_at DESC
          LIMIT 1

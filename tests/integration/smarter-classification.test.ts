@@ -29,7 +29,8 @@ import {
   refreshQuestionGroups, getQuestionsToSend, markQuestionSent, labelQuestionGroup, skipQuestionGroup,
   getOpenUnknowns,
 } from '../../src/alerts/questions.js';
-import { questionText } from '../../src/telegram/alerts.js';
+import { askItem } from '../../src/alerts/ask.js';
+import { namesFor } from '../../src/books/names.js';
 import { answerProposal } from '../../src/corrections/proposals.js';
 
 const UNISWAP = '0x2626664c2603336e57b271c5c0b26f421741e481';
@@ -260,7 +261,8 @@ describeDb('smarter classification (integration)', () => {
 
       const qs = await mine(user.id);
       expect(qs).toHaveLength(1);
-      expect(questionText(qs[0])).toMatch(/^I have 4 similar USDC payments to `0x0+[0-9a-f]+…[0-9a-f]+` that still need context \(\$1,240\.00 total, \w+ \d+ to \w+ \d+\)\. They look related\. What were they for\?$/);
+      const day = (d: Date) => new Date(d).toISOString().slice(0, 10);
+      expect(askItem(qs[0], await namesFor(user.id), day)).toMatch(/^4 USDC payments to 0x0+[0-9a-f]*…[0-9a-f]{4} \(\$1,240\.00 total\), [\d-]+ to [\d-]+$/);
 
       const answer = await labelQuestionGroup(qs[0].id, user.id, 'expense');
       expect(answer).toMatchObject({ ok: true, labeled: 4, rule: { kind: 'learned' } });

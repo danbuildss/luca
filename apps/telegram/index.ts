@@ -12,14 +12,12 @@ import { handleGoldSet } from '../../src/telegram/commands/goldset.js';
 import { handleOps } from '../../src/telegram/commands/ops.js';
 import { touchUserActivity } from '../../src/ops/db.js';
 import { handleCallback } from '../../src/telegram/callbacks.js';
-import { sendPendingAlerts } from '../../src/telegram/alerts.js';
 import { replyMarkdownSafe, replyPlainWithLinks, sendPlainWithLinks } from '../../src/telegram/format.js';
-import { UserRateLimiter, singleFlight } from '../../src/telegram/ratelimit.js';
+import { UserRateLimiter } from '../../src/telegram/ratelimit.js';
 import { generateDailyBrief, generateWeeklyBrief } from '../../src/briefs/generate.js';
 import { launchWithRetry } from '../../src/telegram/launch.js';
 import { setAuditNotifier, recoverAudits } from '../../src/ledger/audit-runs.js';
 import { saveMessage } from '../../src/agent/context.js';
-import { saveBrief, markBriefSent } from '../../src/briefs/store.js';
 import { runAgent } from '../../src/agent/run.js';
 import { detectWorkerStale } from '../../src/health/detectors.js';
 import { deliverWorkerStaleAlerts } from '../../src/alerts/deliver.js';
@@ -77,23 +75,12 @@ bot.command('brief', async (ctx) => {
   void touchUserActivity(user.userId);
   await ctx.reply(`Generating ${type} brief…`);
   try {
-    const now = new Date();
-    const periodDays = type === 'weekly' ? 7 : 1;
-    const periodStart = new Date(now.getTime() - periodDays * 24 * 60 * 60 * 1000);
+    // On request: a reply, not a morning message. Not stored, so the next morning still
+    // starts where the last one ended
     const content = type === 'weekly'
-      ? await generateWeeklyBrief(user.userId)
-      : await generateDailyBrief(user.userId);
-
-    const briefId = await saveBrief({
-      userId: user.userId,
-      type,
-      content,
-      periodStart,
-      periodEnd: now,
-    });
-
-    const msg = await replyMarkdownSafe(ctx, content);
-    if (msg) await markBriefSent(briefId, msg.message_id);
+      ? await generateWeeklyBrief(user.userId, user.timezone)
+      : await generateDailyBrief(user.userId, user.timezone);
+    await replyMarkdownSafe(ctx, content);
   } catch (err) {
     logger.error({ err, userId: user.userId }, '/brief command failed');
     await ctx.reply('Failed to generate brief — try again shortly.');
@@ -256,27 +243,8 @@ process.on('unhandledRejection', (err) => {
   logger.error({ err }, 'Unhandled promise rejection');
 });
 
-// ---------------------------------------------------------------------------
-// Alert polling — checks for unsent counterparty alerts every 30s
-// ---------------------------------------------------------------------------
-let alertTimer: ReturnType<typeof setTimeout> | null = null;
-
-// Alert poll and health poll both deliver alerts; never let two sends overlap
-// (overlap = the same unsent alert delivered twice).
-const sendPendingAlertsOnce = singleFlight(() => sendPendingAlerts(bot));
-
-function scheduleAlertPoll() {
-  alertTimer = setTimeout(() => {
-    void (async () => {
-      try {
-        await sendPendingAlertsOnce();
-      } catch (err: unknown) {
-        logger.error({ err }, 'Alert polling error');
-      }
-      scheduleAlertPoll();
-    })();
-  }, 30_000);
-}
+// Questions about transfers Luca could not place are asked in the morning message
+// (src/briefs/scheduler.ts), or inside a large transfer's alert; never one by one.
 
 // ---------------------------------------------------------------------------
 // Health polling — checks worker heartbeat every 5 min
@@ -349,7 +317,6 @@ async function start() {
   const recovered = await recoverAudits();
   if (recovered > 0) logger.info({ recovered }, 'Book checks interrupted by the restart were picked up');
 
-  scheduleAlertPoll();
   scheduleHealthPoll();
 
   if (config.NODE_ENV === 'production') {
@@ -384,7 +351,6 @@ process.on('SIGTERM', () => {
   void (async () => {
     shuttingDown = true;
     logger.info('SIGTERM received — bot shutting down');
-    if (alertTimer) clearTimeout(alertTimer);
     if (healthTimer) clearTimeout(healthTimer);
     bot.stop('SIGTERM');
     await closeDb();
@@ -395,7 +361,6 @@ process.on('SIGTERM', () => {
 process.on('SIGINT', () => {
   void (async () => {
     shuttingDown = true;
-    if (alertTimer) clearTimeout(alertTimer);
     if (healthTimer) clearTimeout(healthTimer);
     bot.stop('SIGINT');
     await closeDb();

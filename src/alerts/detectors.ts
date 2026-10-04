@@ -4,6 +4,8 @@ import { formatAddress } from '../telegram/format.js';
 import { getHighConfidenceErrorRate } from '../quality/metrics.js';
 import { txLink } from '../ledger/links.js';
 import { adminUserIds, ownerWords } from '../health/detectors.js';
+import { namesFor, ownWalletName } from '../books/names.js';
+import { markAskedByAlert } from './questions.js';
 
 type AlertType =
   | 'large_inflow'
@@ -121,6 +123,7 @@ type MovementRow = {
   wallet_label: string | null;
   wallet_address: string;
   timezone: string;
+  label: string;
 };
 
 export async function detectLargeMovements(userId: string): Promise<number> {
@@ -128,7 +131,7 @@ export async function detectLargeMovements(userId: string): Promise<number> {
     `SELECT
        ne.id AS event_id, ne.hash, ne.direction, ne.asset, (${USD})::text AS usd,
        ne.from_address, ne.to_address, ne.block_time,
-       w.label AS wallet_label, w.address AS wallet_address, u.timezone
+       w.label AS wallet_label, w.address AS wallet_address, u.timezone, c.label::text AS label
      FROM classifications c
      JOIN normalized_events ne ON ne.id = c.event_id
      JOIN wallets w ON w.id = ne.wallet_id
@@ -160,6 +163,7 @@ export async function detectLargeMovements(userId: string): Promise<number> {
   const byTx = new Map<string, MovementRow[]>();
   for (const row of res.rows) byTx.set(row.hash, [...(byTx.get(row.hash) ?? []), row]);
 
+  const name = byTx.size > 0 ? await namesFor(userId) : null;
   let count = 0;
   for (const [hash, rows] of byTx) {
     const usdIn = rows.filter((r) => r.direction === 'in').reduce((t, r) => t + parseFloat(r.usd), 0);
@@ -173,17 +177,18 @@ export async function detectLargeMovements(userId: string): Promise<number> {
     const type: AlertType = direction === 'in' ? 'large_inflow' : 'large_outflow';
     const counterparties = [...new Set(legs.map((r) => (direction === 'in' ? r.from_address : r.to_address ?? '')))];
     const assets = [...new Set(legs.map((r) => r.asset ?? 'tokens'))];
-    const who = counterparties.length === 1 && counterparties[0] ? formatAddress(counterparties[0]) : `${counterparties.length} addresses`;
-    const walletHint = first.wallet_label
-      ? `${formatAddress(first.wallet_address)} (${first.wallet_label})`
-      : formatAddress(first.wallet_address);
+    const who = counterparties.length === 1 && counterparties[0] ? name!(counterparties[0], direction) : `${counterparties.length} addresses`;
+    const walletHint = ownWalletName(first.wallet_label, first.wallet_address);
     const verb = direction === 'in' ? 'came in from' : 'went out to';
+    // Not placed yet: the alert asks itself, and the morning message will not ask again
+    const asks = legs.every((r) => r.label === 'unknown');
 
     const message = [
       type === 'large_inflow' ? 'Large inflow' : 'Large outflow',
       `${money(total)} in ${assets.join(' and ')} ${verb} ${who}, on ${walletHint}, ${whenText(first.block_time, first.timezone)}.`,
       // Tappable on BaseScan when delivered (src/telegram/format.ts)
       `Transaction: ${txLink(hash)}`,
+      ...(asks ? ['', 'What was it for?'] : []),
     ].join('\n');
 
     const inserted = await insertAlert({
@@ -198,10 +203,14 @@ export async function detectLargeMovements(userId: string): Promise<number> {
         assets,
         direction,
         counterparties,
+        asks,
       },
       dedupKey: `large_movement:${userId}:${hash}`,
     });
-    if (inserted) count++;
+    if (inserted) {
+      count++;
+      if (asks) for (const cp of counterparties) if (cp) await markAskedByAlert(userId, cp, direction);
+    }
   }
   return count;
 }

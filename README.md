@@ -22,7 +22,7 @@ Website: [askluca.xyz](https://askluca.xyz) · Status: invite-only beta · Licen
 - Looks at each transaction as a whole: network fees, moves between your own wallets and swaps (one asset converted into another, which is neither income nor spending) are recognised from the transaction itself.
 - Learns from your answers: tell it once what an address is and it labels that address's earlier and future transfers the same way. It never learns a rule from an exchange contract, and a correction that contradicts a rule switches the rule off.
 - Uses AI only as a last resort, and marks those labels as provisional until you or a rule confirms them. Totals show how much of them is a guess.
-- Asks about unknown transfers in groups ("4 outgoing USDC payments to 0xabc…, $1,240 total"), at most three questions a day; small ones wait for the daily brief.
+- Asks about unknown transfers in groups ("4 USDC payments to 0xabc… ($1,240.00 total)"), once, as one numbered list in the morning message (at most three a day); a large one is asked about in its own alert. Small ones get one line on Mondays.
 
 **Prices from the chain itself**
 - ETH at Chainlink's ETH/USD price at the transaction's block.
@@ -32,7 +32,7 @@ Website: [askluca.xyz](https://askluca.xyz) · Status: invite-only beta · Licen
 
 **Answers in chat**
 - "What does the last month look like?", "Where does my gas come from?", "What was that $500 on Tuesday?"
-- Daily and weekly briefs, alerts on material changes, and a Confirm / Cancel step before anything is changed.
+- One morning message, only when something happened (the week's on Mondays), alerts on material changes, nothing between 22:00 and 08:00 in the operator's timezone, and a yes/no question before anything is changed.
 
 ## What Luca does not do
 

@@ -102,12 +102,13 @@ export async function buildSystemPrompt(userId: string, role: 'operator' | 'admi
     const qLines = questions.map((q, i) =>
       `${i + 1}. yes/no question id ${q.id}, asked ${at(q.created_at)} UTC: ${sanitizePromptText(q.question.split('\n')[0], 300)}`);
     const gLines = groups.map((g) =>
-      `- group id ${g.id}, asked ${at(g.sent_at)} UTC: ${g.event_count} ${sanitizePromptText(g.asset ?? 'ETH', 20)} ${g.direction === 'in' ? 'transfers from' : 'payments to'} ${sanitizePromptText(g.counterparty_address, 100)}, $${g.total_usd} total, ${at(g.first_at).slice(0, 10)} to ${at(g.last_at).slice(0, 10)}`);
+      `- group id ${g.id}, asked ${at(g.sent_at)} UTC${g.asked_item ? ` as item ${g.asked_item} of that list` : ''}: ${g.event_count} ${sanitizePromptText(g.asset ?? 'ETH', 20)} ${g.direction === 'in' ? 'transfers from' : 'payments to'} ${sanitizePromptText(g.counterparty_address, 100)}, $${g.total_usd} total, ${at(g.first_at).slice(0, 10)} to ${at(g.last_at).slice(0, 10)}`);
     parts.push([
       '\n## Open Questions\n',
       'You asked the operator these and they have not answered. Nothing changes until they do.',
       '- A yes/no question is answered with answer_proposal, only when their message clearly answers it ("yes, update those 6 payments", "no, leave the old ones"). Relay the result as given.',
       '- A group of transfers is answered with label_question_group when they say what the transfers were ("those are expenses", "that was infrastructure" = expense), or skip_question_group when they do not know. Luca then asks them to confirm.',
+      '- Luca asks about transfers as one numbered list in its morning message. "1 was a swap, 2 was revenue" answers item 1 and item 2 of the latest list: one label_question_group call per item. A number with no matching item: ask which transfer they mean.',
       '- If it is unclear which question they mean, ask. Never answer one for them.',
       '',
       '<data>',

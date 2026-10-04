@@ -76,7 +76,7 @@ describeDb('alert detectors (integration)', () => {
       expect(alert.type).toBe('large_outflow');
       const [title, line] = alert.message.split('\n');
       expect(title).toBe('Large outflow');
-      expect(line).toMatch(/^\$1,175\.58 in USDC went out to 0x1231…4eae, on 0x[0-9a-f]{4}…[0-9a-f]{4}, [A-Z][a-z]{2} \d{1,2}, \d{2}:\d{2}\.$/);
+      expect(line).toMatch(/^\$1,175\.58 in USDC went out to 0x1231…4eae, on your wallet 0x[0-9a-f]{4}…[0-9a-f]{4}, [A-Z][a-z]{2} \d{1,2}, \d{2}:\d{2}\.$/);
     });
 
     it('an event already alerted on before this change is not alerted on again', async () => {

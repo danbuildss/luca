@@ -4,18 +4,21 @@ import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { sendMarkdownSafe } from '../telegram/format.js';
 import {
-  getAllBriefUsers, saveBrief, markBriefSent, updateBriefContent, getBriefSlotStatus,
-  type BriefType, type BriefUser,
+  getAllBriefUsers, saveBrief, markBriefSent, markBriefSkipped, saveBriefHoldings, updateBriefContent,
+  getBriefSlotStatus, lastMorning, holdingsBefore, type BriefType, type BriefUser,
 } from './store.js';
-import { generateDailyBrief, generateWeeklyBrief } from './generate.js';
+import { buildMorning, type Holdings } from './generate.js';
+import { getQuestionsToSend, markQuestionSent } from '../alerts/questions.js';
+import { saveMessage } from '../agent/context.js';
 
 // Give up on a slot after this many failed attempts (e.g. user blocked the bot)
 // so we don't regenerate + resend every minute all day. Resets on restart.
 const MAX_ATTEMPTS_PER_SLOT = 5;
 
 const DEFAULT_BRIEF_TIME = '08:00';
+const DAY_MS = 24 * 60 * 60 * 1000;
 
-type LocalNow = {
+export type LocalNow = {
   timezone: string; // validated IANA zone (falls back to UTC)
   date: string;     // YYYY-MM-DD
   time: string;     // HH:MM
@@ -23,7 +26,7 @@ type LocalNow = {
 };
 
 // Current date / time / weekday in the user's timezone
-function localNow(timezone: string, now: Date): LocalNow {
+export function localNow(timezone: string, now: Date): LocalNow {
   let tz = timezone;
   let parts: Intl.DateTimeFormatPart[];
   try {
@@ -67,10 +70,16 @@ function recordFailure(key: string, date: string): void {
   attempts.set(key, { date, count: attemptCount(key, date) + 1 });
 }
 
-// Sends today's brief of `type` if its slot is open and it hasn't been sent yet.
-// A saved-but-unsent row is reused on retry rather than inserting a new one.
-async function deliverIfDue(params: {
-  telegram: Telegram;
+function asHoldings(v: unknown): Holdings | null {
+  const h = v as Holdings | null;
+  return h && typeof h.at === 'string' && h.assets && typeof h.assets === 'object' ? h : null;
+}
+
+// Sends this morning's message of `type` if its slot is open and it hasn't gone out (or
+// been skipped as quiet) yet. A saved-but-unsent row is reused on retry. A morning with
+// nothing to say is marked skipped: nothing is sent.
+export async function deliverIfDue(params: {
+  telegram: Pick<Telegram, 'sendMessage'>;
   user: BriefUser;
   local: LocalNow;
   briefTime: string;
@@ -90,32 +99,52 @@ async function deliverIfDue(params: {
   });
   if (status.sent) return;
 
-  const periodDays = type === 'weekly' ? 7 : 1;
-  const periodStart = new Date(now.getTime() - periodDays * 24 * 60 * 60 * 1000);
-  const periodEnd = new Date(now);
+  const weekly = type === 'weekly';
+  const periodDays = weekly ? 7 : 1;
+  const last = await lastMorning(user.userId);
+  // Since the last morning message (sent or skipped), at most a week back
+  const floor = new Date(now.getTime() - 7 * DAY_MS);
+  const fallback = new Date(now.getTime() - periodDays * DAY_MS);
+  const since = weekly ? fallback : last && new Date(last.at) > floor ? new Date(last.at) : fallback;
+  const prev = weekly
+    ? asHoldings(await holdingsBefore(user.userId, new Date(now.getTime() - 6.5 * DAY_MS)))
+    : asHoldings(last?.holdings);
 
   try {
-    const content = type === 'weekly'
-      ? await generateWeeklyBrief(user.userId, local.timezone)
-      : await generateDailyBrief(user.userId, local.timezone);
+    const asks = await getQuestionsToSend(user.userId);
+    const m = await buildMorning(user.userId, { timezone: local.timezone, since, now, prev, asks, weekly });
 
     let briefId: string;
     if (status.pendingBriefId) {
       briefId = status.pendingBriefId;
-      await updateBriefContent({ briefId, content, periodStart, periodEnd });
+      await updateBriefContent({ briefId, content: m.text ?? '', periodStart: since, periodEnd: now });
     } else {
-      briefId = await saveBrief({ userId: user.userId, type, content, periodStart, periodEnd });
+      briefId = await saveBrief({ userId: user.userId, type, content: m.text ?? '', periodStart: since, periodEnd: now });
+    }
+    await saveBriefHoldings(briefId, m.holdings);
+
+    if (!m.text) {
+      await markBriefSkipped(briefId);
+      attempts.delete(key);
+      logger.info({ userId: user.userId, briefId, type }, 'Quiet morning: nothing sent');
+      return;
     }
 
     const msg = await sendMarkdownSafe(
       (text, extra) => telegram.sendMessage(
         user.telegramId, text, extra as Parameters<Telegram['sendMessage']>[2],
       ),
-      content,
+      m.text,
     );
-    if (msg) await markBriefSent(briefId, msg.message_id);
+    if (msg) {
+      await markBriefSent(briefId, msg.message_id);
+      // Numbered as in the message, so "1 was a swap" finds its transfer
+      for (const [i, q] of m.asked.entries()) await markQuestionSent(q.id, msg.message_id, m.asked.length > 1 ? i + 1 : null);
+      // In the conversation, so an answer ("1 was a swap") has its context
+      if (m.asked.length > 0) await saveMessage({ userId: user.userId, role: 'assistant', content: m.text });
+    }
     attempts.delete(key);
-    logger.info({ userId: user.userId, briefId, type }, 'Brief sent');
+    logger.info({ userId: user.userId, briefId, type, asked: m.asked.length }, 'Morning message sent');
   } catch (err) {
     recordFailure(key, local.date);
     logger.error(
@@ -151,13 +180,8 @@ export function startBriefScheduler(): void {
           const briefTime = normalizeBriefTime(user.briefTime);
           if (local.time < briefTime) continue; // today's slot not open yet
 
-          // Daily brief — every day once brief_time has passed
-          await deliverIfDue({ telegram, user, local, briefTime, type: 'daily', now });
-
-          // Weekly brief — Mondays only, once brief_time has passed
-          if (local.weekday === 'Mon') {
-            await deliverIfDue({ telegram, user, local, briefTime, type: 'weekly', now });
-          }
+          // One morning message: the week's on Mondays, the day's otherwise
+          await deliverIfDue({ telegram, user, local, briefTime, type: local.weekday === 'Mon' ? 'weekly' : 'daily', now });
         } catch (err) {
           logger.error({ err, userId: user.userId }, 'Brief check failed for user');
         }

@@ -7,6 +7,7 @@ import { answerProposal, labelWords, type ProposalAnswer } from '../corrections/
 import { describeRuleOutcome } from '../corrections/handler.js';
 import { labelQuestionGroup } from '../alerts/questions.js';
 import { prepareWriteAction, executeTool } from './tools.js';
+import { isAddressLike } from '../books/names.js';
 
 // Changes the operator asks for in chat ("0x4586… was revenue", "track wallet 0x…",
 // "those 4 payments are expenses") never happen on the model's word. The model's tool
@@ -52,7 +53,9 @@ export async function describeChange(userId: string, tool: ChangeTool, args: Rec
       ? `the ${amount} you ${ev.direction === 'in' ? 'received' : 'sent'} on ${day(ev.block_time)} (${txLink(ev.hash)})`
       : 'that transfer';
     const label = labelWords(String(args.new_label));
-    const name = str(args.counterparty_name);
+    // A name that is only an address names nothing ("named the recipient "0x8847…584a"")
+    const given = str(args.counterparty_name);
+    const name = given && !isAddressLike(given) ? given : null;
     const naming = name && ev ? `, and call the ${ev.direction === 'in' ? 'sender' : 'recipient'} ${quoted(name)}` : '';
     return { tool, args, ask: `Label ${what} as ${label}${naming}`, done: `Labeled ${what} as ${label}${naming.replace(', and call', ', and named')}` };
   }
