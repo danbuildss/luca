@@ -2,6 +2,7 @@ import { pool, query } from '../db.js';
 import { logger } from '../logger.js';
 import { usdValueSql } from '../ingestion/assets.js';
 import type { ClassificationLabel } from '../types/index.js';
+import { isQuietHours } from '../notify/quiet-hours.js';
 import { applyCorrection, type RuleOutcome } from '../corrections/handler.js';
 import { relabelEvents } from '../corrections/store.js';
 
@@ -127,7 +128,13 @@ export type QuestionToSend = {
   // The single transfer, when the group has one
   amount: string | null;
   hash: string | null;
+  timezone: string;
 };
+
+// Questions are held overnight in the operator's timezone (src/notify/quiet-hours.ts)
+export function notOvernight(questions: QuestionToSend[], now: Date = new Date()): QuestionToSend[] {
+  return questions.filter((q) => !isQuietHours(q.timezone, now));
+}
 
 // Questions that should go out now: big enough (or unpriced), not asked recently (or
 // grown since), within each operator's daily limit, biggest first.
@@ -137,7 +144,7 @@ export async function getQuestionsToSend(): Promise<QuestionToSend[]> {
        SELECT user_id, COUNT(*)::int AS n FROM question_groups
        WHERE sent_at >= NOW() - INTERVAL '24 hours' GROUP BY user_id
      ), eligible AS (
-       SELECT qg.*, u.telegram_id::text AS telegram_id,
+       SELECT qg.*, u.telegram_id::text AS telegram_id, u.timezone,
               ROW_NUMBER() OVER (PARTITION BY qg.user_id ORDER BY qg.total_usd DESC, qg.last_at DESC) AS rn
        FROM question_groups qg
        JOIN users u ON u.id = qg.user_id
@@ -145,7 +152,7 @@ export async function getQuestionsToSend(): Promise<QuestionToSend[]> {
          AND (qg.total_usd >= $1 OR qg.unpriced_count > 0)
          AND (qg.sent_at IS NULL OR qg.sent_at <= NOW() - ($2::int * INTERVAL '1 day') OR ${DOUBLED('qg')})
      )
-     SELECT e.id, e.user_id, e.telegram_id, e.counterparty_address, e.direction, e.asset,
+     SELECT e.id, e.user_id, e.telegram_id, e.timezone, e.counterparty_address, e.direction, e.asset,
             e.event_count, e.total_usd::text AS total_usd, e.unpriced_count, e.first_at, e.last_at,
             one.amount, one.hash
      FROM eligible e

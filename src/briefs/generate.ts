@@ -13,12 +13,15 @@ const USD_OR_ZERO = `COALESCE(${usdValueSql('ne')}, 0)`;
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-function pct(current: number, prior: number): string {
-  if (prior === 0) return current > 0 ? '+∞%' : '—';
+// Null when there is nothing to compare with (a zero day or week): never "∞%" or "—"
+function pct(current: number, prior: number): string | null {
+  if (roundsToZero(prior)) return null;
   // abs() so a negative prior (e.g. net loss) doesn't flip the sign of the change
   const change = ((current - prior) / Math.abs(prior)) * 100;
   return `${change >= 0 ? '+' : ''}${change.toFixed(0)}%`;
 }
+
+const vsPriorWeek = (change: string | null): string => (change ? `${change} vs prior week` : '');
 
 // Unsigned magnitude — callers prefix the sign for fixed-direction lines
 function usd(amount: number): string {
@@ -202,9 +205,9 @@ export async function generateDailyBrief(userId: string, timezone?: string): Pro
       ['Gas', signedUsd(-today.gas_usdc, '-'), ''],
       ['Net', signedUsd(today.net_usdc), ''],
     ]),
-    ``,
-    `Compared with yesterday: ${revChange} revenue, ${expChange} expenses.`,
   ];
+  const compared = [revChange && `${revChange} revenue`, expChange && `${expChange} expenses`].filter(Boolean);
+  if (compared.length > 0) lines.push(``, `Compared with yesterday: ${compared.join(', ')}.`);
 
   appendCounterpartiesAndUnknowns(lines, topCounterparties, open, today.provisional_count);
   return lines.join('\n');
@@ -245,10 +248,10 @@ export async function generateWeeklyBrief(userId: string, timezone?: string): Pr
     ``,
     ...(lead ? [lead, ``] : []),
     figuresBlock([
-      ['Revenue', signedUsd(thisWeek.revenue_usdc), `${revChange} vs prior week`],
-      ['Expenses', signedUsd(-thisWeek.expenses_usdc, '-'), `${expChange} vs prior week`],
+      ['Revenue', signedUsd(thisWeek.revenue_usdc), vsPriorWeek(revChange)],
+      ['Expenses', signedUsd(-thisWeek.expenses_usdc, '-'), vsPriorWeek(expChange)],
       ['Gas', signedUsd(-thisWeek.gas_usdc, '-'), ''],
-      ['Net', signedUsd(thisWeek.net_usdc), `${netChange} vs prior week`],
+      ['Net', signedUsd(thisWeek.net_usdc), vsPriorWeek(netChange)],
     ]),
   ];
 

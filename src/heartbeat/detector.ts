@@ -1,8 +1,6 @@
 import { query } from '../db.js';
-import { logger } from '../logger.js';
-import { getPnlSummary } from '../books/query.js';
 
-type HeartbeatAlertType = 'portfolio_up' | 'portfolio_down' | 'pnl_positive' | 'books_attention' | 'snapshot_incomplete';
+type HeartbeatAlertType = 'books_attention';
 export type Certainty = 'verified' | 'suspected' | 'data_issue';
 
 type NewAlert = {
@@ -24,9 +22,6 @@ async function insertAlert(alert: NewAlert): Promise<boolean> {
   );
   return res.rows.length > 0;
 }
-
-// Hours a day's snapshot may stay incomplete before the operator is told
-const INCOMPLETE_NOTICE_HOURS = 6;
 
 type SnapshotRow = {
   snapshot_date: string;
@@ -67,110 +62,25 @@ export function incomparable(latest: SnapshotRow, prev: SnapshotRow | undefined)
   return null;
 }
 
-function fmt(n: number): string {
-  return n.toFixed(2);
-}
-
-// Compares the two most recent heartbeat snapshots and fires alerts on material changes.
-export async function detectPortfolioChanges(userId: string): Promise<number> {
-  const res = await query<SnapshotRow>(
-    `SELECT snapshot_date::text, total_balance_usdc::text, net_pnl_7d::text,
-            revenue_7d::text, expenses_7d::text, unknown_count_7d::text,
-            complete, wallet_ids, assets, incomplete_reason, created_at
+// Overnight alerts that compared holdings day over day are gone (Oct 4): holdings left out
+// staked tokens, so a stake read as a loss ("down 73.7%" at 01:00), and every real transfer
+// already has its own alert, which left only price moves. Holdings and why they changed
+// belong in the morning brief. The snapshots are still taken daily; incomparable() above
+// says when two of them can be compared.
+//
+// What is left: transfers still waiting for context this week.
+export async function detectBooksAttention(userId: string): Promise<number> {
+  const latest = (await query<{ snapshot_date: string; unknown_count_7d: string }>(
+    `SELECT snapshot_date::text, unknown_count_7d::text
      FROM financial_heartbeat_snapshots
      WHERE user_id = $1
      ORDER BY snapshot_date DESC
-     LIMIT 2`,
+     LIMIT 1`,
     [userId],
-  );
-
-  const [latest, prev] = res.rows;
+  )).rows[0];
   if (!latest) return 0;
-  const latestDate = latest.snapshot_date;
-  let fired = 0;
 
-  // Balances could not be read completely for hours: say so, with no financial claim
-  if (!latest.complete) {
-    const hours = (Date.now() - new Date(latest.created_at).getTime()) / 3_600_000;
-    // A row without a reason predates coverage tracking (migration 020): no notice
-    if (hours >= INCOMPLETE_NOTICE_HOURS && latest.incomplete_reason) {
-      const inserted = await insertAlert({
-        userId,
-        type: 'snapshot_incomplete',
-        certainty: 'data_issue',
-        message: [
-          'Balance check incomplete',
-          `I could not read all your balances today (${latest.incomplete_reason ?? 'data unavailable'}), so I have not compared your holdings with yesterday. Your books are unaffected; I will keep trying.`,
-        ].join('\n'),
-        evidence: { date: latestDate, reason: latest.incomplete_reason },
-        dedupKey: `snapshot_incomplete:${userId}:${latestDate}`,
-      });
-      if (inserted) fired++;
-    }
-    return fired;
-  }
-
-  const why = incomparable(latest, prev);
-  if (why) {
-    logger.info({ userId, date: latestDate, why }, 'Portfolio change not evaluated: snapshots not comparable');
-  } else if (prev) {
-    const latestBalance = parseFloat(latest.total_balance_usdc);
-    const prevBalance = parseFloat(prev.total_balance_usdc);
-    const delta = latestBalance - prevBalance;
-    const deltaPct = prevBalance > 0 ? Math.abs(delta) / prevBalance : 0;
-    const evidence = { delta, delta_pct: deltaPct, latest_balance: latestBalance, prev_balance: prevBalance, date: latestDate, prev_date: prev.snapshot_date };
-
-    // Portfolio up: delta >= $200 or >= 10%
-    if (delta >= 200 || (delta > 0 && deltaPct >= 0.1)) {
-      const inserted = await insertAlert({
-        userId,
-        type: 'portfolio_up',
-        certainty: 'verified',
-        message: `Your holdings are up $${fmt(delta)} (+${(deltaPct * 100).toFixed(1)}%) since yesterday, now $${fmt(latestBalance)}.`,
-        evidence,
-        dedupKey: `portfolio_up:${userId}:${latestDate}`,
-      });
-      if (inserted) fired++;
-    }
-
-    // Portfolio down: delta <= -$200 or >= 10% drop
-    if (delta <= -200 || (delta < 0 && deltaPct >= 0.1)) {
-      const inserted = await insertAlert({
-        userId,
-        type: 'portfolio_down',
-        certainty: 'verified',
-        message: `Your holdings are down $${fmt(Math.abs(delta))} (-${(deltaPct * 100).toFixed(1)}%) since yesterday, now $${fmt(latestBalance)}.`,
-        evidence,
-        dedupKey: `portfolio_down:${userId}:${latestDate}`,
-      });
-      if (inserted) fired++;
-    }
-  }
-
-  // Positive P&L: net_pnl_7d >= $100 — weekly dedup (ISO week)
-  const netPnl7d = parseFloat(latest.net_pnl_7d);
-  if (netPnl7d >= 100) {
-    // Use ISO week number for dedup so it fires at most once per calendar week
-    const d = new Date(latestDate);
-    const jan4 = new Date(d.getFullYear(), 0, 4);
-    const week = Math.ceil(((d.getTime() - jan4.getTime()) / 86400000 + jan4.getDay() + 1) / 7);
-    const weekKey = `${d.getFullYear()}-W${week}`;
-
-    // Revenue that is partly the AI's guess makes this a suspected, not a verified, result
-    const pnl = await getPnlSummary(userId, 7);
-    const guessed = pnl.revenue_provisional_usdc > 0;
-    const inserted = await insertAlert({
-      userId,
-      type: 'pnl_positive',
-      certainty: guessed ? 'suspected' : 'verified',
-      message: `A positive week${guessed ? ' by my count' : ''}: net $${fmt(netPnl7d)}, from $${fmt(parseFloat(latest.revenue_7d))} revenue and $${fmt(parseFloat(latest.expenses_7d))} expenses.${guessed ? ` $${fmt(pnl.revenue_provisional_usdc)} of that revenue is my best guess; confirm it and I will firm this up.` : ''}`,
-      evidence: { net_pnl_7d: netPnl7d, revenue_7d: parseFloat(latest.revenue_7d), expenses_7d: parseFloat(latest.expenses_7d), date: latestDate },
-      dedupKey: `pnl_positive:${userId}:${weekKey}`,
-    });
-    if (inserted) fired++;
-  }
-
-  // Books attention: unknown_count_7d > 10% of total recent events — daily dedup
+  // Books attention: more than 10 transfers this week still unknown — daily dedup
   const unknownCount = parseInt(latest.unknown_count_7d);
   if (unknownCount > 10) {
     const inserted = await insertAlert({
@@ -178,11 +88,10 @@ export async function detectPortfolioChanges(userId: string): Promise<number> {
       type: 'books_attention',
       certainty: 'verified',
       message: `${unknownCount} transfers this week still need context. Tell me what they were and I will keep your books accurate.`,
-      evidence: { unknown_count_7d: unknownCount, date: latestDate },
-      dedupKey: `books_attention:${userId}:${latestDate}`,
+      evidence: { unknown_count_7d: unknownCount, date: latest.snapshot_date },
+      dedupKey: `books_attention:${userId}:${latest.snapshot_date}`,
     });
-    if (inserted) fired++;
+    if (inserted) return 1;
   }
-
-  return fired;
+  return 0;
 }

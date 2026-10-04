@@ -136,6 +136,23 @@ describe('generateDailyBrief', () => {
     expect(brief).toContain('+0% expenses');
   });
 
+  it('Oct 4: revenue after a zero day prints no "+∞%"; nothing comparable drops the line', async () => {
+    queueBrief(
+      pnlRow('4.43', '0', '0'),   // today
+      pnlRow('4.43', '0', '0'),   // 2d → yesterday: nothing
+      open(0),
+      { rows: [] },
+    );
+    const brief = await generateDailyBrief('user-1');
+    expect(brief).not.toMatch(/∞|—/);
+    expect(brief).not.toContain('Compared with yesterday');
+
+    queueBrief(pnlRow('150', '0', '0'), pnlRow('250', '0', '0'), open(0), { rows: [] });
+    const partial = await generateDailyBrief('user-1');
+    expect(partial).toContain('Compared with yesterday: +50% revenue.');
+    expect(partial).not.toMatch(/∞|—/);
+  });
+
   it('includes unknown count nudge when unknowns exist', async () => {
     queueBrief(
       pnlRow('100', '0', '0'),
@@ -286,6 +303,13 @@ describe('generateWeeklyBrief', () => {
     expect(lineValue(brief, 'Net')).toBe('+$2,266.80');
     // prior week revenue = 4500 - 2450 = 2050 → +20%
     expect(brief).toContain('+20% vs prior week');
+  });
+
+  it('a first week with nothing before it prints no "∞% vs prior week"', async () => {
+    queueBrief(pnlRow('1180', '0', '3.58'), pnlRow('1180', '0', '3.58'), open(0), { rows: [] });
+    const brief = await generateWeeklyBrief('user-1');
+    expect(brief).not.toMatch(/∞|—/);
+    expect(brief).not.toContain('vs prior week');
   });
 
   it('shows a negative weekly net with a minus sign', async () => {

@@ -174,6 +174,9 @@ const CHANGE_TALK = new RegExp(
     String.raw`\bi(?:'ve| have)?\s+(?:now\s+)?(?:changed|updated|marked|recorded|added|started tracking|tracked|corrected)\b`,
     String.raw`\b(?:is|are|has been|have been)\s+(?:now\s+)?(?:re)?(?:label(?:l)?ed|tracked|added|updated|marked)\b`,
     String.raw`\b(?:i'?ll|i will|let me|i can|i'?m going to|going to)\s+(?:re)?(?:label|track|add|mark|update|change|record|correct)\b`,
+    // "I'm treating the 49.79 USDC as revenue" (Sep 30), said before anything was confirmed
+    String.raw`\b(?:i'?m|i am)\s+(?:now\s+)?(?:treating|counting|booking|recording|classifying|label(?:l)?ing|marking|logging)\b`,
+    String.raw`\b(?:i'?ll|i will)\s+(?:now\s+)?(?:treat|count|book|classify|log)\b`,
     String.raw`\bconfirm\b`, String.raw`\b(?:shall|should) i\b`, String.raw`\b(?:do you )?want me to\b`,
     String.raw`\btap\b`, String.raw`\bbuttons?\b`,
     // The model asking in Luca's own form, copied from earlier in the chat
@@ -207,8 +210,15 @@ const CHANGE_CLAIM = new RegExp(
   'im',
 );
 
+// "Got it. I'll treat it as a swap unless you want me to change it." (Sep 30, after a
+// "yes" with no question open: nothing was changed) and "I'm treating the 56.65 USDC as
+// revenue". Not when the sentence makes it conditional: "if you say yes, I'll count it as…"
+const TREAT_AS = /\b(?:(?:i'?m|i am)\s+(?:now\s+)?(?:treating|counting|booking|recording|classifying|label(?:l)?ing|marking|logging)|(?:i'?ll|i will)\s+(?:now\s+)?(?:treat|count|book|record|classify|label|mark|log))\b[^!?\n]{0,160}?\bas\b/i;
+const CONDITIONAL = /\b(?:if|once|after you|when you)\b/i;
+
 export function claimsChange(text: string): boolean {
-  return CHANGE_CLAIM.test(text);
+  if (CHANGE_CLAIM.test(text)) return true;
+  return text.split(/(?<=[.!?])\s+|\n/).some((sentence) => TREAT_AS.test(sentence) && !CONDITIONAL.test(sentence));
 }
 
 export const NO_CHANGE_MADE = "I haven't changed anything.";

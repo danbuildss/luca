@@ -33,13 +33,14 @@ function queueQueryResults(...results: Array<{ rows: unknown[] }>) {
 describe('detectLargeMovements', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('only considers recent events and excludes gas/internal/x402 labels', async () => {
+  it('only considers recent events and excludes gas, internal, x402, swaps and staking', async () => {
     queueQueryResults({ rows: [] });
     await detectLargeMovements('user-1');
 
-    const sql = (mockQuery.mock.calls[0] as unknown[])[0] as string;
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain("ne.block_time >= NOW() - INTERVAL '24 hours'");
-    expect(sql).toContain("'gas', 'internal_transfer', 'x402_income', 'x402_spend'");
+    expect(sql).toContain("c.shape IS DISTINCT FROM 'swap'");
+    expect(params[1]).toEqual(['gas', 'internal_transfer', 'x402_income', 'x402_spend', 'swap', 'staked', 'unstaked']);
   });
 });
 

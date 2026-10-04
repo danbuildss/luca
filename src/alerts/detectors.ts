@@ -3,6 +3,7 @@ import { usdValueSql } from '../ingestion/assets.js';
 import { formatAddress } from '../telegram/format.js';
 import { getHighConfidenceErrorRate } from '../quality/metrics.js';
 import { txLink } from '../ledger/links.js';
+import { adminUserIds, ownerWords } from '../health/detectors.js';
 
 type AlertType =
   | 'large_inflow'
@@ -87,29 +88,47 @@ const LARGE_MOVEMENT_WINDOW = '24 hours';
 
 // ---------------------------------------------------------------------------
 // Detector: large_inflow / large_outflow
-// Fires once per event where usd_value (or USDC amount) >= materiality_usd,
-// for events with block_time in the last 24h only.
-// Excludes: gas, internal_transfer, x402_income, x402_spend (those have own labels)
+// One alert per transaction whose movements reach materiality_usd, for transactions in
+// the last 24h only. Not for what the operator did with their own money, which moved
+// nothing to anyone else: swaps, staking and unstaking, transfers between their own
+// wallets. Gas and x402 have alerts of their own.
 // ---------------------------------------------------------------------------
+
+// Labels that never make a large inflow/outflow alert
+const NOT_LARGE_MOVEMENTS = ['gas', 'internal_transfer', 'x402_income', 'x402_spend', 'swap', 'staked', 'unstaked'];
+
+// "$1,175.57"
+export function money(n: number): string {
+  return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+// "Oct 3, 23:14" in the operator's timezone
+export function whenText(d: Date, timezone: string): string {
+  const opts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false };
+  try { return new Date(d).toLocaleString('en-US', { ...opts, timeZone: timezone }); }
+  catch { return new Date(d).toLocaleString('en-US', { ...opts, timeZone: 'UTC' }); }
+}
+
+type MovementRow = {
+  event_id: string;
+  hash: string;
+  direction: 'in' | 'out';
+  asset: string | null;
+  usd: string;
+  from_address: string;
+  to_address: string | null;
+  block_time: Date;
+  wallet_label: string | null;
+  wallet_address: string;
+  timezone: string;
+};
+
 export async function detectLargeMovements(userId: string): Promise<number> {
-  const res = await query<{
-    event_id: string;
-    hash: string;
-    direction: 'in' | 'out';
-    asset: string | null;
-    amount: string | null;
-    usd_value: string | null;
-    from_address: string;
-    to_address: string | null;
-    wallet_label: string | null;
-    wallet_address: string;
-    materiality_usd: string;
-  }>(
+  const res = await query<MovementRow>(
     `SELECT
-       ne.id AS event_id, ne.hash, ne.direction, ne.asset, ne.amount::text, ne.usd_value::text,
-       ne.from_address, ne.to_address,
-       w.label AS wallet_label, w.address AS wallet_address,
-       u.materiality_usd::text
+       ne.id AS event_id, ne.hash, ne.direction, ne.asset, (${USD})::text AS usd,
+       ne.from_address, ne.to_address, ne.block_time,
+       w.label AS wallet_label, w.address AS wallet_address, u.timezone
      FROM classifications c
      JOIN normalized_events ne ON ne.id = c.event_id
      JOIN wallets w ON w.id = ne.wallet_id
@@ -117,37 +136,54 @@ export async function detectLargeMovements(userId: string): Promise<number> {
      WHERE ne.user_id = $1
        AND ne.supported IS TRUE
        AND c.superseded_at IS NULL
-       AND c.label NOT IN ('gas', 'internal_transfer', 'x402_income', 'x402_spend')
+       AND c.label::text <> ALL($2::text[])
+       AND c.shape IS DISTINCT FROM 'swap'
        AND ne.block_time >= NOW() - INTERVAL '${LARGE_MOVEMENT_WINDOW}'
-       AND ${USD}
-           >= u.materiality_usd
+       AND ${USD} IS NOT NULL
        AND NOT EXISTS (
          SELECT 1 FROM alerts a
          WHERE a.dedup_key IN (
            'large_inflow:' || ne.id::text,
-           'large_outflow:' || ne.id::text
+           'large_outflow:' || ne.id::text,
+           'large_movement:' || $1::text || ':' || ne.hash
          )
-       )`,
-    [userId],
+       )
+     ORDER BY ne.block_time, ne.hash, ne.id`,
+    [userId, NOT_LARGE_MOVEMENTS],
   );
+  const materiality = parseFloat((await query<{ m: string }>(
+    `SELECT materiality_usd::text AS m FROM users WHERE id = $1`, [userId],
+  )).rows[0]?.m ?? 'NaN');
+  if (!Number.isFinite(materiality)) return 0;
+
+  // One transaction, one alert
+  const byTx = new Map<string, MovementRow[]>();
+  for (const row of res.rows) byTx.set(row.hash, [...(byTx.get(row.hash) ?? []), row]);
 
   let count = 0;
-  for (const row of res.rows) {
-    const usd = parseFloat(row.usd_value ?? row.amount ?? '0');
-    const type: AlertType = row.direction === 'in' ? 'large_inflow' : 'large_outflow';
-    const verb = row.direction === 'in' ? 'came in from' : 'went out to';
-    const counterparty = row.direction === 'in'
-      ? formatAddress(row.from_address)
-      : row.to_address ? formatAddress(row.to_address) : '—';
-    const walletHint = row.wallet_label
-      ? `${formatAddress(row.wallet_address)} (${row.wallet_label})`
-      : formatAddress(row.wallet_address);
+  for (const [hash, rows] of byTx) {
+    const usdIn = rows.filter((r) => r.direction === 'in').reduce((t, r) => t + parseFloat(r.usd), 0);
+    const usdOut = rows.filter((r) => r.direction === 'out').reduce((t, r) => t + parseFloat(r.usd), 0);
+    const direction: 'in' | 'out' = usdIn >= usdOut ? 'in' : 'out';
+    const total = direction === 'in' ? usdIn : usdOut;
+    if (total < materiality) continue;
+
+    const legs = rows.filter((r) => r.direction === direction);
+    const first = legs[0];
+    const type: AlertType = direction === 'in' ? 'large_inflow' : 'large_outflow';
+    const counterparties = [...new Set(legs.map((r) => (direction === 'in' ? r.from_address : r.to_address ?? '')))];
+    const assets = [...new Set(legs.map((r) => r.asset ?? 'tokens'))];
+    const who = counterparties.length === 1 && counterparties[0] ? formatAddress(counterparties[0]) : `${counterparties.length} addresses`;
+    const walletHint = first.wallet_label
+      ? `${formatAddress(first.wallet_address)} (${first.wallet_label})`
+      : formatAddress(first.wallet_address);
+    const verb = direction === 'in' ? 'came in from' : 'went out to';
 
     const message = [
-      `${type === 'large_inflow' ? 'Large inflow' : 'Large outflow'}`,
-      `$${usd.toFixed(2)} in ${row.asset ?? 'tokens'} ${verb} ${counterparty}, on ${walletHint}.`,
+      type === 'large_inflow' ? 'Large inflow' : 'Large outflow',
+      `${money(total)} in ${assets.join(' and ')} ${verb} ${who}, on ${walletHint}, ${whenText(first.block_time, first.timezone)}.`,
       // Tappable on BaseScan when delivered (src/telegram/format.ts)
-      `Transaction: ${txLink(row.hash)}`,
+      `Transaction: ${txLink(hash)}`,
     ].join('\n');
 
     const inserted = await insertAlert({
@@ -156,14 +192,14 @@ export async function detectLargeMovements(userId: string): Promise<number> {
       certainty: 'verified',
       message,
       evidence: {
-        event_id: row.event_id,
-        hash: row.hash,
-        usd,
-        asset: row.asset,
-        direction: row.direction,
-        counterparty,
+        event_ids: legs.map((r) => r.event_id),
+        hash,
+        usd: total,
+        assets,
+        direction,
+        counterparties,
       },
-      dedupKey: `${type}:${row.event_id}`,
+      dedupKey: `large_movement:${userId}:${hash}`,
     });
     if (inserted) count++;
   }
@@ -226,18 +262,18 @@ export async function detectSpendSpike(userId: string): Promise<number> {
   if (spikeRatio < 2 || spend24h < parseFloat(row.materiality_usd ?? '50')) return 0;
 
   const context = isFinite(spikeRatio)
-    ? `${spikeRatio.toFixed(1)}x your usual $${dailyAvg.toFixed(2)} a day over the previous ${BASELINE_DAYS} days`
+    ? `${spikeRatio.toFixed(1)}x your usual ${money(dailyAvg)} a day over the previous ${BASELINE_DAYS} days`
     : `with no spending in the previous ${BASELINE_DAYS} days`;
   // Spending that includes AI-guessed labels is a suspected spike, worded as a question
   const guessed = parseFloat(row.provisional_24h ?? '0');
   const message = guessed > 0
     ? [
         `Spending looks up`,
-        `By my count you spent $${spend24h.toFixed(2)} in the last 24 hours, ${context}. $${guessed.toFixed(2)} of that is labeled by my best guess; can you confirm those are expenses?`,
+        `By my count you spent ${money(spend24h)} in the last 24 hours, ${context}. ${money(guessed)} of that is labeled by my best guess; can you confirm those are expenses?`,
       ].join('\n')
     : [
         `Spending is up`,
-        `You spent $${spend24h.toFixed(2)} in the last 24 hours, ${context}.`,
+        `You spent ${money(spend24h)} in the last 24 hours, ${context}.`,
       ].join('\n');
 
   const inserted = await insertAlertWithCooldown({
@@ -301,7 +337,7 @@ export async function detectTreasuryFloor(userId: string): Promise<number> {
 
     const message = [
       `Treasury below your floor`,
-      `${walletHint} holds $${balance.toFixed(2)} USDC, under your $${threshold.toFixed(2)} threshold.`,
+      `${walletHint} holds ${money(balance)} USDC, under your ${money(threshold)} threshold.`,
     ].join('\n');
 
     const inserted = await insertAlertWithCooldown(
@@ -370,7 +406,7 @@ export async function detectUnusualGas(userId: string): Promise<number> {
 
   const message = [
     `Gas is unusually high`,
-    `You paid $${gas24h.toFixed(2)} in gas in the last 24 hours, ${spikeRatio.toFixed(1)}x your usual $${dailyAvg.toFixed(2)} a day.`,
+    `You paid ${money(gas24h)} in gas in the last 24 hours, ${spikeRatio.toFixed(1)}x your usual ${money(dailyAvg)} a day.`,
   ].join('\n');
 
   const inserted = await insertAlertWithCooldown({
@@ -387,29 +423,32 @@ export async function detectUnusualGas(userId: string): Promise<number> {
 // ---------------------------------------------------------------------------
 // Detector: classifier_degradation
 // Fires when high-confidence error rate > 5% and at least 10 high-conf classifications exist
-// dedup_key: classifier_degradation:userId:YYYY-MM-DD
+// dedup_key: classifier_degradation:adminId:userId:YYYY-MM-DD
 // ---------------------------------------------------------------------------
 export async function detectClassifierDegradation(userId: string): Promise<number> {
   const today = new Date().toISOString().slice(0, 10);
-  const dedupKey = `classifier_degradation:${userId}:${today}`;
-
   const { rate, count, total_high_confidence } = await getHighConfidenceErrorRate(userId);
 
   // Need meaningful sample and error rate above threshold
   if (total_high_confidence < 10 || rate < 0.05) return 0;
 
-  const message = [
-    `Classification quality dropped`,
-    `${count} of ${total_high_confidence} high-confidence labels were corrected (${(rate * 100).toFixed(1)}%). Run /quality for the breakdown.`,
-  ].join('\n');
-
-  const inserted = await insertAlert({
-    userId,
-    type: 'classifier_degradation',
-    certainty: 'data_issue',
-    message,
-    evidence: { error_rate: rate, error_count: count, total_high_confidence },
-    dedupKey,
-  });
-  return inserted ? 1 : 0;
+  // About Luca's labeling, not the operator's money: told to admins only, naming whose books
+  let fired = 0;
+  for (const adminId of await adminUserIds()) {
+    const owner = await ownerWords(userId, adminId);
+    const message = [
+      `Classification quality dropped`,
+      `${owner} books: ${count} of ${total_high_confidence} high-confidence labels were corrected (${(rate * 100).toFixed(1)}%). Run /quality for the breakdown.`,
+    ].join('\n');
+    const inserted = await insertAlert({
+      userId: adminId,
+      type: 'classifier_degradation',
+      certainty: 'data_issue',
+      message,
+      evidence: { owner_user_id: userId, error_rate: rate, error_count: count, total_high_confidence },
+      dedupKey: `classifier_degradation:${adminId}:${userId}:${today}`,
+    });
+    if (inserted) fired++;
+  }
+  return fired;
 }

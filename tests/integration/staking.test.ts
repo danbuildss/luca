@@ -14,11 +14,18 @@ vi.mock('../../src/classification/llm.js', () => ({
   }),
 }));
 
+vi.mock('../../src/ingestion/price.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getSpotPrices: vi.fn(() => Promise.resolve({ ETH: 4000, BNKR: 0.0005 })),
+}));
+
 import { describeDb, useIntegrationDb, seedUserWithWallet, insertEvent, insertClassification, sql, addr, type WalletFx } from './helpers/db.js';
 import { checkStakes, type StakingChain } from '../../src/staking/checks.js';
 import { classifyPendingEvents } from '../../src/classification/engine.js';
 import { getPnlSummary } from '../../src/books/query.js';
 import { RpcError } from '../../src/ingestion/alchemy.js';
+import { stakedPositions } from '../../src/staking/positions.js';
+import { executeTool } from '../../src/agent/tools.js';
 
 const BNKR = '0x22af33fe49fd1fa80c7149773dde5890d3c76f3b';
 const STAKE = '0x88470240ff0663faefa68b1d7621b472ddd9584a';
@@ -154,4 +161,25 @@ describeDb('staking recognised from the chain (integration)', () => {
     expect(await checkStakes(stakingChain([[1000, 700_000n * K]]))).toBe(1);
     expect((await active(stake.id)).label).toBe('staked');
   });
+
+  it('what is staked counts in holdings, listed apart, as the contract reported it (Oct 4: "down 73.7%")', async () => {
+    const { user, wallet } = await seedUserWithWallet();
+    await bnkr(wallet, 'out', 700_000n * K, 1000);
+    await bnkr(wallet, 'out', 686_000n * K, 2000);
+    await checkStakes(stakingChain([[1000, 700_000n * K], [2000, 1_386_000n * K]]));
+    await sql(`INSERT INTO balance_snapshots (wallet_id, user_id, asset, balance, snapshot_at) VALUES ($1, $2, 'USDC', 100, NOW())`, [wallet.id, user.id]);
+
+    const [p] = await stakedPositions(user.id);
+    expect(p).toMatchObject({ wallet_id: wallet.id, contract: STAKE, asset: 'BNKR', amount: 1_386_000 });
+
+    const cash = await executeTool(user.id, 'get_cash_position', {}) as { total_usd: number; staked: Array<Record<string, unknown>>; staked_usd: number; total_with_staked_usd: number };
+    expect(cash.staked).toEqual([expect.objectContaining({ asset: 'BNKR', amount: 1_386_000, usd_value: 693, staking_contract: STAKE })]);
+    expect(cash.total_usd).toBe(100);
+    expect(cash.total_with_staked_usd).toBe(793);
+
+    // Another operator never sees it
+    const other = await seedUserWithWallet();
+    expect(await stakedPositions(other.user.id)).toEqual([]);
+  });
 });
+
