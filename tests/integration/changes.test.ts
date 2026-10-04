@@ -32,7 +32,8 @@ import { runAgent } from '../../src/agent/run.js';
 import { executeTool } from '../../src/agent/tools.js';
 import { pendingProposals } from '../../src/corrections/proposals.js';
 import { refreshQuestionGroups, getQuestionsToSend, markQuestionSent } from '../../src/alerts/questions.js';
-import { questionText } from '../../src/telegram/alerts.js';
+import { askItem, askText } from '../../src/alerts/ask.js';
+import { namesFor } from '../../src/books/names.js';
 import { saveMessage } from '../../src/agent/context.js';
 
 const link = (h: string): string => `[${h.slice(0, 6)}…${h.slice(-4)}](https://basescan.org/tx/${h})`;
@@ -165,9 +166,11 @@ describeDb('changes by chat, no buttons (integration)', () => {
     }
     await refreshQuestionGroups(user.id);
     const g = (await getQuestionsToSend()).find((x) => x.user_id === user.id)!;
-    expect(questionText(g)).toMatch(/^I have 4 similar USDC payments to `0x\w{4}…\w{4}` that still need context \(\$1,240\.00 total, .+\)\. They look related\. What were they for\?$/);
+    const name = await namesFor(user.id);
+    const day = (d: Date) => new Date(d).toISOString().slice(0, 10);
+    expect(askItem(g, name, day)).toMatch(/^4 USDC payments to 0x\w{4}…\w{4} \(\$1,240\.00 total\), .+$/);
     await markQuestionSent(g.id, 1);
-    await saveMessage({ userId: user.id, role: 'assistant', content: questionText(g) });
+    await saveMessage({ userId: user.id, role: 'assistant', content: askText([g], name, day) });
 
     responses = [calls(['label_question_group', { group_id: g.id, label: 'expense' }]), say('Got it.')];
     const q = await says(user.id, 'those are infrastructure costs');
@@ -177,6 +180,26 @@ describeDb('changes by chat, no buttons (integration)', () => {
     const done = await says(user.id, 'yes');
     expect(done.text).toMatch(/^Done\. Labeled those 4 USDC payments to .+ as expense\. New transfers with this address will be labeled the same way\.$/);
     for (const e of evs) expect(await label(e.id)).toEqual({ label: 'expense', source: 'user' });
+  });
+
+  it('"1 was a swap, 2 was revenue" answers items 1 and 2 of the morning list: one question, nothing changed before yes', async () => {
+    const { user, wallet } = await seedUserWithWallet();
+    const a = await insertClassifiedEvent({ wallet, direction: 'out', counterparty: addr(), amount: 106.88, usdValue: 106.88, label: 'unknown', at: '3 days' });
+    const b = await insertClassifiedEvent({ wallet, direction: 'in', counterparty: addr(), amount: 49.79, usdValue: 49.79, label: 'unknown', at: '2 days' });
+    await refreshQuestionGroups(user.id);
+    const [g1, g2] = await getQuestionsToSend(user.id);
+    await markQuestionSent(g1.id, 9, 1);
+    await markQuestionSent(g2.id, 9, 2);
+
+    responses = [calls(['label_question_group', { group_id: g1.id, label: 'swap' }], ['label_question_group', { group_id: g2.id, label: 'revenue' }]), say('')];
+    const r = await says(user.id, '1 was a swap, 2 was revenue');
+    expect(r.text).toMatch(/^Make these 2 changes\?\n/);
+    expect((await label(a.id)).label).toBe('unknown');
+    expect((await label(b.id)).label).toBe('unknown');
+
+    await says(user.id, 'yes');
+    expect((await label(a.id)).label).toBe('swap');
+    expect((await label(b.id)).label).toBe('revenue');
   });
 
   it('"not sure" about a group skips it without changing anything', async () => {

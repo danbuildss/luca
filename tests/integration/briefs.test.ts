@@ -5,7 +5,7 @@ import {
   describeDb, useIntegrationDb, seedUserWithWallet, insertUser, insertWallet, insertWatchJob,
   insertClassifiedEvent, insertCounterpartyRule, insertBrief, dbTime, sql,
 } from './helpers/db.js';
-import { generateDailyBrief } from '../../src/briefs/generate.js';
+import { buildMorning } from '../../src/briefs/generate.js';
 import {
   getBriefSlotStatus, getAllBriefUsers, saveBrief, markBriefSent, updateBriefContent,
 } from '../../src/briefs/store.js';
@@ -13,77 +13,34 @@ import {
 const CUSTOMER = '0x00000000000000000000000000000000000c0ffe';
 const VENDOR = '0x0000000000000000000000000000000000000bad';
 
-function topCounterpartyLines(brief: string): string[] {
-  const lines = brief.split('\n');
-  const start = lines.indexOf('Top counterparties');
-  if (start < 0) return [];
-  const out: string[] = [];
-  for (const l of lines.slice(start + 1)) {
-    if (l.trim() === '') break;
-    out.push(l);
-  }
-  return out;
-}
-
 // One describeDb per file: useIntegrationDb()'s afterAll closes src/db.ts's pool.
 describeDb('briefs (integration)', () => {
   useIntegrationDb();
 
-describe('generateDailyBrief', () => {
-  it('renders a negative net with a minus sign', async () => {
-    const { user, wallet } = await seedUserWithWallet();
-    await insertClassifiedEvent({ wallet, direction: 'in', label: 'revenue', counterparty: CUSTOMER, amount: 20, usdValue: 20 });
-    await insertClassifiedEvent({ wallet, direction: 'out', label: 'expense', counterparty: VENDOR, amount: 150, usdValue: 150 });
+describe('names in the morning message', () => {
+  const since = () => new Date(Date.now() - 24 * 3_600_000);
 
-    const brief = await generateDailyBrief(user.id, 'UTC');
-    expect(brief).toMatch(/Revenue\s+\+\$20\.00/);
-    expect(brief).toMatch(/Expenses\s+-\$150\.00/);
-    expect(brief).toMatch(/Net\s+-\$130\.00/);
-    expect(brief).not.toMatch(/Net\s+\+/);
-  });
-
-  it('escapes Markdown underscores in counterparty names', async () => {
+  it('escapes Markdown underscores in a name the operator gave', async () => {
     const { user, wallet } = await seedUserWithWallet();
     await insertCounterpartyRule({ userId: user.id, address: CUSTOMER, label: 'revenue', name: 'acme_corp_llc', direction: 'in' });
     await insertClassifiedEvent({ wallet, direction: 'in', label: 'revenue', counterparty: CUSTOMER, amount: 42, usdValue: 42 });
 
-    const brief = await generateDailyBrief(user.id, 'UTC');
-    const cps = topCounterpartyLines(brief);
-    expect(cps).toHaveLength(1);
-    expect(cps[0]).toContain('acme\\_corp\\_llc');
-    expect(cps[0]).toContain('$42.00');
-    // No unescaped underscore anywhere in the line
-    expect(cps[0]).not.toMatch(/(^|[^\\])_/);
+    const m = await buildMorning(user.id, { timezone: 'UTC', since: since() });
+    expect(m.text).toContain('- Received 42 USDC from acme\\_corp\\_llc.');
   });
 
-  it('uses one rule per event when a direction rule and a NULL-direction rule both exist (no double counting)', async () => {
+  it('a same-direction name wins over a legacy one, which is still used when it is the only one', async () => {
     const { user, wallet } = await seedUserWithWallet();
-    await insertCounterpartyRule({ userId: user.id, address: VENDOR, label: 'expense', name: 'vendor_out', direction: 'out' });
+    await insertCounterpartyRule({ userId: user.id, address: VENDOR, label: 'expense', name: 'Vendor Out', direction: 'out' });
     await insertCounterpartyRule({ userId: user.id, address: VENDOR, label: 'expense', name: 'Legacy Vendor', direction: null });
-    await insertCounterpartyRule({ userId: user.id, address: VENDOR, label: 'revenue', name: 'Vendor As Payer', direction: 'in' });
+    await insertCounterpartyRule({ userId: user.id, address: CUSTOMER, label: 'revenue', name: 'Old Customer', direction: null });
     await insertClassifiedEvent({ wallet, direction: 'out', label: 'expense', counterparty: VENDOR, amount: 150, usdValue: 150 });
     await insertClassifiedEvent({ wallet, direction: 'in', label: 'revenue', counterparty: CUSTOMER, amount: 20, usdValue: 20 });
 
-    const brief = await generateDailyBrief(user.id, 'UTC');
-    const cps = topCounterpartyLines(brief);
-    expect(cps).toHaveLength(2);
-    expect(cps[0]).toContain('vendor\\_out');
-    expect(cps[0]).toContain('$150.00');
-    expect(brief).not.toContain('Legacy Vendor');
-    expect(brief).not.toContain('Vendor As Payer');
-    expect(brief).not.toContain('$300.00');
-    // The customer line falls back to a shortened address
-    expect(cps[1]).toContain('$20.00');
-  });
-
-  it('falls back to a legacy NULL-direction rule when no same-direction rule exists', async () => {
-    const { user, wallet } = await seedUserWithWallet();
-    await insertCounterpartyRule({ userId: user.id, address: VENDOR, label: 'expense', name: 'Legacy Vendor', direction: null });
-    await insertClassifiedEvent({ wallet, direction: 'out', label: 'expense', counterparty: VENDOR, amount: 15, usdValue: 15 });
-
-    const cps = topCounterpartyLines(await generateDailyBrief(user.id, 'UTC'));
-    expect(cps).toHaveLength(1);
-    expect(cps[0]).toContain('Legacy Vendor');
+    const text = (await buildMorning(user.id, { timezone: 'UTC', since: since() })).text!;
+    expect(text).toContain('- Paid 150 USDC to Vendor Out.');
+    expect(text).toContain('- Received 20 USDC from Old Customer.');
+    expect(text).not.toContain('Legacy Vendor');
   });
 });
 

@@ -15,6 +15,8 @@ import { applyCorrection, describeRuleOutcome } from '../corrections/handler.js'
 import { txLink, withLink } from '../ledger/links.js';
 import { ClassificationLabel, CLASSIFICATION_LABELS, WALLET_ROLES, SUPPORTED_CHAINS } from '../types/index.js';
 import { stakedPositions } from '../staking/positions.js';
+import { isAddressLike } from '../books/names.js';
+import { amountText as displayAmount, DUST_USD } from '../books/amounts.js';
 import { getSpotPrices } from '../ingestion/price.js';
 import { setTimezone } from '../notify/timezone.js';
 import { requestAudit, auditRequestForModel, movementStatus, amountText, isMissing } from '../ledger/audit-runs.js';
@@ -32,7 +34,7 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
     type: 'function',
     function: {
       name: 'get_cash_position',
-      description: 'Get the current ETH, USDC and BNKR balances across all registered wallets, each valued in USD at live prices, plus the total, and whether Luca has finished its first read of each wallet. Also what the operator has staked (`staked`, read from the staking contract at the last staking transfer, with its date): staked tokens are still theirs, so list them on their own line ("Staked: …") and give `total_with_staked_usd` as their holdings. Use this to answer "how much do we have?", "what is our cash position?" or "what balance do you see?"',
+      description: 'Get the current ETH, USDC and BNKR balances across all registered wallets, each valued in USD at live prices, plus the total, and whether Luca has finished its first read of each wallet. Also what the operator has staked (`staked`, read from the staking contract at the last staking transfer, with its date): staked tokens are still theirs, so list them on their own line ("Staked: …") and give `total_with_staked_usd` as their holdings. Show every amount as its `amount_display`, never the raw `balance`; tokens in the wallets are "In your wallets", never "cash". Use this to answer "how much do we have?", "what is our cash position?" or "what balance do you see?"',
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
@@ -496,6 +498,9 @@ export async function executeTool(
   return Array.isArray(result) ? { results: result, ...coverage } : { ...result, ...coverage };
 }
 
+const isDust = (b: { balance: number; usd_value: number | null }): boolean =>
+  b.balance > 0 && b.usd_value !== null && b.usd_value < DUST_USD;
+
 async function runTool(
   userId: string,
   toolName: string,
@@ -512,9 +517,10 @@ async function runTool(
         : valued.prices;
       const staked = positions.map((p) => {
         const price = p.asset === 'USDC' ? 1 : prices[p.asset];
+        const usd = price === null || price === undefined ? null : p.amount * price;
         return {
           address: p.wallet_address, label: p.wallet_label, asset: p.asset, amount: p.amount,
-          usd_value: price === null || price === undefined ? null : p.amount * price,
+          usd_value: usd, amount_display: displayAmount(p.amount, p.asset, usd),
           staking_contract: p.contract, as_of: p.as_of,
         };
       });
@@ -529,14 +535,17 @@ async function runTool(
           books_ready: w.onboarded || w.state === 'ready',
           balances_read: read.has(w.address),
         })),
-        balances: valued.balances.map((b) => ({
+        // Dust (worth under a cent) is left out; show amounts as `amount_display`
+        balances: valued.balances.filter((b) => !isDust(b)).map((b) => ({
           address: b.wallet_address,
           label: b.wallet_label,
           asset: b.asset,
           balance: b.balance,
           usd_value: b.usd_value,
+          amount_display: displayAmount(b.balance, b.asset, b.usd_value),
           snapshot_at: b.snapshot_at,
         })),
+        ...(valued.balances.some(isDust) ? { dust_left_out: valued.balances.filter(isDust).length } : {}),
         total_usd: valued.balances.length > 0 ? valued.total_usd : null,
         total_incomplete: valued.total_incomplete || staked.some((s) => s.usd_value === null),
         ...(staked.length > 0 ? {
@@ -648,7 +657,8 @@ async function runTool(
     case 'apply_correction': {
       const newLabel = args.new_label as ClassificationLabel;
       const reason = args.reason as string | undefined;
-      const counterpartyName = args.counterparty_name as string | undefined;
+      const given = typeof args.counterparty_name === 'string' ? args.counterparty_name.trim() : '';
+      const counterpartyName = given && !isAddressLike(given) ? given : undefined;
 
       if (!(CLASSIFICATION_LABELS as ReadonlyArray<string>).includes(newLabel)) {
         return { error: `Invalid label: ${newLabel}` };

@@ -2,14 +2,15 @@ import { pool, query } from '../db.js';
 import { logger } from '../logger.js';
 import { usdValueSql } from '../ingestion/assets.js';
 import type { ClassificationLabel } from '../types/index.js';
-import { isQuietHours } from '../notify/quiet-hours.js';
 import { applyCorrection, type RuleOutcome } from '../corrections/handler.js';
 import { relabelEvents } from '../corrections/store.js';
 
 // Unknown transfers are asked about in groups: one question per address, direction and
 // token ("4 outgoing USDC payments to 0xabc…, $1,240 total"), answered in chat.
-//   - Groups under PING_MIN_USD (and fully priced) never ping; the daily brief lists them.
-//   - At most MAX_PINGS_PER_DAY questions per operator in any 24 hours.
+//   - Groups under PING_MIN_USD (and fully priced) are never asked; the Monday message
+//     mentions them in one line.
+//   - Asked in the morning message, at most MAX_PINGS_PER_DAY in any 24 hours, as one
+//     numbered list; a large transfer is asked about in its own alert instead.
 //   - A skipped group comes back after REASK_AFTER_DAYS, or sooner if its total doubles.
 //   - A group answered in chat instead closes by itself.
 export const PING_MIN_USD = 10;
@@ -131,14 +132,10 @@ export type QuestionToSend = {
   timezone: string;
 };
 
-// Questions are held overnight in the operator's timezone (src/notify/quiet-hours.ts)
-export function notOvernight(questions: QuestionToSend[], now: Date = new Date()): QuestionToSend[] {
-  return questions.filter((q) => !isQuietHours(q.timezone, now));
-}
 
-// Questions that should go out now: big enough (or unpriced), not asked recently (or
-// grown since), within each operator's daily limit, biggest first.
-export async function getQuestionsToSend(): Promise<QuestionToSend[]> {
+// Questions due now: big enough (or unpriced), not asked recently (or grown since),
+// within each operator's daily limit, biggest first. Asked in the morning message.
+export async function getQuestionsToSend(userId?: string): Promise<QuestionToSend[]> {
   const res = await query<QuestionToSend>(
     `WITH recent AS (
        SELECT user_id, COUNT(*)::int AS n FROM question_groups
@@ -149,6 +146,7 @@ export async function getQuestionsToSend(): Promise<QuestionToSend[]> {
        FROM question_groups qg
        JOIN users u ON u.id = qg.user_id
        WHERE qg.status = 'open' AND qg.event_count > 0 AND u.telegram_id > 0
+         AND ($4::uuid IS NULL OR qg.user_id = $4::uuid)
          AND (qg.total_usd >= $1 OR qg.unpriced_count > 0)
          AND (qg.sent_at IS NULL OR qg.sent_at <= NOW() - ($2::int * INTERVAL '1 day') OR ${DOUBLED('qg')})
      )
@@ -168,7 +166,7 @@ export async function getQuestionsToSend(): Promise<QuestionToSend[]> {
      ) one ON TRUE
      WHERE e.rn <= $3 - COALESCE(r.n, 0)
      ORDER BY e.user_id, e.rn`,
-    [PING_MIN_USD, REASK_AFTER_DAYS, MAX_PINGS_PER_DAY],
+    [PING_MIN_USD, REASK_AFTER_DAYS, MAX_PINGS_PER_DAY, userId ?? null],
   );
   return res.rows;
 }
@@ -178,11 +176,13 @@ export async function getQuestionsToSend(): Promise<QuestionToSend[]> {
 export type AskedGroup = {
   id: string; counterparty_address: string; direction: 'in' | 'out'; asset: string | null;
   event_count: number; total_usd: string; first_at: Date; last_at: Date; sent_at: Date;
+  asked_item: number | null;
 };
 
 export async function getAskedGroups(userId: string): Promise<AskedGroup[]> {
   const res = await query<AskedGroup>(
-    `SELECT id, counterparty_address, direction, asset, event_count, total_usd::text AS total_usd, first_at, last_at, sent_at
+    `SELECT id, counterparty_address, direction, asset, event_count, total_usd::text AS total_usd, first_at, last_at, sent_at,
+            asked_item
      FROM question_groups
      WHERE user_id = $1 AND status = 'open' AND sent_at IS NOT NULL AND event_count > 0
      ORDER BY sent_at DESC
@@ -192,13 +192,26 @@ export async function getAskedGroups(userId: string): Promise<AskedGroup[]> {
   return res.rows;
 }
 
-export async function markQuestionSent(groupId: string, messageId: number): Promise<void> {
+// `item`: its number in the list Luca asked ("1 was a swap"); null when asked on its own
+export async function markQuestionSent(groupId: string, messageId: number | null, item: number | null = null): Promise<void> {
   await query(
     `UPDATE question_groups
      SET sent_at = NOW(), telegram_message_id = $2, asked_total_usd = total_usd, asked_count = event_count,
-         updated_at = NOW()
+         asked_item = $3, updated_at = NOW()
      WHERE id = $1`,
-    [groupId, messageId],
+    [groupId, messageId, item],
+  );
+}
+
+// A large transfer's alert asks "What was it for?" itself: its group counts as asked, so
+// the morning message does not ask again (one event, one message)
+export async function markAskedByAlert(userId: string, counterparty: string, direction: 'in' | 'out'): Promise<void> {
+  await query(
+    `UPDATE question_groups
+     SET sent_at = NOW(), telegram_message_id = NULL, asked_total_usd = total_usd, asked_count = event_count,
+         asked_item = NULL, updated_at = NOW()
+     WHERE user_id = $1 AND counterparty_address = $2 AND direction = $3 AND status = 'open' AND event_count > 0`,
+    [userId, counterparty.toLowerCase(), direction],
   );
 }
 

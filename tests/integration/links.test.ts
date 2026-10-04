@@ -13,7 +13,8 @@ import { executeTool } from '../../src/agent/tools.js';
 import { getOverview } from '../../src/books/overview.js';
 import { detectLargeMovements } from '../../src/alerts/detectors.js';
 import { refreshQuestionGroups, getQuestionsToSend } from '../../src/alerts/questions.js';
-import { questionText } from '../../src/telegram/alerts.js';
+import { askItem } from '../../src/alerts/ask.js';
+import { namesFor } from '../../src/books/names.js';
 
 const link = (h: string): string => `[${h.slice(0, 6)}…${h.slice(-4)}](https://basescan.org/tx/${h})`;
 
@@ -86,10 +87,12 @@ describeDb('BaseScan links (integration)', () => {
 
     const one = qs.find((q) => q.event_count === 1)!;
     expect(one.hash).toBe(single.hash);
-    expect(questionText(one).split('\n')[1]).toBe(`Transaction: ${link(single.hash)}`);
+    const name = await namesFor(user.id);
+    const day = (d: Date) => new Date(d).toISOString().slice(0, 10);
+    expect(askItem(one, name, day).endsWith(` ${link(single.hash)}`)).toBe(true);
 
     const group = qs.find((q) => q.event_count === 2)!;
     expect(group.hash).toBeNull();
-    expect(questionText(group)).not.toContain('basescan.org');
+    expect(askItem(group, name, day)).not.toContain('basescan.org');
   });
 });

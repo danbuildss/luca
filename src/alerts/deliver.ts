@@ -4,6 +4,7 @@ import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { sendPlainWithLinks } from '../telegram/format.js';
 import { ANY_HOUR_ALERTS, isQuietHours } from '../notify/quiet-hours.js';
+import { saveMessage } from '../agent/context.js';
 
 type UndeliveredAlert = {
   id: string;
@@ -11,6 +12,8 @@ type UndeliveredAlert = {
   message: string;
   type: string;
   timezone: string;
+  user_id: string;
+  evidence: { asks?: boolean } | null;
 };
 
 // "Luca's worker has stopped" is sent by the Telegram process (deliverWorkerStaleAlerts):
@@ -22,7 +25,7 @@ const ADMIN_ONLY_ALERTS = ['worker_stale', 'wallet_stale', 'disk_pressure', 'cla
 // the few that go out at any hour (src/notify/quiet-hours.ts); the rest wait for 08:00
 export async function getUndeliveredAlerts(userId: string, now: Date = new Date()): Promise<UndeliveredAlert[]> {
   const res = await query<UndeliveredAlert>(
-    `SELECT a.id, u.telegram_id::text AS telegram_id, a.message, a.type, u.timezone
+    `SELECT a.id, a.user_id, u.telegram_id::text AS telegram_id, a.message, a.type, u.timezone, a.evidence
      FROM alerts a
      JOIN users u ON u.id = a.user_id
      WHERE a.user_id = $1 AND a.sent_at IS NULL AND a.delivery_failed_at IS NULL
@@ -62,8 +65,8 @@ export async function deliverPendingAlerts(userId: string): Promise<void> {
 
 // Run by the Telegram process: "Luca's worker has stopped", to the admins it was queued for
 export async function deliverWorkerStaleAlerts(telegram: Telegram): Promise<void> {
-  const rows = (await query<UndeliveredAlert & { user_id: string }>(
-    `SELECT a.id, a.user_id, u.telegram_id::text AS telegram_id, a.message, a.type, u.timezone
+  const rows = (await query<UndeliveredAlert>(
+    `SELECT a.id, a.user_id, u.telegram_id::text AS telegram_id, a.message, a.type, u.timezone, a.evidence
      FROM alerts a
      JOIN users u ON u.id = a.user_id
      WHERE a.type = $1 AND u.role = 'admin' AND a.sent_at IS NULL AND a.delivery_failed_at IS NULL
@@ -85,6 +88,8 @@ async function send(userId: string, alerts: UndeliveredAlert[], telegram: Telegr
         alert.message,
       );
       await markAlertSent(alert.id);
+      // An alert that asks "What was it for?" is in the conversation, so the answer has its context
+      if (alert.evidence?.asks) await saveMessage({ userId: alert.user_id, role: 'assistant', content: alert.message });
     } catch (err) {
       if (isPermanentDeliveryError(err)) {
         const description = (err as { response?: { description?: string } }).response?.description ?? '403';

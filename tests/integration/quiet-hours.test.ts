@@ -1,9 +1,8 @@
 // Integration: nothing Luca sends on its own reaches an operator between 22:00 and 08:00
 // their time (src/notify/quiet-hours.ts), and the operator sets their timezone in chat.
 import { it, expect } from 'vitest';
-import { describeDb, useIntegrationDb, seedUserWithWallet, insertClassifiedEvent, sql } from './helpers/db.js';
+import { describeDb, useIntegrationDb, seedUserWithWallet, sql } from './helpers/db.js';
 import { getUndeliveredAlerts } from '../../src/alerts/deliver.js';
-import { refreshQuestionGroups, getQuestionsToSend, notOvernight } from '../../src/alerts/questions.js';
 import { setTimezone } from '../../src/notify/timezone.js';
 import { executeTool } from '../../src/agent/tools.js';
 
@@ -23,17 +22,6 @@ describeDb('quiet hours (integration)', () => {
 
     const morning = new Date('2026-10-05T07:05:00Z'); // 08:05 in Lagos
     expect((await getUndeliveredAlerts(user.id, morning)).map((a) => a.type).sort()).toEqual(['large_outflow', 'wallet_ready']);
-  });
-
-  it('questions wait overnight in the operator\'s timezone', async () => {
-    const { user, wallet } = await seedUserWithWallet({ timezone: 'Europe/London' });
-    await insertClassifiedEvent({ wallet, direction: 'out', amount: 106.88, usdValue: 106.88, label: 'unknown', at: '1 hour' });
-    await refreshQuestionGroups(user.id);
-    const mine = (await getQuestionsToSend()).filter((q) => q.user_id === user.id);
-    expect(mine).toHaveLength(1);
-
-    expect(notOvernight(mine, new Date('2026-10-04T00:00:00Z'))).toEqual([]); // 01:00 in London
-    expect(notOvernight(mine, new Date('2026-10-04T12:00:00Z'))).toHaveLength(1);
   });
 
   it('"I\'m in London": saved straight away, in Luca\'s words; an unknown zone changes nothing', async () => {

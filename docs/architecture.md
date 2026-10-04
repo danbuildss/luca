@@ -68,8 +68,7 @@ Contents:
 - materiality thresholds, reporting preferences
 
 ### 6. Reporting
-- Daily brief (morning)
-- Weekly brief
+- Morning message at 08:00 local time, only when something happened or there is something new to ask; Mondays cover the week
 - Anomaly brief (triggered)
 - Ad hoc explanations
 - Evidence-backed answers
