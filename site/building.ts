@@ -94,6 +94,33 @@ export const buildingData: BuildingData = {
 
   buildLog: [
     {
+      date: '2026-09-30',
+      title: 'Luca recognises staking from the chain',
+      description: "When tokens move into a staking contract, Luca now reads the contract's own record of the stake before and after the transfer, so a stake is recognised as capital moved, not spending. It found a real 700,000 BNKR stake this way without being told.",
+      status: 'shipped',
+      evidenceLink: 'https://github.com/danbuildss/luca/pull/100',
+      public: true,
+      draft: true,
+    },
+    {
+      date: '2026-09-30',
+      title: 'New wallets: Luca now says when your books are ready',
+      description: 'Our first outside operator asked for his balance seconds after adding a wallet and got an empty answer. Now Luca shows what it can already see, says it is still reading your history, and messages you once your books are ready. Answers that need complete books wait until then. The welcome message is also no longer sent twice.',
+      status: 'shipped',
+      evidenceLink: 'https://github.com/danbuildss/luca/pull/101',
+      public: true,
+      draft: true,
+    },
+    {
+      date: '2026-09-28',
+      title: 'AI classification now runs in production',
+      description: "Luca's AI classifier, which labels the transfers no rule can, had not been running. It runs now, and anything it can't place stays unknown for you to answer.",
+      status: 'fixed',
+      evidenceLink: 'https://github.com/danbuildss/luca/pull/98',
+      public: true,
+      draft: true,
+    },
+    {
       date: '2026-09-27',
       title: "Luca no longer says it changed something it didn't",
       description: 'Real-wallet testing caught Luca replying "Confirmed" to a request it had not carried out. Luca now only says a change happened after it has been made, and otherwise asks again.',
