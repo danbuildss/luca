@@ -54,7 +54,7 @@ function callAnswer(proposal_id: string, accept: boolean) {
 // Three earlier payments to a vendor labeled by the model, then the operator corrects a new one
 async function seedVendor(wallet: WalletFx, vendor = addr()) {
   const earlier = [];
-  for (const [label, at] of [['expense', '5 days'], ['unknown', '4 days'], ['revenue', '3 days']] as const) {
+  for (const [label, at] of [['expense', '5 days'], ['unknown', '4 days'], ['refund', '3 days']] as const) {
     earlier.push(await insertClassifiedEvent({ wallet, direction: 'out', counterparty: vendor, amount: 12, usdValue: 12, label, method: 'model', at }));
   }
   const latest = await insertEvent({ wallet, direction: 'out', counterparty: vendor, amount: 20, usdValue: 20, at: '1 hour' });
@@ -74,50 +74,50 @@ describeDb('changing earlier entries needs a yes (integration)', () => {
     const { user, wallet } = await seedUserWithWallet();
     const { earlier, latest } = await seedVendor(wallet);
 
-    const result = await applyCorrection({ userId: user.id, eventId: latest.id, newLabel: 'revenue' });
+    const result = await applyCorrection({ userId: user.id, eventId: latest.id, newLabel: 'refund' });
     const p = proposalOf(result.rule);
-    // The revenue one already has the label; the other two would change
+    // The refund one already has the label; the other two would change
     expect(p.count).toBe(2);
-    expect(p.question).toMatch(/^I found 2 earlier payments to 0x\w{4}…\w{4} that the same rule covers \(1 labeled expense, 1 unknown\)\. Want me to label them revenue too\?/);
+    expect(p.question).toMatch(/^I found 2 earlier payments to 0x\w{4}…\w{4} that the same rule covers \(1 labeled expense, 1 unknown\)\. Want me to label them refund too\?/);
     expect(p.question.split('\n').slice(1)).toHaveLength(2);
     for (const line of p.question.split('\n').slice(1)) expect(line).toMatch(/^- \w{3} \d+ {2}12 USDC {2}\[0x\w{4}…\w{4}\]\(https:\/\/basescan\.org\/tx\/0x[0-9a-f]{64}\)$/);
     expect(describeRuleOutcome(result.rule)).toBe(`New transfers with this address will be labeled the same way. I haven't changed any earlier ones.\n\n${p.question}`);
 
     expect((await active(earlier[0].id)).label).toBe('expense');
     expect((await active(earlier[1].id)).label).toBe('unknown');
-    expect(await active(latest.id)).toMatchObject({ label: 'revenue', source: 'user' });
+    expect(await active(latest.id)).toMatchObject({ label: 'refund', source: 'user' });
   });
 
   it('"yes" to the current question relabels exactly the proposed transfers; the answer is in code, not the model', async () => {
     const { user, wallet } = await seedUserWithWallet();
     const { earlier, latest } = await seedVendor(wallet);
-    await applyCorrection({ userId: user.id, eventId: latest.id, newLabel: 'revenue' });
+    await applyCorrection({ userId: user.id, eventId: latest.id, newLabel: 'refund' });
 
     const r = await operatorSays(user.id, 'yes');
     expect(create).not.toHaveBeenCalled();
-    expect(r.text).toMatch(/^Done\. 2 earlier payments to 0x\w{4}…\w{4} are now revenue\.$/);
-    expect(await active(earlier[0].id)).toMatchObject({ label: 'revenue', method: 'counterparty', source: null });
-    expect((await active(earlier[1].id)).label).toBe('revenue');
+    expect(r.text).toMatch(/^Done\. 2 earlier payments to 0x\w{4}…\w{4} are now refund\.$/);
+    expect(await active(earlier[0].id)).toMatchObject({ label: 'refund', method: 'counterparty', source: null });
+    expect((await active(earlier[1].id)).label).toBe('refund');
     expect(await pendingProposals(user.id)).toEqual([]);
   });
 
   it('"no" changes nothing, and new transfers still follow the rule', async () => {
     const { user, wallet } = await seedUserWithWallet();
     const { vendor, earlier, latest } = await seedVendor(wallet);
-    await applyCorrection({ userId: user.id, eventId: latest.id, newLabel: 'revenue' });
+    await applyCorrection({ userId: user.id, eventId: latest.id, newLabel: 'refund' });
 
     const r = await operatorSays(user.id, 'no thanks');
-    expect(r.text).toMatch(/^OK, I left the 2 earlier payments to 0x\w{4}…\w{4} as they were\. New ones will still be labeled revenue\.$/);
+    expect(r.text).toMatch(/^OK, I left the 2 earlier payments to 0x\w{4}…\w{4} as they were\. New ones will still be labeled refund\.$/);
     expect((await active(earlier[0].id)).label).toBe('expense');
     const next = await insertEvent({ wallet, direction: 'out', counterparty: vendor, amount: 5, usdValue: 5 });
     await classifyPendingEvents(user.id);
-    expect((await active(next.id)).label).toBe('revenue');
+    expect((await active(next.id)).label).toBe('refund');
   });
 
   it('an expired question cannot be accepted', async () => {
     const { user, wallet } = await seedUserWithWallet();
     const { earlier, latest } = await seedVendor(wallet);
-    const p = proposalOf((await applyCorrection({ userId: user.id, eventId: latest.id, newLabel: 'revenue' })).rule);
+    const p = proposalOf((await applyCorrection({ userId: user.id, eventId: latest.id, newLabel: 'refund' })).rule);
     await sql(`UPDATE label_proposals SET expires_at = NOW() - INTERVAL '1 minute' WHERE id = $1`, [p.id]);
 
     expect(await answerProposal({ userId: user.id, proposalId: p.id, accept: true })).toMatchObject({ ok: false, reason: 'not_pending' });
@@ -132,23 +132,23 @@ describeDb('changing earlier entries needs a yes (integration)', () => {
   it('a transfer the operator labeled after the question is left alone, and the reply says so', async () => {
     const { user, wallet } = await seedUserWithWallet();
     const { earlier, latest } = await seedVendor(wallet);
-    const p = proposalOf((await applyCorrection({ userId: user.id, eventId: latest.id, newLabel: 'revenue' })).rule);
+    const p = proposalOf((await applyCorrection({ userId: user.id, eventId: latest.id, newLabel: 'refund' })).rule);
     // The operator labels one of them themselves in the meantime (a label, not a new rule)
     await sql(`UPDATE classifications SET superseded_at = NOW() WHERE event_id = $1 AND superseded_at IS NULL`, [earlier[0].id]);
     await sql(`INSERT INTO classifications (event_id, user_id, label, confidence, method, evidence, source) VALUES ($1, $2, 'refund', 1, 'counterparty', 'mine', 'user')`, [earlier[0].id, user.id]);
 
     const r = await answerProposal({ userId: user.id, proposalId: p.id, accept: true });
     expect(r).toMatchObject({ ok: true, changed: 1, skipped: 1 });
-    expect(r.text).toMatch(/^Done\. 1 earlier payment to 0x\w{4}…\w{4} is now revenue\. I left 1 alone because it changed since I asked/);
+    expect(r.text).toMatch(/^Done\. 1 earlier payment to 0x\w{4}…\w{4} is now refund\. I left 1 alone because it changed since I asked/);
     expect(await active(earlier[0].id)).toMatchObject({ label: 'refund', source: 'user' });
-    expect((await active(earlier[1].id)).label).toBe('revenue');
+    expect((await active(earlier[1].id)).label).toBe('refund');
   });
 
   it("another operator can never answer someone's question", async () => {
     const alice = await seedUserWithWallet();
     const bob = await seedUserWithWallet();
     const { earlier, latest } = await seedVendor(alice.wallet);
-    const p = proposalOf((await applyCorrection({ userId: alice.user.id, eventId: latest.id, newLabel: 'revenue' })).rule);
+    const p = proposalOf((await applyCorrection({ userId: alice.user.id, eventId: latest.id, newLabel: 'refund' })).rule);
 
     expect(await answerProposal({ userId: bob.user.id, proposalId: p.id, accept: true })).toMatchObject({ ok: false, reason: 'not_found' });
     // Bob has no open question: his "yes" is an ordinary message for the model
@@ -162,7 +162,7 @@ describeDb('changing earlier entries needs a yes (integration)', () => {
   it('a bare "yes" after the conversation moved on asks which question, and "yes to 1" answers it', async () => {
     const { user, wallet } = await seedUserWithWallet();
     const { earlier, latest } = await seedVendor(wallet);
-    await applyCorrection({ userId: user.id, eventId: latest.id, newLabel: 'revenue' });
+    await applyCorrection({ userId: user.id, eventId: latest.id, newLabel: 'refund' });
     await saveMessage({ userId: user.id, role: 'user', content: 'what did gas cost this week?' });
 
     const r = await operatorSays(user.id, 'yes');
@@ -173,42 +173,42 @@ describeDb('changing earlier entries needs a yes (integration)', () => {
 
     const done = await operatorSays(user.id, 'yes to 1');
     expect(done.text).toMatch(/^Done\. 2 earlier payments/);
-    expect((await active(earlier[0].id)).label).toBe('revenue');
+    expect((await active(earlier[0].id)).label).toBe('refund');
   });
 
   it('with two questions open, a bare "yes" answers neither and lists both', async () => {
     const { user, wallet } = await seedUserWithWallet();
     const a = await seedVendor(wallet);
     const b = await seedVendor(wallet);
-    await applyCorrection({ userId: user.id, eventId: a.latest.id, newLabel: 'revenue' });
+    await applyCorrection({ userId: user.id, eventId: a.latest.id, newLabel: 'refund' });
     await applyCorrection({ userId: user.id, eventId: b.latest.id, newLabel: 'expense' });
 
     const r = await operatorSays(user.id, 'yes');
-    expect(r.text).toMatch(/^I have 2 open questions for you\. Which one do you mean\?\n\n1\. .+revenue too\?\n2\. .+expense too\?/);
+    expect(r.text).toMatch(/^I have 2 open questions for you\. Which one do you mean\?\n\n1\. .+refund too\?\n2\. .+expense too\?/);
     expect((await active(a.earlier[0].id)).label).toBe('expense');
     expect((await active(b.earlier[1].id)).label).toBe('unknown');
 
     await operatorSays(user.id, 'no to 2');
     await operatorSays(user.id, 'yes to 1');
-    expect((await active(a.earlier[1].id)).label).toBe('revenue');
+    expect((await active(a.earlier[1].id)).label).toBe('refund');
     expect((await active(b.earlier[1].id)).label).toBe('unknown');
   });
 
   it('an explicit answer through the model resolves the question it names, in the change\'s own words', async () => {
     const { user, wallet } = await seedUserWithWallet();
     const { earlier, latest } = await seedVendor(wallet);
-    const p = proposalOf((await applyCorrection({ userId: user.id, eventId: latest.id, newLabel: 'revenue' })).rule);
+    const p = proposalOf((await applyCorrection({ userId: user.id, eventId: latest.id, newLabel: 'refund' })).rule);
 
-    responses = [callAnswer(p.id, true), say('Done, I updated them all to revenue and more!')];
+    responses = [callAnswer(p.id, true), say('Done, I updated them all to refund and more!')];
     const r = await operatorSays(user.id, 'yes please update those earlier payments too');
-    expect(r.text).toMatch(/^Done\. 2 earlier payments to 0x\w{4}…\w{4} are now revenue\.$/);
-    expect((await active(earlier[0].id)).label).toBe('revenue');
+    expect(r.text).toMatch(/^Done\. 2 earlier payments to 0x\w{4}…\w{4} are now refund\.$/);
+    expect((await active(earlier[0].id)).label).toBe('refund');
   });
 
   it("the model cannot answer a question the operator's words do not answer", async () => {
     const { user, wallet } = await seedUserWithWallet();
     const { earlier, latest } = await seedVendor(wallet);
-    const p = proposalOf((await applyCorrection({ userId: user.id, eventId: latest.id, newLabel: 'revenue' })).rule);
+    const p = proposalOf((await applyCorrection({ userId: user.id, eventId: latest.id, newLabel: 'refund' })).rule);
 
     responses = [callAnswer(p.id, true), say('Which question do you mean?')];
     const r = await operatorSays(user.id, 'hmm, what were those payments for again?');
@@ -231,7 +231,7 @@ describeDb('changing earlier entries needs a yes (integration)', () => {
       const retrying = await insertClassifiedEvent({ wallet, direction: 'out', counterparty: vendor, label: 'unknown', method: 'model', source: 'failure' });
       const latest = await insertEvent({ wallet, direction: 'out', counterparty: vendor });
 
-      const p = proposalOf((await applyCorrection({ userId: user.id, eventId: latest.id, newLabel: 'revenue' })).rule);
+      const p = proposalOf((await applyCorrection({ userId: user.id, eventId: latest.id, newLabel: 'refund' })).rule);
       const ids = (await sql<{ event_ids: string[] }>(`SELECT event_ids FROM label_proposals WHERE id = $1`, [p.id]))[0].event_ids;
       expect(ids).toEqual([single.id]);
       void [incoming, decided, complexLeg, mine, retrying];
@@ -241,7 +241,7 @@ describeDb('changing earlier entries needs a yes (integration)', () => {
   it('a grouped question still applies to exactly its group; other earlier transfers are asked about', async () => {
     const { user, wallet } = await seedUserWithWallet();
     const cp = addr();
-    const auto = await insertClassifiedEvent({ wallet, direction: 'out', counterparty: cp, amount: 300, usdValue: 300, label: 'revenue', method: 'model', at: '8 days' });
+    const auto = await insertClassifiedEvent({ wallet, direction: 'out', counterparty: cp, amount: 300, usdValue: 300, label: 'refund', method: 'model', at: '8 days' });
     const group = [];
     for (const at of ['3 days', '2 days']) {
       group.push(await insertClassifiedEvent({ wallet, direction: 'out', counterparty: cp, amount: 400, usdValue: 400, label: 'unknown', at }));
@@ -252,7 +252,7 @@ describeDb('changing earlier entries needs a yes (integration)', () => {
     const answer = await labelQuestionGroup(q.id, user.id, 'expense');
     expect(answer).toMatchObject({ ok: true, labeled: 2, rule: { kind: 'learned', proposal: { count: 1 } } });
     for (const e of group) expect((await active(e.id)).label).toBe('expense');
-    expect((await active(auto.id)).label).toBe('revenue');
+    expect((await active(auto.id)).label).toBe('refund');
   });
 
   it('switching off a rule asks before sending its earlier labels back', async () => {
@@ -278,7 +278,7 @@ describeDb('changing earlier entries needs a yes (integration)', () => {
   it('a newer answer about the same address replaces the open question', async () => {
     const { user, wallet } = await seedUserWithWallet();
     const { vendor, earlier, latest } = await seedVendor(wallet);
-    const old = proposalOf((await applyCorrection({ userId: user.id, eventId: latest.id, newLabel: 'revenue' })).rule);
+    const old = proposalOf((await applyCorrection({ userId: user.id, eventId: latest.id, newLabel: 'refund' })).rule);
     const again = await insertEvent({ wallet, direction: 'out', counterparty: vendor, amount: 9, usdValue: 9 });
     // Contradicts the rule just learned: it is switched off, so its question no longer applies
     await applyCorrection({ userId: user.id, eventId: again.id, newLabel: 'expense' });
