@@ -88,14 +88,39 @@ export async function getEventWithClassification(
 // direction: the event direction the rule applies to ('in' | 'out').
 // Omitted/null = legacy any-direction rule (e.g. a counterparty-level label).
 // A switched-off rule for the same address and direction is switched back on.
+// The rule as rule_events records it (migration 030)
+type RuleState = { label: string; name: string | null; direction: string | null; active: boolean; disabled_reason: string | null };
+const RULE_STATE = `label::text AS label, name, direction, active, disabled_reason`;
+
+// Every change to a rule is kept: before, after, and what caused it (data compounds)
+async function recordRuleEvent(p: {
+  ruleId: string; userId: string; event: 'created' | 'changed' | 'disabled' | 'reenabled';
+  before: RuleState | null; after: RuleState; correctionId?: string | null; reason?: string | null;
+}): Promise<void> {
+  await query(
+    `INSERT INTO rule_events (rule_id, user_id, event, before, after, correction_id, reason)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [p.ruleId, p.userId, p.event, p.before ? JSON.stringify(p.before) : null, JSON.stringify(p.after), p.correctionId ?? null, p.reason ?? null],
+  );
+}
+
+const sameRule = (a: RuleState, b: RuleState): boolean =>
+  a.label === b.label && a.name === b.name && a.active === b.active;
+
 export async function upsertCounterpartyRule(params: {
   userId: string;
   address: string;
   label: ClassificationLabel;
   name: string | null;
   direction?: 'in' | 'out' | null;
+  correctionId?: string | null;
 }): Promise<string> {
-  const res = await query<{ id: string }>(
+  const before = (await query<RuleState>(
+    `SELECT ${RULE_STATE} FROM counterparty_rules
+     WHERE user_id = $1 AND address = $2 AND COALESCE(direction, '*') = COALESCE($3::text, '*')`,
+    [params.userId, params.address.toLowerCase(), params.direction ?? null],
+  )).rows[0] ?? null;
+  const res = await query<{ id: string } & RuleState>(
     `INSERT INTO counterparty_rules (user_id, address, label, name, confidence, source, direction)
      VALUES ($1, $2, $3, $4, 1.0, 'user', $5::text)
      ON CONFLICT (user_id, address, (COALESCE(direction, '*'))) DO UPDATE
@@ -107,10 +132,18 @@ export async function upsertCounterpartyRule(params: {
            disabled_at = NULL,
            disabled_reason = NULL,
            updated_at = NOW()
-     RETURNING id`,
+     RETURNING id, ${RULE_STATE}`,
     [params.userId, params.address.toLowerCase(), params.label, params.name, params.direction ?? null],
   );
-  return res.rows[0].id;
+  const { id, ...after } = res.rows[0];
+  if (!before || !sameRule(before, after)) {
+    await recordRuleEvent({
+      ruleId: id, userId: params.userId,
+      event: !before ? 'created' : !before.active ? 'reenabled' : 'changed',
+      before, after, correctionId: params.correctionId,
+    });
+  }
+  return id;
 }
 
 // The active rule that would label this address in this direction, if any.
@@ -127,12 +160,19 @@ export async function getActiveRule(
   return findCounterpartyRule(address, direction, res.rows) as (CounterpartyRuleRow & { id: string }) | null;
 }
 
-export async function disableRule(ruleId: string, userId: string, reason: string): Promise<void> {
-  await query(
+export async function disableRule(ruleId: string, userId: string, reason: string, correctionId: string | null = null): Promise<void> {
+  const before = (await query<RuleState>(
+    `SELECT ${RULE_STATE} FROM counterparty_rules WHERE id = $1 AND user_id = $2`, [ruleId, userId],
+  )).rows[0];
+  const after = (await query<RuleState>(
     `UPDATE counterparty_rules SET active = FALSE, disabled_at = NOW(), disabled_reason = $3, updated_at = NOW()
-     WHERE id = $1 AND user_id = $2`,
+     WHERE id = $1 AND user_id = $2
+     RETURNING ${RULE_STATE}`,
     [ruleId, userId, reason],
-  );
+  )).rows[0];
+  if (before && after && before.active) {
+    await recordRuleEvent({ ruleId, userId, event: 'disabled', before, after, correctionId, reason });
+  }
 }
 
 // Exchange contracts on Base (checked on BaseScan). A rule learned from one would label

@@ -1,4 +1,4 @@
-import { pool } from '../db.js';
+import { pool, query } from '../db.js';
 import { ClassificationLabel } from '../types/index.js';
 import {
   getEventWithClassification, upsertCounterpartyRule, getActiveRule, disableRule, isSwapVenue,
@@ -20,6 +20,8 @@ export type ApplyCorrectionParams = {
   reason?: string;
   counterpartyName?: string;
   failureReason?: FailureReason;
+  // The operator's own words that asked for this change (migration 030)
+  sourceMessage?: string | null;
 };
 
 // What the correction did to the rule for this address and direction. Earlier transfers
@@ -88,9 +90,10 @@ export async function applyCorrection(params: ApplyCorrectionParams): Promise<Co
     );
 
     // source = 'user' marks this as a correction; automated classifiers never supersede it
-    await client.query(
+    const created = await client.query<{ id: string }>(
       `INSERT INTO classifications (event_id, user_id, label, confidence, method, evidence, source)
-       VALUES ($1, $2, $3, 1.0, 'counterparty', $4, 'user')`,
+       VALUES ($1, $2, $3, 1.0, 'counterparty', $4, 'user')
+       RETURNING id`,
       [params.eventId, params.userId, params.newLabel, evidence],
     );
 
@@ -98,13 +101,13 @@ export async function applyCorrection(params: ApplyCorrectionParams): Promise<Co
     const corrRes = await client.query<{ id: string }>(
       `INSERT INTO corrections
          (user_id, type, event_id, counterparty_address, old_label, new_label, reason,
-          classification_id, old_confidence, created_rule, failure_reason)
-       VALUES ($1, 'tx', $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          classification_id, old_confidence, created_rule, failure_reason, new_classification_id, source_message)
+       VALUES ($1, 'tx', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING id`,
       [
         params.userId, params.eventId, counterparty, oldLabel, params.newLabel,
         params.reason ?? null, oldClassificationId, oldConfidence, createdRule,
-        params.failureReason ?? null,
+        params.failureReason ?? null, created.rows[0].id, params.sourceMessage?.slice(0, 2000) ?? null,
       ],
     );
     correctionId = corrRes.rows[0].id;
@@ -128,7 +131,10 @@ export async function applyCorrection(params: ApplyCorrectionParams): Promise<Co
       label: params.newLabel,
       name: params.counterpartyName ?? null,
       direction: event.direction,
+      correctionId,
     });
+    // The rule this correction taught
+    await query(`UPDATE corrections SET rule_id = $2 WHERE id = $1`, [correctionId, ruleId]);
     // Earlier transfers the rule covers change only if the operator says yes
     const earlier = await eventsForRule(params.userId, counterparty, event.direction, params.newLabel, params.eventId);
     const proposal = await createProposal({
@@ -137,7 +143,7 @@ export async function applyCorrection(params: ApplyCorrectionParams): Promise<Co
     });
     rule = { kind: 'learned', proposal };
   } else if (counterparty && plan === 'switch_off' && activeRule) {
-    await disableRule(activeRule.id, params.userId, `Contradicted by a correction to ${params.newLabel}`);
+    await disableRule(activeRule.id, params.userId, `Contradicted by a correction to ${params.newLabel}`, correctionId);
     // What the switched-off rule labeled goes back to unknown only if the operator says yes
     const labeled = await eventsLabeledByRule(params.userId, activeRule.id, counterparty, event.direction, params.eventId);
     const proposal = await createProposal({

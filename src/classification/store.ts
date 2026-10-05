@@ -78,6 +78,10 @@ export type SaveClassificationRow = {
   shape?: TxShape | null;
   rule_id?: string | null;
   fee_source_id?: string | null;
+  // An AI label's provenance (migration 030)
+  model?: string | null;
+  prompt_version?: string | null;
+  inputs?: Record<string, unknown> | null;
   // Set → store a retryable failure placeholder instead of a real classification
   failure?: ClassificationFailure;
   // Active classification id seen when the event was read (null = none). When provided,
@@ -173,9 +177,11 @@ export async function saveManyClassifications(results: SaveClassificationRow[]):
         [r.event_id],
       );
       await client.query(
-        `INSERT INTO classifications (event_id, user_id, label, confidence, method, evidence, shape, rule_id, fee_source_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-        [r.event_id, r.user_id, r.label, r.confidence, r.method, r.evidence, r.shape ?? null, r.rule_id ?? null, r.fee_source_id ?? null],
+        `INSERT INTO classifications
+           (event_id, user_id, label, confidence, method, evidence, shape, rule_id, fee_source_id, model, prompt_version, inputs)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        [r.event_id, r.user_id, r.label, r.confidence, r.method, r.evidence, r.shape ?? null, r.rule_id ?? null, r.fee_source_id ?? null,
+          r.model ?? null, r.prompt_version ?? null, r.inputs ? JSON.stringify(r.inputs) : null],
       );
       written++;
     }

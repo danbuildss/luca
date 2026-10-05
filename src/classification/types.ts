@@ -30,6 +30,11 @@ export type ClassificationResult = {
   rule_id?: string | null;
   // The creator-fee source a verified claim belongs to (src/fees/claims.ts)
   fee_source_id?: string | null;
+  // An AI label: the model, a fingerprint of the classifier instructions, and exactly what
+  // the model was shown for this transfer (migration 030, data compounds)
+  model?: string | null;
+  prompt_version?: string | null;
+  inputs?: Record<string, unknown> | null;
 };
 
 export type CounterpartyRuleRow = {
