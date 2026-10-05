@@ -35,7 +35,7 @@ import { runAgent } from '../../src/agent/run.js';
 import { saveAnswerTrace } from '../../src/agent/traces.js';
 import * as db from '../../src/db.js';
 import {
-  namesPeriod, checkArgs, activityArgs, walletArgs, feeArgs, restatesChange, claimsChange, NO_CHANGE_MADE, claimsCheck, claimsVerdict, asksCompleteness, periodDays, leaksToolCall,
+  namesPeriod, checkArgs, activityArgs, walletArgs, feeArgs, restatesChange, claimsChange, asksWhatNeedsContext, NO_CHANGE_MADE, claimsCheck, claimsVerdict, asksCompleteness, periodDays, leaksToolCall,
   CLAIM_CORRECTION, NO_CHECK_STARTED, VERDICT_CORRECTION, TOOL_LEAK_CORRECTION, TOOL_LEAK_FALLBACK,
 } from '../../src/agent/checks.js';
 
@@ -346,3 +346,17 @@ describe('creator fees: the machine report only when the operator asks for it', 
     expect(feeArgs('how are the ACCUM fees?', { format: 'machine' })).toEqual({});
   });
 });
+
+describe('"what still needs context?" is answered from the books', () => {
+  it('recognises the question, and not an answer', () => {
+    for (const t of ['what still needs context?', 'What are the 6 that needs clarification?', 'show me the unknown transactions',
+      'which transfers couldn\'t you place?', 'Anything unlabeled?', 'what needs a reason?']) {
+      expect(asksWhatNeedsContext(t), t).toBe(true);
+    }
+    for (const t of ['the 49.79 USDC from 0x8f10 was revenue', 'label the unknown one as expense', 'how was my week?',
+      'The 35 USDC to 0x7872 was an expense. The 70,731 BNKR was a swap.', 'what do I hold?']) {
+      expect(asksWhatNeedsContext(t), t).toBe(false);
+    }
+  });
+});
+

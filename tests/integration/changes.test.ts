@@ -134,6 +134,19 @@ describeDb('changes by chat, no buttons (integration)', () => {
     expect(r.text).not.toMatch(/main ones|0\.0000134/);
   });
 
+  it('Oct 5 20:07: asked again, the list is read from the books, never repeated from the chat by the model', async () => {
+    const { user, wallet } = await seedUserWithWallet();
+    await insertClassifiedEvent({ wallet, direction: 'out', counterparty: addr(), amount: 35, usdValue: 35, label: 'unknown' });
+    await saveMessage({ userId: user.id, role: 'assistant', content: 'These 8 still need context: … The two ETH inflows are the main ones.' });
+    responses = [say('These 8 still need context: … The two ETH inflows are still the main ones.')];
+    create.mockClear();
+
+    const r = await says(user.id, 'what still needs context?');
+    expect(create).not.toHaveBeenCalled();
+    expect(r.text.split('\n')[0]).toBe('1 transfer still needs context:');
+    expect(r.text).not.toContain('main ones');
+  });
+
   it('keeps the answer to anything else they asked, and ends with the question', async () => {
     const { user, wallet } = await seedUserWithWallet();
     const ev = await insertClassifiedEvent({ wallet, direction: 'in', amount: 12, usdValue: 12, label: 'unknown' });

@@ -10,7 +10,7 @@ import { saveAnswerTrace, type ToolUse } from './traces.js';
 import { ADMIN_TOOL_DEFINITIONS, executeAdminTool, isAdminTool } from './admin-tools.js';
 import { logAgentSpend } from './spend.js';
 import {
-  CHECK_TOOLS, checkArgs, activityArgs, walletArgs, feeArgs, claimsCheck, claimsVerdict, claimsChange, leaksToolCall, restatesChange,
+  CHECK_TOOLS, checkArgs, asksWhatNeedsContext, activityArgs, walletArgs, feeArgs, claimsCheck, claimsVerdict, claimsChange, leaksToolCall, restatesChange,
   NO_CHANGE_MADE,
   CLAIM_CORRECTION, NO_CHECK_STARTED, VERDICT_CORRECTION, TOOL_LEAK_CORRECTION, TOOL_LEAK_FALLBACK,
 } from './checks.js';
@@ -82,6 +82,16 @@ export async function runAgent(params: {
   if (direct) {
     used.push({ name: 'check_books_complete', args: direct.args });
     return finish(direct.text);
+  }
+
+  // "What still needs context?" is Luca's own list from the books, never the model's
+  // memory of an earlier answer
+  if (asksWhatNeedsContext(userMessage)) {
+    const list = await executeTool(userId, 'get_unknown_transactions', {}) as { report?: unknown };
+    if (typeof list?.report === 'string') {
+      used.push({ name: 'get_unknown_transactions', args: {} });
+      return finish(list.report);
+    }
   }
 
   // "yes" / "no" to Luca's question about earlier transfers is answered in code, never
