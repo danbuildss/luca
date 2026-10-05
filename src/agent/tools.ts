@@ -16,6 +16,7 @@ import { txLink, withLink } from '../ledger/links.js';
 import { ClassificationLabel, CLASSIFICATION_LABELS, WALLET_ROLES, SUPPORTED_CHAINS } from '../types/index.js';
 import { stakedPositions } from '../staking/positions.js';
 import { isAddressLike } from '../books/names.js';
+import { unknownListText } from '../books/unknown-list.js';
 import { amountText as displayAmount, DUST_USD } from '../books/amounts.js';
 import { getSpotPrices } from '../ingestion/price.js';
 import { setTimezone } from '../notify/timezone.js';
@@ -151,7 +152,7 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
     type: 'function',
     function: {
       name: 'get_unknown_transactions',
-      description: "Get transactions that haven't been classified yet or are labeled 'unknown'. Use this when the operator asks what needs attention or what is unclassified.",
+      description: "The transfers still labeled unknown (that need the operator's context), newest first, as a numbered list in Luca's own wording. Use this when the operator asks what needs context, what is unclassified or what Luca could not place. The reply is sent to the operator exactly as the tool writes it.",
       parameters: {
         type: 'object',
         properties: {
@@ -640,12 +641,15 @@ async function runTool(
     }
 
     case 'get_unknown_transactions': {
-      const limit = (args.limit as number | undefined) ?? 20;
-      const events = await getEventsForReview({ userId, label: 'unknown', limit, withoutDust: true });
+      const limit = Math.min(Math.max(Number(args.limit) || 15, 1), 30);
+      // One more than shown, to know whether to say "…and more"
+      const all = await getEventsForReview({ userId, label: 'unknown', limit: 500, withoutDust: true });
+      const events = all.slice(0, limit);
       return {
-        unknown_count: events.length,
+        // Sent to the operator exactly as written (src/books/unknown-list.ts)
+        report: await unknownListText(userId, events, all.length),
+        unknown_count: all.length,
         events: events.map(shown),
-        note: 'A few cents sent in by addresses the operator never dealt with (likely spam) are left out and never need context.',
       };
     }
 

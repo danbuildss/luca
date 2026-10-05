@@ -27,7 +27,7 @@ vi.mock('../../src/ingestion/price.js', () => ({
   enrichUsdValue: vi.fn(),
 }));
 
-import { describeDb, useIntegrationDb, seedUserWithWallet, insertClassifiedEvent, insertEvent, sql, addr } from './helpers/db.js';
+import { describeDb, useIntegrationDb, seedUserWithWallet, insertClassifiedEvent, insertCounterpartyRule, insertEvent, sql, addr } from './helpers/db.js';
 import { runAgent } from '../../src/agent/run.js';
 import { executeTool } from '../../src/agent/tools.js';
 import { pendingProposals } from '../../src/corrections/proposals.js';
@@ -109,6 +109,29 @@ describeDb('changes by chat, no buttons (integration)', () => {
     expect(await sql(`SELECT 1 FROM label_proposals WHERE user_id = $1 AND status = 'pending'`, [user.id])).toHaveLength(1);
     expect((await label(asked.id)).label).toBe('unknown');
     expect((await label(other.id)).label).toBe('unknown');
+  });
+
+  it('Oct 5: "what still needs context?" is Luca\'s own numbered list, with dollars and names; dust left out; the model\'s words never sent', async () => {
+    const { user, wallet } = await seedUserWithWallet({ timezone: 'Europe/London' });
+    const vendor = addr();
+    await insertCounterpartyRule({ userId: user.id, address: vendor, label: 'expense', name: 'OpenAI', direction: 'in' });
+    const usdc = await insertClassifiedEvent({ wallet, direction: 'out', counterparty: addr(), amount: 35, usdValue: 35, label: 'unknown', at: '1 hour' });
+    const eth = await insertClassifiedEvent({ wallet, direction: 'in', counterparty: vendor, asset: 'ETH', amount: 0.01426, usdValue: 35.2, label: 'unknown', at: '2 hours' });
+    const bnkr = await insertClassifiedEvent({ wallet, direction: 'out', counterparty: addr(), asset: 'BNKR', amount: 70730.596728, usdValue: 30.03, label: 'unknown', at: '1 day' });
+    await insertClassifiedEvent({ wallet, direction: 'in', counterparty: addr(), asset: 'ETH', amount: 0.0000134646, usdValue: 0.05, label: 'unknown', at: '3 hours' }); // dust
+
+    responses = [calls(['get_unknown_transactions', {}]), say('The two ETH inflows are the main ones that still need a reason.')];
+    const r = await says(user.id, 'what still needs context?');
+    const lines = r.text.split('\n');
+    expect(lines[0]).toBe('3 transfers still need context:');
+    expect(lines[1]).toMatch(/^1\. \w{3} \d+: 35 USDC to 0x\w{4}…\w{4} \[/);
+    expect(lines[1]).toContain(usdc.hash);
+    expect(lines[2]).toMatch(/^2\. \w{3} \d+: 0\.01426 ETH \(\$35\.20\) from OpenAI \[/);
+    expect(lines[2]).toContain(eth.hash);
+    expect(lines[3]).toMatch(/^3\. \w{3} \d+: 70,731 BNKR \(\$30\.03\) to 0x/);
+    expect(lines[3]).toContain(bnkr.hash);
+    expect(lines.slice(4)).toEqual(['', 'Tell me what they were, like "1 was a swap, 2 was revenue".']);
+    expect(r.text).not.toMatch(/main ones|0\.0000134/);
   });
 
   it('keeps the answer to anything else they asked, and ends with the question', async () => {
