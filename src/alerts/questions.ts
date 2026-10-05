@@ -1,6 +1,7 @@
 import { pool, query } from '../db.js';
 import { logger } from '../logger.js';
 import { usdValueSql } from '../ingestion/assets.js';
+import { dustSql } from '../books/dust.js';
 import type { ClassificationLabel } from '../types/index.js';
 import { applyCorrection, type RuleOutcome } from '../corrections/handler.js';
 import { relabelEvents } from '../corrections/store.js';
@@ -20,9 +21,9 @@ export const REASK_AFTER_DAYS = 30;
 const USD = usdValueSql('ne');
 const COUNTERPARTY = `LOWER(CASE WHEN ne.direction = 'in' THEN ne.from_address ELSE ne.to_address END)`;
 const ASSET_KEY = `COALESCE(LOWER(ne.token_address), 'eth')`;
-// Unknown transfers that need the operator (not retryable failures, not gas)
+// Unknown transfers that need the operator (not retryable failures, not gas, not dust)
 const OPEN_UNKNOWN = `ne.supported IS TRUE AND ne.source_key <> 'gas'
-  AND c.label = 'unknown' AND c.source IS DISTINCT FROM 'failure'`;
+  AND c.label = 'unknown' AND c.source IS DISTINCT FROM 'failure' AND NOT ${dustSql('ne')}`;
 
 // The group's current total has at least doubled since it was last asked or skipped.
 const DOUBLED = (g: string): string => `(
@@ -156,7 +157,8 @@ export type QuestionToSend = {
 
 // Questions due now: big enough (or unpriced), not asked recently (or grown since),
 // within each operator's daily limit, biggest first. Asked in the morning message.
-export async function getQuestionsToSend(userId?: string): Promise<QuestionToSend[]> {
+// `stillOpen`: the Monday reminder, every open one already asked included, up to `limit`.
+export async function getQuestionsToSend(userId?: string, opts: { stillOpen?: boolean; limit?: number } = {}): Promise<QuestionToSend[]> {
   const res = await query<QuestionToSend>(
     `WITH recent AS (
        SELECT user_id, COUNT(*)::int AS n FROM question_groups
@@ -169,7 +171,7 @@ export async function getQuestionsToSend(userId?: string): Promise<QuestionToSen
        WHERE qg.status = 'open' AND qg.event_count > 0 AND u.telegram_id > 0
          AND ($4::uuid IS NULL OR qg.user_id = $4::uuid)
          AND (qg.total_usd >= $1 OR qg.unpriced_count > 0)
-         AND (qg.sent_at IS NULL OR qg.sent_at <= NOW() - ($2::int * INTERVAL '1 day') OR ${DOUBLED('qg')})
+         AND ($5::boolean OR qg.sent_at IS NULL OR qg.sent_at <= NOW() - ($2::int * INTERVAL '1 day') OR ${DOUBLED('qg')})
      )
      SELECT e.id, e.user_id, e.telegram_id, e.timezone, e.counterparty_address, e.direction, e.asset,
             e.event_count, e.total_usd::text AS total_usd, e.unpriced_count, e.first_at, e.last_at,
@@ -185,9 +187,9 @@ export async function getQuestionsToSend(userId?: string): Promise<QuestionToSen
          AND ${ASSET_KEY} = e.asset_key
        LIMIT 1
      ) one ON TRUE
-     WHERE e.rn <= $3 - COALESCE(r.n, 0)
+     WHERE e.rn <= CASE WHEN $5::boolean THEN $6::int ELSE $3 - COALESCE(r.n, 0) END
      ORDER BY e.user_id, e.rn`,
-    [PING_MIN_USD, REASK_AFTER_DAYS, MAX_PINGS_PER_DAY, userId ?? null],
+    [PING_MIN_USD, REASK_AFTER_DAYS, MAX_PINGS_PER_DAY, userId ?? null, opts.stillOpen ?? false, opts.limit ?? MAX_PINGS_PER_DAY],
   );
   return res.rows;
 }
@@ -320,4 +322,16 @@ export async function getOpenUnknowns(userId: string): Promise<OpenUnknowns> {
   );
   const r = res.rows[0];
   return { count: r?.count ?? 0, small_count: r?.small_count ?? 0, small_usd: r?.small_usd ? parseFloat(r.small_usd) : 0 };
+}
+
+// Open questions not in `exclude` (those just listed): how many and how much, for "Plus N
+// smaller ones" in the Monday message
+export async function otherOpenUnknowns(userId: string, exclude: string[]): Promise<{ count: number; usd: number }> {
+  const r = (await query<{ count: number; usd: string | null }>(
+    `SELECT COALESCE(SUM(event_count), 0)::int AS count, SUM(total_usd)::text AS usd
+     FROM question_groups
+     WHERE user_id = $1 AND status IN ('open', 'skipped') AND event_count > 0 AND NOT (id = ANY($2::uuid[]))`,
+    [userId, exclude],
+  )).rows[0];
+  return { count: r?.count ?? 0, usd: r?.usd ? parseFloat(r.usd) : 0 };
 }

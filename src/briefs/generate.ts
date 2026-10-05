@@ -6,7 +6,8 @@ import { stakedPositions } from '../staking/positions.js';
 import { namesFor, type Namer } from '../books/names.js';
 import { tokenAmount, amountText, usdText, DUST_USD } from '../books/amounts.js';
 import { escapeLegacyMarkdown } from '../telegram/format.js';
-import { getOpenUnknowns, PING_MIN_USD } from '../alerts/questions.js';
+import { otherOpenUnknowns } from '../alerts/questions.js';
+import { dustSql } from '../books/dust.js';
 import { askText, type Ask } from '../alerts/ask.js';
 import { getLedgerStatus } from '../ledger/status.js';
 
@@ -36,6 +37,7 @@ type Leg = {
   shape: string | null;
   fee_symbol: string | null;
   gas: boolean;
+  dust: boolean;
 };
 
 // One line of the story: same kind, same other side, same asset add up
@@ -52,11 +54,11 @@ async function legsBetween(userId: string, since: Date, until: Date): Promise<Le
   const rows = (await query<{
     hash: string; direction: 'in' | 'out'; asset: string | null; amount: string; usd: string | null;
     from_address: string; to_address: string | null; label: string | null; shape: string | null;
-    fee_symbol: string | null; source_key: string | null;
+    fee_symbol: string | null; source_key: string | null; dust: boolean;
   }>(
     `SELECT ne.hash, ne.direction, ne.asset, ne.amount::text AS amount, (${USD})::text AS usd,
             ne.from_address, ne.to_address, c.label::text AS label, c.shape, fs.token_symbol AS fee_symbol,
-            ne.source_key
+            ne.source_key, ${dustSql('ne')} AS dust
      FROM normalized_events ne
      JOIN wallets w ON w.id = ne.wallet_id AND w.user_id = $1 AND w.active = TRUE
      LEFT JOIN classifications c ON c.event_id = ne.id AND c.superseded_at IS NULL
@@ -78,6 +80,7 @@ async function legsBetween(userId: string, since: Date, until: Date): Promise<Le
     shape: r.shape,
     fee_symbol: r.fee_symbol,
     gas: r.source_key === 'gas' || r.label === 'gas',
+    dust: r.dust === true,
   }));
 }
 
@@ -128,6 +131,8 @@ export function storyItems(legs: Leg[], name: Namer): { items: Item[]; gasUsd: n
     for (const l of legsOfTx) {
       if (l.usd !== null && l.usd < DUST_USD) continue;
       let kind = kindOf(l);
+      // A few cents from a stranger is not something to tell the operator about
+      if (l.dust && kind === 'unplaced_in') continue;
       if (kind === 'moved' && l.direction === 'in') {
         if (internalOut) continue;
         kind = 'moved_in';
@@ -292,7 +297,7 @@ export async function buildMorning(userId: string, opts: Opts): Promise<Morning>
   const questions = asks.length > 0 ? ['', askText(asks, name, day)] : [];
 
   if (opts.weekly) {
-    const text = weeklyText(legs, name, hLine, questions, await smallLine(userId));
+    const text = weeklyText(legs, name, hLine, questions, await restLine(userId, asks.map((q) => q.id)));
     return { text: ledgerLine ? `${text}\n\n${ledgerLine}` : text, holdings, asked: asks };
   }
 
@@ -331,17 +336,19 @@ async function stakedSummary(userId: string, items: Item[]): Promise<string | nu
   return `You now have ${[...totals].map(([a, n]) => tokenAmount(n, a)).join(' and ')} staked.`;
 }
 
-async function smallLine(userId: string): Promise<string | null> {
-  const open = await getOpenUnknowns(userId);
-  if (open.small_count === 0) return null;
-  const one = open.small_count === 1;
-  return `Plus ${open.small_count} small ${one ? 'transfer' : 'transfers'} under ${usdText(PING_MIN_USD)} (${usdText(open.small_usd)} in total) I haven't asked about. Tell me if you want to go through ${one ? 'it' : 'them'}.`;
+// Everything still open beyond the list just shown, in one line
+async function restLine(userId: string, listed: string[]): Promise<string | null> {
+  const rest = await otherOpenUnknowns(userId, listed);
+  if (rest.count === 0) return null;
+  const one = rest.count === 1;
+  const lead = listed.length > 0 ? `Plus ${rest.count} smaller ${one ? 'one' : 'ones'}` : `${rest.count} small ${one ? 'transfer' : 'transfers'} still open`;
+  return `${lead} (${usdText(rest.usd)} in total). Tell me if you want to go through ${one ? 'it' : 'them'}.`;
 }
 
 function weeklyText(legs: Leg[], name: Namer, hLine: string | null, questions: string[], small: string | null): string {
   const { items, gasUsd } = storyItems(legs, name);
   if (items.length === 0) {
-    return [`Good morning. Quiet week: nothing moved in your wallets.${hLine ? ` ${hLine}` : ''}`, ...questions].join('\n');
+    return [`Good morning. Quiet week: nothing moved in your wallets.${hLine ? ` ${hLine}` : ''}`, ...questions, ...(small ? ['', small] : [])].join('\n');
   }
   const sum = (kinds: Kind[]) => items.filter((i) => kinds.includes(i.kind));
   const usdOf = (xs: Item[]) => xs.reduce((t, i) => t + (i.usd ?? 0), 0);
@@ -366,11 +373,6 @@ function weeklyText(legs: Leg[], name: Namer, hLine: string | null, questions: s
   if (swaps > 0) lines.push(`- ${swaps} ${swaps === 1 ? 'swap' : 'swaps'}.`);
   const moved = sum(['moved']);
   if (moved.length > 0) lines.push(`- Moved ${usdText(usdOf(moved))} between your wallets.`);
-  const unplaced = sum(['unplaced_in', 'unplaced_out']);
-  if (unplaced.length > 0) {
-    const n = unplaced.reduce((t, i) => t + i.count, 0);
-    lines.push(`- Not placed yet: ${n} ${n === 1 ? 'transfer' : 'transfers'} (${usdText(usdOf(unplaced))}).`);
-  }
   if (gasUsd >= GAS_LINE_MIN_USD) lines.push(`- Network fees: ${usdText(gasUsd)}.`);
   if (hLine) lines.push('', hLine);
   lines.push(...questions);

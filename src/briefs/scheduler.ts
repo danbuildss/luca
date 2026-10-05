@@ -111,7 +111,8 @@ export async function deliverIfDue(params: {
     : asHoldings(last?.holdings);
 
   try {
-    const asks = await getQuestionsToSend(user.userId);
+    // Mondays: everything still open, already asked or not, up to 5 (a weekly reminder)
+    const asks = await getQuestionsToSend(user.userId, weekly ? { stillOpen: true, limit: 5 } : {});
     const m = await buildMorning(user.userId, { timezone: local.timezone, since, now, prev, asks, weekly });
 
     let briefId: string;
