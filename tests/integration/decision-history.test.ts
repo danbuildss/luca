@@ -134,6 +134,23 @@ describeDb('decision history (integration)', () => {
     expect(await sql(`SELECT 1 FROM price_revisions WHERE event_id = $1`, [unpriced.id])).toEqual([]);
   });
 
+  it('migration 031 links an older correction to the rule for its address and direction, and nothing else', async () => {
+    const { user, wallet } = await seedUserWithWallet();
+    const cp = addr();
+    const inRule = await insertCounterpartyRule({ userId: user.id, address: cp, label: 'revenue', direction: 'in' });
+    await insertCounterpartyRule({ userId: user.id, address: cp, label: 'expense', direction: 'out' });
+    const ev = await insertClassifiedEvent({ wallet, direction: 'in', counterparty: cp, amount: 5, usdValue: 5, label: 'revenue' });
+    const taught = await insertCorrection({ userId: user.id, eventId: ev.id, counterpartyAddress: cp, newLabel: 'revenue', createdRule: true });
+    const noRule = await insertCorrection({ userId: user.id, eventId: ev.id, counterpartyAddress: cp, newLabel: 'revenue', createdRule: false });
+
+    const migration = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations/031_correction_rule_links.sql'), 'utf8');
+    await sql(migration);
+
+    const links = await sql<{ id: string; rule_id: string | null }>(`SELECT id, rule_id FROM corrections WHERE user_id = $1`, [user.id]);
+    expect(links.find((l) => l.id === taught)?.rule_id).toBe(inRule);
+    expect(links.find((l) => l.id === noRule)?.rule_id).toBeNull();
+  });
+
   it('migration 030 backfills: every existing rule gets a starting snapshot, and known correction→rule links are filled', async () => {
     const { user, wallet } = await seedUserWithWallet();
     const cp = addr();
