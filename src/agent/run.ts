@@ -20,7 +20,7 @@ import { pendingProposals, reask } from '../corrections/proposals.js';
 import { createChanges, describeChange, resolveProposal, type ChangeAction, type ChangeTool } from './changes.js';
 
 // Tools whose reply is sent exactly as they write it
-const FIXED_REPLY_TOOLS = new Set(['get_creator_fees', 'set_timezone']);
+const FIXED_REPLY_TOOLS = new Set(['get_creator_fees', 'set_timezone', 'get_unknown_transactions']);
 
 export type AgentResult = {
   // Changes the model asked for are never made here: the reply ends with Luca's own
