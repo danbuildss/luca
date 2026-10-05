@@ -243,9 +243,9 @@ describeDb('classification-quality baseline (integration)', () => {
       const { user, wallet } = await seedUserWithWallet();
       const ev = await insertClassifiedEvent({ wallet, direction: 'in', asset: 'ETH', amount: '0.001499703666736745', usdValue: 4.06, label: 'unknown' });
       const one = await executeTool(user.id, 'get_transaction', { event_id: ev.hash }) as { event: { amount_display: string } };
-      expect(one.event.amount_display).toBe('0.0014997 ETH');
+      expect(one.event.amount_display).toBe('0.0015 ETH');
       const unknown = await executeTool(user.id, 'get_unknown_transactions', {}) as { events: Array<{ amount_display: string }> };
-      expect(unknown.events[0].amount_display).toBe('0.0014997 ETH');
+      expect(unknown.events[0].amount_display).toBe('0.0015 ETH ($4.06)');
     });
   });
 });

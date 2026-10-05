@@ -7,7 +7,7 @@ import { walletsNotReady, stillReadingText, balancesSeenText, ONLY_BASE } from '
 import { snapshotBalances } from '../ingestion/snapshot.js';
 import { logger } from '../logger.js';
 import { getOverview } from '../books/overview.js';
-import { getFigureBreakdown, FIGURES, significant, type Figure } from '../books/breakdown.js';
+import { getFigureBreakdown, FIGURES, type Figure } from '../books/breakdown.js';
 import { getPreviousAnswers } from './traces.js';
 import { getLedgerStatus } from '../ledger/status.js';
 import { getEventsForReview, getEventWithClassification, resolveEventRef } from '../corrections/store.js';
@@ -376,9 +376,11 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
 
 // A transaction row with its link and a ready-made rounded amount ("0.0014997 ETH"), so an
 // answer never shows a raw 18-decimal amount
-function shown<T extends { hash: string; amount?: string | number | null; asset?: string | null }>(row: T): T & { link: string; amount_display: string | null } {
+// The house amount format (src/books/amounts.ts), with dollars when the row has them
+function shown<T extends { hash: string; amount?: string | number | null; asset?: string | null; usd_value?: string | number | null }>(row: T): T & { link: string; amount_display: string | null } {
   const n = row.amount == null ? NaN : typeof row.amount === 'number' ? row.amount : parseFloat(row.amount);
-  return { ...withLink(row), amount_display: Number.isFinite(n) ? `${significant(n)} ${row.asset ?? ''}`.trim() : null };
+  const usd = row.usd_value == null ? null : typeof row.usd_value === 'number' ? row.usd_value : parseFloat(row.usd_value);
+  return { ...withLink(row), amount_display: Number.isFinite(n) ? displayAmount(Math.abs(n), row.asset ?? null, usd !== null && Number.isFinite(usd) ? Math.abs(usd) : null) : null };
 }
 
 // ---------------------------------------------------------------------------
@@ -639,8 +641,12 @@ async function runTool(
 
     case 'get_unknown_transactions': {
       const limit = (args.limit as number | undefined) ?? 20;
-      const events = await getEventsForReview({ userId, label: 'unknown', limit });
-      return { unknown_count: events.length, events: events.map(shown) };
+      const events = await getEventsForReview({ userId, label: 'unknown', limit, withoutDust: true });
+      return {
+        unknown_count: events.length,
+        events: events.map(shown),
+        note: 'A few cents sent in by addresses the operator never dealt with (likely spam) are left out and never need context.',
+      };
     }
 
     case 'get_transaction': {

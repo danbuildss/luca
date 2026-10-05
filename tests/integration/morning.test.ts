@@ -15,6 +15,7 @@ import {
 import { deliverIfDue, localNow } from '../../src/briefs/scheduler.js';
 import { refreshQuestionGroups, getQuestionsToSend } from '../../src/alerts/questions.js';
 import { detectLargeMovements } from '../../src/alerts/detectors.js';
+import { executeTool } from '../../src/agent/tools.js';
 import type { Telegram } from 'telegraf';
 
 const STAKE = '0x88470240ff0663faefa68b1d7621b472ddd9584a';
@@ -205,6 +206,47 @@ describeDb('the morning message (integration)', () => {
     expect(text).not.toContain('0x8847');
   });
 
+  it('Monday reminds about what is still open, already asked or not, numbered, then one line for the rest', async () => {
+    const { user, wallet } = await seedUserWithWallet();
+    const amounts = [106.88, 56.65, 49.79, 30, 20, 15, 12];
+    for (const usd of amounts) {
+      await insertClassifiedEvent({ wallet, direction: 'in', counterparty: addr(), amount: usd, usdValue: usd, label: 'unknown', at: '9 days' });
+    }
+    await insertClassifiedEvent({ wallet, direction: 'in', counterparty: addr(), amount: 4, usdValue: 4, label: 'unknown', at: '9 days' });
+    await refreshQuestionGroups(user.id);
+    // All asked last week, one by one, by the old sender
+    await sql(`UPDATE question_groups SET sent_at = NOW() - INTERVAL '6 days', asked_total_usd = total_usd, asked_count = event_count WHERE user_id = $1`, [user.id]);
+    expect(await getQuestionsToSend(user.id)).toEqual([]);
+
+    const lines = (await morning(user.id, user.telegramId, 'weekly'))!.split('\n');
+    const at = lines.indexOf("5 things I couldn't place:");
+    expect(at).toBeGreaterThan(-1);
+    expect(lines.slice(at + 1, at + 6).map((l) => l.slice(0, 12))).toEqual(['1. 106.88 US', '2. 56.65 USD', '3. 49.79 USD', '4. 30 USDC y', '5. 20 USDC y']);
+    expect(lines[at + 6]).toBe('Tell me what they were, like "1 was a swap, 2 was revenue".');
+    expect(lines.at(-1)).toBe('Plus 3 smaller ones ($31.00 in total). Tell me if you want to go through them.');
+    expect(lines.join('\n')).not.toContain('Not placed yet');
+    expect((await sql<{ asked_item: number }>(`SELECT asked_item FROM question_groups WHERE user_id = $1 AND asked_item IS NOT NULL ORDER BY asked_item`, [user.id])).map((r) => r.asked_item)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it('a few cents from a stranger is dust: never asked, never in the story, left out of the unknown list', async () => {
+    const { user, wallet } = await seedUserWithWallet();
+    const stranger = addr();
+    await insertClassifiedEvent({ wallet, direction: 'in', counterparty: stranger, asset: 'ETH', amount: 0.0000134646, usdValue: 0.05, label: 'unknown', at: '2 hours' });
+    // The same few cents from someone you have paid is not dust
+    const known = addr();
+    await insertClassifiedEvent({ wallet, direction: 'out', counterparty: known, amount: 30, usdValue: 30, label: 'expense', at: '3 days' });
+    await insertClassifiedEvent({ wallet, direction: 'in', counterparty: known, asset: 'ETH', amount: 0.00002, usdValue: 0.08, label: 'unknown', at: '2 hours' });
+    await refreshQuestionGroups(user.id);
+
+    const groups = await sql<{ counterparty_address: string }>(`SELECT counterparty_address FROM question_groups WHERE user_id = $1 AND event_count > 0`, [user.id]);
+    expect(groups.map((g) => g.counterparty_address)).toEqual([known]);
+    const text = (await morning(user.id, user.telegramId))!;
+    expect(text).not.toContain(`…${stranger.slice(-4)}`);
+    expect(text).toContain(`…${known.slice(-4)}`);
+    const list = await executeTool(user.id, 'get_unknown_transactions', {}) as { events: Array<{ from_address: string }> };
+    expect(list.events.map((e) => e.from_address)).toEqual([known]);
+  });
+
   it('Monday: the week in one message; a quiet week is one line', async () => {
     const { user, wallet } = await seedUserWithWallet();
     const vendor = addr();
@@ -222,11 +264,10 @@ describeDb('the morning message (integration)', () => {
       '- Came in: $1,175.57 (ACCUM creator fees $1,175.57).',
       '- Paid out: $45.00 (OpenAI $45.00).',
       '- Staked 700,000 BNKR.',
-      '- Not placed yet: 1 transfer ($4.00).',
       '',
       'Holdings: $594.30 (all staked).',
       '',
-      "Plus 1 small transfer under $10.00 ($4.00 in total) I haven't asked about. Tell me if you want to go through it.",
+      '1 small transfer still open ($4.00 in total). Tell me if you want to go through it.',
     ]);
 
     const quiet = await seedUserWithWallet();

@@ -1,3 +1,5 @@
+import { usdValueSql } from '../ingestion/assets.js';
+import { dustSql } from '../books/dust.js';
 import { pool, query } from '../db.js';
 import type { ClassificationLabel, TxShape } from '../types/index.js';
 import { findCounterpartyRule } from '../classification/counterparty.js';
@@ -305,6 +307,7 @@ export type ReviewEvent = {
   asset: string | null;
   amount: number | null;
   direction: 'in' | 'out';
+  usd_value: number | null;
   label: string | null;
   confidence: number | null;
   status: string | null;
@@ -326,20 +329,23 @@ export async function getEventsForReview(params: {
   userId: string;
   label?: string;
   limit?: number;
+  // Leave out a few cents sent in by strangers (src/books/dust.ts)
+  withoutDust?: boolean;
 }): Promise<ReviewEvent[]> {
-  const { userId, label = null, limit = 50 } = params;
+  const { userId, label = null, limit = 50, withoutDust = false } = params;
   const res = await query<ReviewEvent>(
     `SELECT ne.id, ne.hash, ne.block_time, ne.from_address, ne.to_address,
-            ne.asset, ne.amount, ne.direction,
+            ne.asset, ne.amount, ne.direction, (${usdValueSql('ne')})::float8 AS usd_value,
             c.label, c.confidence, c.status
      FROM normalized_events ne
      LEFT JOIN classifications c ON c.event_id = ne.id AND c.superseded_at IS NULL
      WHERE ne.user_id = $1
        AND ne.supported IS TRUE
        AND ($2::text IS NULL OR c.label = $2::classification_label)
+       AND (NOT $4::boolean OR NOT ${dustSql('ne')})
      ORDER BY ne.block_time DESC
      LIMIT $3`,
-    [userId, label, limit],
+    [userId, label, limit, withoutDust],
   );
   return res.rows;
 }
