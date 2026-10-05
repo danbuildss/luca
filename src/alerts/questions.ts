@@ -42,6 +42,25 @@ type GroupStats = {
   last_at: Date;
 };
 
+// Every ask, answer, skip and close is kept (migration 030): question_groups holds only
+// the current state, so how often something was asked and how long it took to answer
+// would otherwise be overwritten.
+type QuestionEvent = 'asked' | 'answered' | 'skipped' | 'closed';
+type Runner = { query: (text: string, params?: unknown[]) => Promise<unknown> };
+
+async function recordQuestionEvents(
+  ids: string[], event: QuestionEvent,
+  extra: { channel?: 'morning' | 'alert'; item?: number | null; label?: string } = {},
+  runner: Runner = { query },
+): Promise<void> {
+  if (ids.length === 0) return;
+  await runner.query(
+    `INSERT INTO question_events (group_id, user_id, event, channel, item, event_count, total_usd, label)
+     SELECT id, user_id, $2, $3, $4, event_count, total_usd, $5 FROM question_groups WHERE id = ANY($1::uuid[])`,
+    [ids, event, extra.channel ?? null, extra.item ?? null, extra.label ?? null],
+  );
+}
+
 // Brings every group in line with the operator's current unknown transfers.
 export async function refreshQuestionGroups(userId: string): Promise<void> {
   const stats = await query<GroupStats>(
@@ -83,12 +102,14 @@ export async function refreshQuestionGroups(userId: string): Promise<void> {
          AND NOT (counterparty_address || '|' || direction || '|' || asset_key = ANY($2::text[]))`,
       [userId, keys],
     );
-    // Answered in chat (or by a rule) instead of the buttons
-    await client.query(
+    // Answered another way (a rule, a correction in chat): nothing left to ask
+    const closed = await client.query<{ id: string }>(
       `UPDATE question_groups SET status = 'labeled', resolved_at = NOW(), updated_at = NOW()
-       WHERE user_id = $1 AND status = 'open' AND event_count = 0`,
+       WHERE user_id = $1 AND status = 'open' AND event_count = 0
+       RETURNING id`,
       [userId],
     );
+    await recordQuestionEvents(closed.rows.map((r) => r.id), 'closed', {}, client);
     // New unknown transfers after an answer: a new question
     await client.query(
       `UPDATE question_groups
@@ -201,18 +222,21 @@ export async function markQuestionSent(groupId: string, messageId: number | null
      WHERE id = $1`,
     [groupId, messageId, item],
   );
+  await recordQuestionEvents([groupId], 'asked', { channel: 'morning', item });
 }
 
 // A large transfer's alert asks "What was it for?" itself: its group counts as asked, so
 // the morning message does not ask again (one event, one message)
 export async function markAskedByAlert(userId: string, counterparty: string, direction: 'in' | 'out'): Promise<void> {
-  await query(
+  const asked = await query<{ id: string }>(
     `UPDATE question_groups
      SET sent_at = NOW(), telegram_message_id = NULL, asked_total_usd = total_usd, asked_count = event_count,
          asked_item = NULL, updated_at = NOW()
-     WHERE user_id = $1 AND counterparty_address = $2 AND direction = $3 AND status = 'open' AND event_count > 0`,
+     WHERE user_id = $1 AND counterparty_address = $2 AND direction = $3 AND status = 'open' AND event_count > 0
+     RETURNING id`,
     [userId, counterparty.toLowerCase(), direction],
   );
+  await recordQuestionEvents(asked.rows.map((r) => r.id), 'asked', { channel: 'alert' });
 }
 
 export async function skipQuestionGroup(groupId: string, userId: string): Promise<void> {
@@ -223,6 +247,7 @@ export async function skipQuestionGroup(groupId: string, userId: string): Promis
      WHERE id = $1 AND user_id = $2`,
     [groupId, userId],
   );
+  await recordQuestionEvents([groupId], 'skipped');
 }
 
 export type GroupAnswer =
@@ -235,6 +260,7 @@ export async function labelQuestionGroup(
   groupId: string,
   userId: string,
   label: ClassificationLabel,
+  sourceMessage: string | null = null,
 ): Promise<GroupAnswer> {
   const group = await query<{ counterparty_address: string; direction: 'in' | 'out'; asset_key: string }>(
     `SELECT counterparty_address, direction, asset_key FROM question_groups WHERE id = $1 AND user_id = $2`,
@@ -270,7 +296,8 @@ export async function labelQuestionGroup(
     rule_id: null,
     source: 'user',
   });
-  const result = await applyCorrection({ userId, eventId: latest, newLabel: label, reason: 'Answer to a grouped question' });
+  const result = await applyCorrection({ userId, eventId: latest, newLabel: label, reason: 'Answer to a grouped question', sourceMessage });
+  await recordQuestionEvents([groupId], 'answered', { label });
   await query(
     `UPDATE question_groups SET status = 'labeled', resolved_at = NOW(), updated_at = NOW() WHERE id = $1`,
     [groupId],

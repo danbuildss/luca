@@ -68,7 +68,7 @@ export async function runAgent(params: {
     if (drafts.length > 0) {
       // The read-only part of the answer stays; the change itself is asked about in
       // Luca's own words, never the model's (which may call it done or word it differently)
-      const { question } = await createChanges(userId, drafts);
+      const { question } = await createChanges(userId, drafts, userMessage);
       const said = restatesChange(answer) ? '' : answer.trim();
       text = said ? `${said}\n\n${question}` : question;
     }

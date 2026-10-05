@@ -672,6 +672,8 @@ async function runTool(
         newLabel,
         reason,
         counterpartyName,
+        // Only set by a confirmed change (src/agent/changes.ts), never by the model
+        sourceMessage: typeof args.source_message === 'string' ? args.source_message : null,
       });
       return {
         success: true, event_id: ref.event.id, new_label: newLabel, link: txLink(ref.event.hash),

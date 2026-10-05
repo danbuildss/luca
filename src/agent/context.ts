@@ -30,10 +30,3 @@ export async function saveMessage(params: {
     [params.userId, params.role, params.content],
   );
 }
-
-export async function clearConversation(userId: string): Promise<void> {
-  await query(
-    `DELETE FROM conversation_messages WHERE user_id = $1`,
-    [userId],
-  );
-}

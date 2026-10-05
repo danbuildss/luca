@@ -150,6 +150,26 @@ The goals of the original Hermes design still hold (Luca Core deterministic, LLM
 
 ---
 
+## Decision history (data compounds)
+
+Luca keeps the history of every financial decision it makes, not just the latest answer:
+
+```
+raw transaction → normalized event → Luca's label (method, evidence, confidence)
+→ alert / answer / question → operator correction → rule → later decisions → outcome
+```
+
+Rules for every change:
+- **Append, don't overwrite.** A new decision supersedes the old one and the old one stays, as `classifications.superseded_at` does. Anything that changes a past decision records before, after and why.
+- **Record provenance when the decision is made:** what decided it (rule, contract check, AI model and prompt version, operator), the evidence, the confidence and the inputs. It cannot be reconstructed later.
+- **Link cause to effect:** a correction points to the decision it replaced and the rule it taught; a later label made by that rule carries `rule_id`.
+- **No hard deletes of history.** Removing a wallet sets `active = false`. Foreign keys cascade from `users` and `wallets`, so a `DELETE` on either would wipe an operator's corrections and history; the only legitimate hard delete is an operator's own request to delete their data, done deliberately and logged.
+- **Never at the product's expense,** and always scoped to one operator: nothing one operator taught changes another operator's books.
+
+Where the history lives today: `classifications` (every version), `corrections`, `counterparty_rules`, `label_proposals`, `question_groups`, `stake_checks` and `fee_claim_checks` (contract evidence), `raw_receipts` / `raw_transfers`, `answer_traces`, `alerts`, `briefs`.
+
+---
+
 ## Security
 
 - No private keys anywhere in the system

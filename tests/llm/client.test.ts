@@ -22,7 +22,7 @@ vi.mock('openai', () => ({
   },
 }));
 
-import { classifyWithLlmDetailed, isPermanentApiError } from '../../src/classification/llm.js';
+import { classifyWithLlmDetailed, isPermanentApiError, PROMPT_VERSION } from '../../src/classification/llm.js';
 import { classifierModel, llmCallCost, llmClientOptions } from '../../src/llm/client.js';
 import type { UnclassifiedEvent } from '../../src/classification/types.js';
 
@@ -97,6 +97,29 @@ describe('classifyWithLlmDetailed', () => {
     expect(req).not.toHaveProperty('max_tokens');
     // Unpriced model: logged at $0 so the cost figures list it as unpriced
     expect(logged).toEqual([['user-1', 'gpt-5.4-mini', 1000, 200, 0]]);
+  });
+
+  it('an AI label records its model, the instructions fingerprint and exactly what the model was shown', async () => {
+    cfg.AGENT_LLM_KEY = 'gw-key';
+    cfg.AGENT_BASE_URL = 'https://llm.example/v1';
+    cfg.AGENT_MODEL = 'gpt-5.4-mini';
+    const context = new Map([['ev-1', { same_transaction: [], counterparty_history: { count: 2, labels: { expense: 2 } } }]]);
+
+    const { results } = await classifyWithLlmDetailed([event], 'user-1', context);
+    const sent = JSON.parse((create.mock.calls[0][0] as { messages: Array<{ content: string }> }).messages[1].content) as Array<Record<string, unknown>>;
+
+    expect(PROMPT_VERSION).toMatch(/^[0-9a-f]{12}$/);
+    expect(results.get('ev-1')).toMatchObject({
+      label: 'treasury', model: 'gpt-5.4-mini', prompt_version: PROMPT_VERSION,
+      inputs: {
+        direction: 'out', asset: 'BNKR', amount: 700000, from: '0xa', to: '0xb', block_time: '2026-09-28T00:00:00.000Z',
+        same_transaction: [], counterparty_history: { count: 2, labels: { expense: 2 } },
+      },
+    });
+    // What is stored is what was sent, minus the batch id
+    const { id: _sentId, ...shown } = sent[0];
+    expect(_sentId).toBe('ev-1');
+    expect(results.get('ev-1')?.inputs).toEqual(shown);
   });
 
   it('uses gpt-4o-mini in JSON mode on OpenAI, priced', async () => {

@@ -52,6 +52,14 @@ Any event that cannot be confidently classified.
 - Corrections outrank model classifications
 - Corrections can be reviewed and reversed
 
+## History Policy
+
+- A correction never erases Luca's earlier decision: the old classification is superseded, not deleted, and the correction records old label, new label, the replaced classification and its confidence
+- Every automated decision records how it was made (rule, contract check, model) and its evidence and confidence
+- No code deletes users, wallets, events, classifications, corrections or rules; a wallet is deactivated, never deleted
+- An operator's own request to delete their data is the one exception, handled deliberately and logged
+- History is private to its operator and never used to change another operator's books
+
 ## Unknown Policy
 
 - Unknown is never hidden

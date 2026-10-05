@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import OpenAI from 'openai';
 import { query } from '../db.js';
 import { config } from '../config.js';
@@ -30,6 +31,10 @@ they were labeled). Use them as evidence. Prefer unknown over a guess.
 Return a JSON object with a "results" array — one object per input transaction, in the same order,
 copying each "id" exactly:
 {"results":[{"id":"<id>","label":"<label>","confidence":<0.0-1.0>,"evidence":"<one concise sentence>"}]}`;
+
+// A fingerprint of the instructions above: changes by itself whenever they change, so each
+// AI label records which version of them it was made with
+export const PROMPT_VERSION = createHash('sha256').update(SYSTEM_PROMPT).digest('hex').slice(0, 12);
 
 // Evidence beyond the transfer itself (built in src/classification/engine.ts)
 export type LlmContext = {
@@ -201,7 +206,13 @@ export async function classifyWithLlmDetailed(
         'LLM response missing or invalid for some items',
       );
     }
-    for (const [id, result] of parsed.results) results.set(id, result);
+    // Provenance (migration 030): which model, which instructions, and what it was shown
+    const shown = new Map(payload.map((p) => [p.id, p]));
+    for (const [id, result] of parsed.results) {
+      const inputs: Record<string, unknown> = { ...shown.get(id) };
+      delete inputs.id;
+      results.set(id, { ...result, model, prompt_version: PROMPT_VERSION, inputs });
+    }
     markFailed(failures, parsed.invalidIds, {
       countsAsAttempt: true,
       reason: parsed.malformed ? 'LLM output was not valid JSON' : 'LLM output missing or invalid for this item',

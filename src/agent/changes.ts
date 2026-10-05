@@ -90,7 +90,9 @@ export function changesQuestion(actions: ChangeAction[]): string {
 }
 
 // One open set of changes at a time: a newer request replaces one the operator left unanswered
-export async function createChanges(userId: string, actions: ChangeAction[]): Promise<{ id: string; question: string }> {
+// `operatorMessage`: the operator's words that asked for the changes, kept with each
+// correction they become (migration 030)
+export async function createChanges(userId: string, actions: ChangeAction[], operatorMessage: string | null = null): Promise<{ id: string; question: string }> {
   await query(
     `UPDATE label_proposals SET status = 'superseded', decided_at = NOW()
      WHERE user_id = $1 AND kind = 'changes' AND status = 'pending'`,
@@ -99,11 +101,11 @@ export async function createChanges(userId: string, actions: ChangeAction[]): Pr
   const question = changesQuestion(actions);
   const res = await query<{ id: string }>(
     // One clock reading for both, so a change waits exactly CHANGES_TTL
-    `INSERT INTO label_proposals (user_id, kind, actions, question, created_at, expires_at)
-     SELECT $1, 'changes', $2, $3, t.now, t.now + INTERVAL '${CHANGES_TTL}'
+    `INSERT INTO label_proposals (user_id, kind, actions, question, created_at, expires_at, operator_message)
+     SELECT $1, 'changes', $2, $3, t.now, t.now + INTERVAL '${CHANGES_TTL}', $4
      FROM (SELECT clock_timestamp() AS now) t
      RETURNING id`,
-    [userId, JSON.stringify(actions), question],
+    [userId, JSON.stringify(actions), question, operatorMessage?.slice(0, 2000) ?? null],
   );
   return { id: res.rows[0].id, question };
 }
@@ -112,11 +114,11 @@ type Applied = { done: string; note: string | null };
 type Skipped = { ask: string; why: string };
 
 // Applies one change after validating it again, now
-async function applyChange(userId: string, a: ChangeAction): Promise<Applied | Skipped> {
+async function applyChange(userId: string, a: ChangeAction, operatorMessage: string | null): Promise<Applied | Skipped> {
   if (a.tool === 'label_question_group') {
     const ok = await prepareWriteAction(userId, a.tool, a.args);
     if (!ok.ok) return { ask: a.ask, why: 'those transfers were already labeled' };
-    const r = await labelQuestionGroup(String(a.args.group_id), userId, a.args.label as ClassificationLabel);
+    const r = await labelQuestionGroup(String(a.args.group_id), userId, a.args.label as ClassificationLabel, operatorMessage);
     if (!r.ok) return { ask: a.ask, why: 'those transfers were already labeled' };
     return { done: a.done, note: describeRuleOutcome(r.rule) };
   }
@@ -124,16 +126,18 @@ async function applyChange(userId: string, a: ChangeAction): Promise<Applied | S
   if (!prepared.ok) {
     return { ask: a.ask, why: a.tool === 'apply_correction' ? 'I could not find that transaction in your books any more' : prepared.error };
   }
-  const result = await executeTool(userId, a.tool, prepared.args) as { error?: unknown; note?: unknown } | null;
+  // The operator's own words, set here and never by the model
+  const args = a.tool === 'apply_correction' ? { ...prepared.args, source_message: operatorMessage } : prepared.args;
+  const result = await executeTool(userId, a.tool, args) as { error?: unknown; note?: unknown } | null;
   if (result && typeof result.error === 'string') return { ask: a.ask, why: result.error };
   return { done: a.done, note: typeof result?.note === 'string' ? result.note : null };
 }
 
 export async function answerChanges(p: { userId: string; proposalId: string; accept: boolean }): Promise<ProposalAnswer> {
-  const claimed = await query<{ id: string; actions: ChangeAction[] }>(
+  const claimed = await query<{ id: string; actions: ChangeAction[]; operator_message: string | null }>(
     `UPDATE label_proposals SET status = $3, decided_at = NOW()
      WHERE id = $1 AND user_id = $2 AND kind = 'changes' AND status = 'pending' AND expires_at > NOW()
-     RETURNING id, actions`,
+     RETURNING id, actions, operator_message`,
     [p.proposalId, p.userId, p.accept ? 'accepted' : 'declined'],
   );
   const prop = claimed.rows[0];
@@ -147,7 +151,7 @@ export async function answerChanges(p: { userId: string; proposalId: string; acc
   const skipped: Skipped[] = [];
   for (const a of prop.actions) {
     try {
-      const r = await applyChange(p.userId, a);
+      const r = await applyChange(p.userId, a, prop.operator_message);
       if ('done' in r) applied.push(r); else skipped.push(r);
     } catch (err) {
       logger.error({ err, userId: p.userId, tool: a.tool }, 'Confirmed change failed');

@@ -56,6 +56,18 @@ export async function repriceMissing(limit = 50, apiKey: string | undefined = un
   return priced;
 }
 
+// A dollar value Luca already used is kept before a better price replaces it (migration
+// 030): alerts and answers given with the old value stay explainable
+async function keepOldPrice(eventId: string, newUsd: number | null, newSource: string): Promise<void> {
+  await query(
+    `INSERT INTO price_revisions (event_id, old_usd_value, old_price_source, old_price_at, new_usd_value, new_price_source)
+     SELECT id, usd_value, price_source, price_at, $2::numeric, $3
+     FROM normalized_events
+     WHERE id = $1 AND usd_value IS NOT NULL AND usd_value IS DISTINCT FROM $2::numeric`,
+    [eventId, newUsd, newSource],
+  );
+}
+
 // Replaces older prices (CoinGecko daily, BNKR without a price) with ones read on chain at
 // the transfer's block. Each transfer is tried at most once a day, so a source that is
 // down does not cost a read per transfer every minute. Labels are never touched.
@@ -78,6 +90,7 @@ export async function upgradePrices(apiKey: string, limit = 100): Promise<number
   for (const row of res.rows) {
     const p = await price(row, apiKey);
     if (p.price_source !== null && ONCHAIN_PRICE_SOURCES.includes(p.price_source)) {
+      await keepOldPrice(row.id, p.usd_value, p.price_source);
       await query(
         `UPDATE normalized_events
          SET usd_value = $2, price_source = $3, price_at = $4, price_ref = $5, price_checked_at = NOW()
@@ -128,6 +141,7 @@ export async function priceSwaps(limit = 100): Promise<number> {
     const bnkr = Math.abs(parseFloat(r.bnkr_total));
     if (!(bnkr > 0)) continue;
     const unit = parseFloat(r.other_usd) / bnkr;
+    await keepOldPrice(r.id, Math.abs(parseFloat(r.amount)) * unit, 'swap');
     await query(
       `UPDATE normalized_events
        SET usd_value = amount * $2::numeric, price_source = 'swap', price_at = block_time,
