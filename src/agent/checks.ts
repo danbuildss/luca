@@ -68,6 +68,24 @@ export function asksCompleteness(message: string): boolean {
   return COMPLETENESS.test(message);
 }
 
+// "What still needs context?", "What are the 6 that need clarification?", "show me the
+// unknown transactions": answered with Luca's own list, never by the model, which on
+// Oct 5 repeated an earlier answer from the chat instead of reading the books again
+const NEEDS_CONTEXT = new RegExp(
+  [
+    String.raw`\bneeds?\s+(?:more\s+)?(?:context|clarification|clarifying|explaining|explanation|a\s+reason|labell?ing)\b`,
+    String.raw`\b(?:what|which|show|list|any|anything)\b[^.?!]*\b(?:unknowns?|unlabell?ed|unclassified|uncategori[sz]ed|unplaced)\b`,
+    String.raw`\bcould(?:n'?t| not)\s+(?:you\s+)?(?:place|label|classify)\b`,
+  ].join('|'),
+  'i',
+);
+// An answer, not a question: "the 49.79 was revenue", "label the unknown one as expense"
+const GIVES_LABEL = /\b(?:was|were|is|are)\s+(?:an?\s+|my\s+)?(?:revenue|income|expenses?|swaps?|internal|refunds?|gas|staked|staking|unstaked|payments?|transfers?\s+between)\b|\blabel\b|\bmark\b/i;
+
+export function asksWhatNeedsContext(message: string): boolean {
+  return NEEDS_CONTEXT.test(message) && !GIVES_LABEL.test(message);
+}
+
 const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 
 // The number of days a named period covers; null when the message names none (everything)
