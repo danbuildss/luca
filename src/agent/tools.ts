@@ -688,6 +688,7 @@ async function runTool(
       return {
         success: true, event_id: ref.event.id, new_label: newLabel, link: txLink(ref.event.hash),
         note: describeRuleOutcome(result.rule),
+        rule: result.rule,
       };
     }
 

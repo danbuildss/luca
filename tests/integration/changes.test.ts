@@ -147,6 +147,76 @@ describeDb('changes by chat, no buttons (integration)', () => {
     expect(r.text).not.toContain('main ones');
   });
 
+  it('Oct 5 21:35: Dan answers the list by number; Luca asks once in its own words, and "yes" labels exactly those', async () => {
+    const { user, wallet } = await seedUserWithWallet({ timezone: 'Europe/London' });
+    const exchange = addr();
+    const f8 = '0x8f10000000000000000000000000000000f99600';
+    const wrongRule = await insertCounterpartyRule({ userId: user.id, address: f8, label: 'expense', direction: 'in' });
+    // Newest first, as the list shows them
+    const ev = [
+      await insertClassifiedEvent({ wallet, direction: 'out', counterparty: addr(), amount: 35, usdValue: 35, label: 'unknown', at: '1 hour' }),
+      await insertClassifiedEvent({ wallet, direction: 'in', counterparty: addr(), asset: 'ETH', amount: 0.01426, usdValue: 38.79, label: 'unknown', at: '2 hours' }),
+      await insertClassifiedEvent({ wallet, direction: 'out', counterparty: addr(), asset: 'BNKR', amount: 70730.6, usdValue: 30.11, label: 'unknown', at: '1 day' }),
+      await insertClassifiedEvent({ wallet, direction: 'out', counterparty: exchange, amount: 106.88, usdValue: 106.88, label: 'unknown', at: '5 days' }),
+      await insertClassifiedEvent({ wallet, direction: 'in', counterparty: f8, amount: 49.79, usdValue: 49.79, label: 'unknown', at: '5 days 1 hour' }),
+      await insertClassifiedEvent({ wallet, direction: 'in', counterparty: addr(), amount: 56.65, usdValue: 56.65, label: 'unknown', at: '5 days 2 hours' }),
+      await insertClassifiedEvent({ wallet, direction: 'out', counterparty: exchange, asset: 'ETH', amount: 0.03303, usdValue: 89.54, label: 'unknown', at: '6 days' }),
+      await insertClassifiedEvent({ wallet, direction: 'in', counterparty: addr(), asset: 'ETH', amount: 0.0015, usdValue: 4.06, label: 'unknown', at: '8 days' }),
+    ];
+    expect((await says(user.id, 'what still needs context?')).text.split('\n')[0]).toBe('8 transfers still need context:');
+
+    create.mockClear();
+    const q = await says(user.id, '1 was an expense, 2 was an internal transfer, 3 was a swap, 4 and 7 were swaps, 5 and 6 were swaps, not sure about 8');
+    expect(create).not.toHaveBeenCalled();
+    const lines = q.text.split('\n');
+    expect(lines.slice(0, 3)).toEqual(["I'll leave 8 as it is for now.", '', 'Make these 7 changes?']);
+    expect(lines[3]).toMatch(/^1\. Label the 35 USDC you sent on .+ as expense$/);
+    expect(lines[4]).toMatch(/^2\. Label the 0\.01426 ETH you received on .+ as internal transfer$/);
+    expect(lines.at(-1)).toBe('Reply yes or no.');
+    for (const e of ev) expect((await label(e.id)).label).toBe('unknown');
+
+    const done = await says(user.id, 'yes');
+    expect(create).not.toHaveBeenCalled();
+    expect(done.text).toMatch(/^Done:\n/);
+    expect(done.text).not.toMatch(/earlier payment/);
+    expect(done.text.match(/New transfers with this address will be labeled the same way\./g) ?? []).toHaveLength(1);
+    expect((await Promise.all(ev.map((e) => label(e.id)))).map((l) => l.label))
+      .toEqual(['expense', 'internal_transfer', 'swap', 'swap', 'swap', 'swap', 'swap', 'unknown']);
+    // The wrong incoming-expense rule for 0x8f10 is switched off by the answer to 5
+    expect((await sql<{ active: boolean }>(`SELECT active FROM counterparty_rules WHERE id = $1`, [wrongRule]))[0].active).toBe(false);
+    // The operator's own words are kept with each correction
+    expect(await sql(`SELECT 1 FROM corrections WHERE user_id = $1 AND source_message LIKE '1 was an expense%'`, [user.id])).toHaveLength(7);
+  });
+
+  it('a numbered answer to the morning message\'s list labels those groups after one yes', async () => {
+    const { user, wallet } = await seedUserWithWallet();
+    const a = await insertClassifiedEvent({ wallet, direction: 'out', counterparty: addr(), amount: 106.88, usdValue: 106.88, label: 'unknown', at: '2 days' });
+    const b = await insertClassifiedEvent({ wallet, direction: 'in', counterparty: addr(), amount: 56.65, usdValue: 56.65, label: 'unknown', at: '2 days' });
+    await refreshQuestionGroups(user.id);
+    const groups = await getQuestionsToSend(user.id);
+    for (const [i, g] of groups.entries()) await markQuestionSent(g.id, 77, i + 1);
+    await saveMessage({ userId: user.id, role: 'assistant', content: askText(groups, await namesFor(user.id), (d) => new Date(d).toISOString().slice(0, 10)) });
+
+    create.mockClear();
+    const q = await says(user.id, '1 was a swap, 2 was revenue');
+    expect(create).not.toHaveBeenCalled();
+    expect(q.text).toMatch(/^Make these 2 changes\?\n1\. Label the USDC payment to .+\$106\.88\) as swap\n2\. Label the USDC transfer from .+\$56\.65\) as revenue/);
+    await says(user.id, 'yes');
+    expect((await label(a.id)).label).toBe('swap');
+    expect((await label(b.id)).label).toBe('revenue');
+  });
+
+  it('a number that is not in the last list changes nothing', async () => {
+    const { user, wallet } = await seedUserWithWallet();
+    const only = await insertClassifiedEvent({ wallet, direction: 'out', counterparty: addr(), amount: 35, usdValue: 35, label: 'unknown' });
+    await says(user.id, 'what still needs context?');
+    create.mockClear();
+    const r = await says(user.id, '1 was an expense, 2 was a swap');
+    expect(create).not.toHaveBeenCalled();
+    expect(r.text).toBe('My last list has no number 2, so I haven\'t changed anything. Ask "what still needs context?" for a fresh list.');
+    expect((await label(only.id)).label).toBe('unknown');
+  });
+
   it('keeps the answer to anything else they asked, and ends with the question', async () => {
     const { user, wallet } = await seedUserWithWallet();
     const ev = await insertClassifiedEvent({ wallet, direction: 'in', amount: 12, usdValue: 12, label: 'unknown' });
