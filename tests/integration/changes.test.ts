@@ -219,16 +219,16 @@ describeDb('changes by chat, no buttons (integration)', () => {
     const vendor = addr();
     const earlier = await insertClassifiedEvent({ wallet, direction: 'out', counterparty: vendor, amount: 12, usdValue: 12, label: 'expense', method: 'model', at: '5 days' });
     const latest = await insertEvent({ wallet, direction: 'out', counterparty: vendor, amount: 20, usdValue: 20, at: '1 hour' });
-    responses = [calls(['apply_correction', { event_id: latest.id, new_label: 'revenue' }]), say('')];
-    await says(user.id, 'the 20 USDC payment was revenue');
+    responses = [calls(['apply_correction', { event_id: latest.id, new_label: 'refund' }]), say('')];
+    await says(user.id, 'the 20 USDC payment was refund');
 
     const done = await says(user.id, 'yes');
-    expect(done.text).toMatch(/^Done\. Labeled the 20 USDC you sent on .+ as revenue\. New transfers with this address will be labeled the same way\. I haven't changed any earlier ones\.\n\nI found 1 earlier payment to .+ Want me to label it revenue too\?/);
+    expect(done.text).toMatch(/^Done\. Labeled the 20 USDC you sent on .+ as refund\. New transfers with this address will be labeled the same way\. I haven't changed any earlier ones\.\n\nI found 1 earlier payment to .+ Want me to label it refund too\?/);
     expect((await label(earlier.id)).label).toBe('expense');
 
     const again = await says(user.id, 'yes');
-    expect(again.text).toMatch(/^Done\. 1 earlier payment to .+ is now revenue\.$/);
-    expect((await label(earlier.id)).label).toBe('revenue');
+    expect(again.text).toMatch(/^Done\. 1 earlier payment to .+ is now refund\.$/);
+    expect((await label(earlier.id)).label).toBe('refund');
   });
 
   it('a change waits a day at most, and another operator can never answer it', async () => {

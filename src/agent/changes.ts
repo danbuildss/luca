@@ -4,7 +4,7 @@ import type { ClassificationLabel } from '../types/index.js';
 import { txLink } from '../ledger/links.js';
 import { significant, usdDisplay } from '../books/breakdown.js';
 import { answerProposal, labelWords, type ProposalAnswer } from '../corrections/proposals.js';
-import { describeRuleOutcome } from '../corrections/handler.js';
+import { describeRuleOutcome, againstDirection, oneOffNote } from '../corrections/handler.js';
 import { labelQuestionGroup } from '../alerts/questions.js';
 import { prepareWriteAction, executeTool } from './tools.js';
 import { isAddressLike } from '../books/names.js';
@@ -23,6 +23,9 @@ export type ChangeAction = {
   args: Record<string, unknown>;
   ask: string;   // "Label the 0.0014997 ETH you received on Sep 27 (0x4586…1155) as revenue"
   done: string;  // "Labeled the 0.0014997 ETH you received on Sep 27 (0x4586…1155) as revenue"
+  // Said with the question: the label runs against the money's direction, so it applies to
+  // this transfer only and no rule is taught (src/corrections/handler.ts)
+  note?: string;
 };
 
 // Pending changes wait a day; after that the operator asks again
@@ -57,7 +60,8 @@ export async function describeChange(userId: string, tool: ChangeTool, args: Rec
     const given = str(args.counterparty_name);
     const name = given && !isAddressLike(given) ? given : null;
     const naming = name && ev ? `, and call the ${ev.direction === 'in' ? 'sender' : 'recipient'} ${quoted(name)}` : '';
-    return { tool, args, ask: `Label ${what} as ${label}${naming}`, done: `Labeled ${what} as ${label}${naming.replace(', and call', ', and named')}` };
+    const note = ev && againstDirection(ev.direction, String(args.new_label)) ? oneOffNote(ev.direction) : undefined;
+    return { tool, args, ask: `Label ${what} as ${label}${naming}`, done: `Labeled ${what} as ${label}${naming.replace(', and call', ', and named')}`, ...(note ? { note } : {}) };
   }
   if (tool === 'register_wallet') {
     const address = String(args.address).toLowerCase();
@@ -80,13 +84,18 @@ export async function describeChange(userId: string, tool: ChangeTool, args: Rec
   const total = parseFloat(g.total_usd) > 0 ? `, ${usdDisplay(parseFloat(g.total_usd))}${n === 1 ? '' : ' total'}` : '';
   const span = day(g.first_at) === day(g.last_at) ? `on ${day(g.last_at)}` : `${day(g.first_at)} to ${day(g.last_at)}`;
   const what = `${n === 1 ? 'the' : `those ${n}`} ${g.asset ? `${g.asset} ` : ''}${noun} (${span}${total})`;
-  return { tool, args, ask: `Label ${what} as ${label}`, done: `Labeled ${what} as ${label}` };
+  const note = againstDirection(g.direction, String(args.label))
+    ? (g.direction === 'in'
+      ? "Money coming in is usually revenue or a refund, so I'll label these and won't apply it to future transfers from this address."
+      : "Money going out is usually an expense, so I'll label these and won't apply it to future transfers to this address.")
+    : undefined;
+  return { tool, args, ask: `Label ${what} as ${label}`, done: `Labeled ${what} as ${label}`, ...(note ? { note } : {}) };
 }
 
 // "Label … as revenue?" or, for several, each change numbered before the operator says yes
 export function changesQuestion(actions: ChangeAction[]): string {
-  if (actions.length === 1) return `${actions[0].ask}?`;
-  return [`Make these ${actions.length} changes?`, ...actions.map((a, i) => `${i + 1}. ${a.ask}`), '', 'Reply yes or no.'].join('\n');
+  if (actions.length === 1) return `${actions[0].ask}?${actions[0].note ? `\n\n${actions[0].note}` : ''}`;
+  return [`Make these ${actions.length} changes?`, ...actions.map((a, i) => `${i + 1}. ${a.ask}${a.note ? `. ${a.note}` : ''}`), '', 'Reply yes or no.'].join('\n');
 }
 
 // One open set of changes at a time: a newer request replaces one the operator left unanswered

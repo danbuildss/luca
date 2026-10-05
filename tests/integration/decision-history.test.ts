@@ -62,7 +62,49 @@ describeDb('decision history (integration)', () => {
     expect((await ruleEvents(c.rule_id))[0]).toMatchObject({ event: 'created', before: null, after: { label: 'staked', active: true } });
   });
 
-  it('a rule\'s history: taught revenue, switched off by a contradiction (reason kept), back on as expense', async () => {
+  it('Oct 5 guard: incoming money labeled expense applies to that transfer only, says so in the question, teaches no rule', async () => {
+    const { user, wallet } = await seedUserWithWallet();
+    const cp = addr();
+    const ev = await insertClassifiedEvent({ wallet, direction: 'in', counterparty: cp, amount: 49.79, usdValue: 49.79, label: 'unknown' });
+
+    const action = await describeChange(user.id, 'apply_correction', { event_id: ev.id, new_label: 'expense' });
+    const { id, question } = await createChanges(user.id, [action], 'that was an expense');
+    expect(question).toMatch(/^Label the 49\.79 USDC you received on .+ as expense\?\n\nMoney coming in is usually revenue or a refund, so I'll label just this one and won't apply it to future transfers from this address\.$/);
+
+    const done = await answerChanges({ userId: user.id, proposalId: id, accept: true });
+    expect(done.text).toMatch(/^Done\. Labeled the 49\.79 USDC .+ as expense\. I labeled just this one\. Money coming in is usually revenue or a refund, so I did not make it a rule for this address\.$/);
+    expect((await active(ev.id))[0].label).toBe('expense');
+    expect(await sql(`SELECT 1 FROM counterparty_rules WHERE user_id = $1`, [user.id])).toEqual([]);
+    expect((await sql<{ created_rule: boolean; rule_id: string | null }>(`SELECT created_rule, rule_id FROM corrections WHERE event_id = $1`, [ev.id]))[0])
+      .toEqual({ created_rule: false, rule_id: null });
+  });
+
+  it('the guard both ways: outgoing money labeled revenue teaches no rule; the usual directions still do', async () => {
+    const { user, wallet } = await seedUserWithWallet();
+    const out = await insertClassifiedEvent({ wallet, direction: 'out', counterparty: addr(), amount: 20, usdValue: 20, label: 'unknown' });
+    const paid = await insertClassifiedEvent({ wallet, direction: 'out', counterparty: addr(), amount: 30, usdValue: 30, label: 'unknown' });
+    const received = await insertClassifiedEvent({ wallet, direction: 'in', counterparty: addr(), amount: 40, usdValue: 40, label: 'unknown' });
+
+    expect((await applyCorrection({ userId: user.id, eventId: out.id, newLabel: 'revenue' })).rule).toEqual({ kind: 'one_off', direction: 'out' });
+    expect((await applyCorrection({ userId: user.id, eventId: paid.id, newLabel: 'expense' })).rule.kind).toBe('learned');
+    expect((await applyCorrection({ userId: user.id, eventId: received.id, newLabel: 'revenue' })).rule.kind).toBe('learned');
+    expect((await sql<{ label: string; direction: string }>(`SELECT label::text, direction FROM counterparty_rules WHERE user_id = $1 ORDER BY label`, [user.id])))
+      .toEqual([{ label: 'expense', direction: 'out' }, { label: 'revenue', direction: 'in' }]);
+  });
+
+  it('the wrong rule from Oct 5 (incoming as expense) is switched off by correcting one transfer to revenue', async () => {
+    const { user, wallet } = await seedUserWithWallet();
+    const cp = addr();
+    const wrong = await insertCounterpartyRule({ userId: user.id, address: cp, label: 'expense', direction: 'in' });
+    const ev = await insertClassifiedEvent({ wallet, direction: 'in', counterparty: cp, amount: 49.79, usdValue: 49.79, label: 'expense' });
+    await sql(`UPDATE classifications SET rule_id = $2 WHERE event_id = $1`, [ev.id, wrong]);
+
+    expect((await applyCorrection({ userId: user.id, eventId: ev.id, newLabel: 'revenue' })).rule.kind).toBe('switched_off');
+    expect((await sql<{ active: boolean }>(`SELECT active FROM counterparty_rules WHERE id = $1`, [wrong]))[0].active).toBe(false);
+    expect((await ruleEvents(wrong)).map((e) => e.event)).toEqual(['disabled']);
+  });
+
+  it('a rule\'s history: taught revenue, switched off by a contradiction (reason kept), back on as refund', async () => {
     const { user, wallet } = await seedUserWithWallet();
     const cp = addr();
     const first = await insertClassifiedEvent({ wallet, direction: 'in', counterparty: cp, amount: 10, usdValue: 10, label: 'unknown' });
@@ -72,7 +114,7 @@ describeDb('decision history (integration)', () => {
     const taught = await applyCorrection({ userId: user.id, eventId: first.id, newLabel: 'revenue' });
     const contradicted = await applyCorrection({ userId: user.id, eventId: second.id, newLabel: 'internal_transfer' });
     expect(contradicted.rule.kind).toBe('switched_off');
-    const again = await applyCorrection({ userId: user.id, eventId: third.id, newLabel: 'expense' });
+    const again = await applyCorrection({ userId: user.id, eventId: third.id, newLabel: 'refund' });
 
     const [{ id: ruleId }] = await sql<{ id: string }>(`SELECT id FROM counterparty_rules WHERE user_id = $1`, [user.id]);
     const history = await ruleEvents(ruleId);
@@ -82,7 +124,7 @@ describeDb('decision history (integration)', () => {
       before: { label: 'revenue', active: true }, after: { active: false, disabled_reason: 'Contradicted by a correction to internal_transfer' },
       correction_id: contradicted.correctionId, reason: 'Contradicted by a correction to internal_transfer',
     });
-    expect(history[2]).toMatchObject({ before: { label: 'revenue', active: false }, after: { label: 'expense', active: true, disabled_reason: null }, correction_id: again.correctionId });
+    expect(history[2]).toMatchObject({ before: { label: 'revenue', active: false }, after: { label: 'refund', active: true, disabled_reason: null }, correction_id: again.correctionId });
   });
 
   it('every question asked and what came of it: morning then answered; alert then skipped; closed when answered elsewhere', async () => {

@@ -24,6 +24,22 @@ export type ApplyCorrectionParams = {
   sourceMessage?: string | null;
 };
 
+// A label that runs against the direction of the money: incoming as an expense, outgoing
+// as revenue (Oct 5: a rule labeled incoming transfers from 0x8f10… as expense). The
+// operator's word stands for that transfer, but it is not taught as a rule.
+const NOT_FOR_INCOMING = new Set<string>(['expense', 'x402_spend', 'staked']);
+const NOT_FOR_OUTGOING = new Set<string>(['revenue', 'x402_income', 'staking_reward', 'unstaked']);
+
+export function againstDirection(direction: 'in' | 'out', label: string): boolean {
+  return direction === 'in' ? NOT_FOR_INCOMING.has(label) : NOT_FOR_OUTGOING.has(label);
+}
+
+export function oneOffNote(direction: 'in' | 'out'): string {
+  return direction === 'in'
+    ? "Money coming in is usually revenue or a refund, so I'll label just this one and won't apply it to future transfers from this address."
+    : "Money going out is usually an expense, so I'll label just this one and won't apply it to future transfers to this address.";
+}
+
 // What the correction did to the rule for this address and direction. Earlier transfers
 // are never changed here: when the rule would change them, `proposal` is the question to
 // ask the operator (src/corrections/proposals.ts), and only a yes changes them.
@@ -33,6 +49,9 @@ export type ApplyCorrectionParams = {
 //   none         - no rule (no counterparty, or the label was unknown)
 export type RuleOutcome =
   | { kind: 'learned'; proposal: ProposalSummary | null }
+  // The label runs against the money's direction (incoming as an expense, outgoing as
+  // revenue): this transfer is labeled as the operator said, but no rule is taught
+  | { kind: 'one_off'; direction: 'in' | 'out' }
   | { kind: 'switched_off'; proposal: ProposalSummary | null }
   | { kind: 'swap_venue' }
   | { kind: 'none' };
@@ -63,10 +82,11 @@ export async function applyCorrection(params: ApplyCorrectionParams): Promise<Co
 
   // Decide what happens to the address's rule before writing anything
   const activeRule = counterparty ? await getActiveRule(params.userId, counterparty, event.direction) : null;
-  const plan: 'learn' | 'switch_off' | 'swap_venue' | 'none' =
+  const plan: 'learn' | 'switch_off' | 'swap_venue' | 'one_off' | 'none' =
     !counterparty ? 'none'
     : activeRule && activeRule.label !== params.newLabel ? 'switch_off'
     : params.newLabel === ClassificationLabel.UNKNOWN ? 'none'
+    : againstDirection(event.direction, params.newLabel) ? 'one_off'
     : activeRule ? 'learn'
     : await isSwapVenue(params.userId, counterparty) ? 'swap_venue'
     : 'learn';
@@ -153,6 +173,8 @@ export async function applyCorrection(params: ApplyCorrectionParams): Promise<Co
     rule = { kind: 'switched_off', proposal };
   } else if (plan === 'swap_venue') {
     rule = { kind: 'swap_venue' };
+  } else if (plan === 'one_off') {
+    rule = { kind: 'one_off', direction: event.direction };
   }
   // A new answer for this address replaces any question still open about it
   if (counterparty && rule.kind !== 'learned' && rule.kind !== 'switched_off') {
@@ -177,6 +199,10 @@ export function describeRuleOutcome(rule: RuleOutcome): string | null {
         : 'That contradicts the rule I had for this address, so I switched it off.';
     case 'swap_venue':
       return 'I did not make a rule for this address because it is an exchange contract.';
+    case 'one_off':
+      return rule.direction === 'in'
+        ? 'I labeled just this one. Money coming in is usually revenue or a refund, so I did not make it a rule for this address.'
+        : 'I labeled just this one. Money going out is usually an expense, so I did not make it a rule for this address.';
     case 'none':
       return null;
   }
