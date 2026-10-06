@@ -15,6 +15,7 @@ import {
   CLAIM_CORRECTION, NO_CHECK_STARTED, VERDICT_CORRECTION, TOOL_LEAK_CORRECTION, TOOL_LEAK_FALLBACK,
 } from './checks.js';
 import { answerBooksCheck, startBooksCheck } from './books-check.js';
+import { answerNumberedList } from './numbered-answer.js';
 import { answerProposalReply, bareAnswer, explicitAnswer, whichOne } from './proposals-chat.js';
 import { pendingProposals, reask } from '../corrections/proposals.js';
 import { createChanges, describeChange, resolveProposal, type ChangeAction, type ChangeTool } from './changes.js';
@@ -100,6 +101,14 @@ export async function runAgent(params: {
   if (answered) {
     used.push({ name: 'answer_proposal', args: answered.args });
     return finish(answered.text);
+  }
+
+  // "1 was an expense, 4 and 7 were swaps": an answer to Luca's numbered list, read in
+  // code and asked about in Luca's own words; nothing changes until "yes"
+  const numbered = await answerNumberedList(userId, userMessage);
+  if (numbered) {
+    used.push({ name: 'answer_numbered_list', args: numbered.args });
+    return finish(numbered.text);
   }
 
   const messages: ChatCompletionMessageParam[] = [

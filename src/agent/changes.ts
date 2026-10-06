@@ -4,7 +4,7 @@ import type { ClassificationLabel } from '../types/index.js';
 import { txLink } from '../ledger/links.js';
 import { significant, usdDisplay } from '../books/breakdown.js';
 import { answerProposal, labelWords, type ProposalAnswer } from '../corrections/proposals.js';
-import { describeRuleOutcome, againstDirection, oneOffNote } from '../corrections/handler.js';
+import { describeRuleOutcome, againstDirection, oneOffNote, type RuleOutcome } from '../corrections/handler.js';
 import { labelQuestionGroup } from '../alerts/questions.js';
 import { prepareWriteAction, executeTool } from './tools.js';
 import { isAddressLike } from '../books/names.js';
@@ -119,7 +119,9 @@ export async function createChanges(userId: string, actions: ChangeAction[], ope
   return { id: res.rows[0].id, question };
 }
 
-type Applied = { done: string; note: string | null };
+// `rule`: what the change did to the address's rule, so its follow-up question can be
+// dropped when the same answer already labeled the transfers it would ask about
+type Applied = { done: string; note: string | null; rule?: RuleOutcome };
 type Skipped = { ask: string; why: string };
 
 // Applies one change after validating it again, now
@@ -129,7 +131,7 @@ async function applyChange(userId: string, a: ChangeAction, operatorMessage: str
     if (!ok.ok) return { ask: a.ask, why: 'those transfers were already labeled' };
     const r = await labelQuestionGroup(String(a.args.group_id), userId, a.args.label as ClassificationLabel, operatorMessage);
     if (!r.ok) return { ask: a.ask, why: 'those transfers were already labeled' };
-    return { done: a.done, note: describeRuleOutcome(r.rule) };
+    return { done: a.done, note: describeRuleOutcome(r.rule), rule: r.rule };
   }
   const prepared = await prepareWriteAction(userId, a.tool, a.args);
   if (!prepared.ok) {
@@ -137,9 +139,9 @@ async function applyChange(userId: string, a: ChangeAction, operatorMessage: str
   }
   // The operator's own words, set here and never by the model
   const args = a.tool === 'apply_correction' ? { ...prepared.args, source_message: operatorMessage } : prepared.args;
-  const result = await executeTool(userId, a.tool, args) as { error?: unknown; note?: unknown } | null;
+  const result = await executeTool(userId, a.tool, args) as { error?: unknown; note?: unknown; rule?: RuleOutcome } | null;
   if (result && typeof result.error === 'string') return { ask: a.ask, why: result.error };
-  return { done: a.done, note: typeof result?.note === 'string' ? result.note : null };
+  return { done: a.done, note: typeof result?.note === 'string' ? result.note : null, rule: result?.rule };
 }
 
 export async function answerChanges(p: { userId: string; proposalId: string; accept: boolean }): Promise<ProposalAnswer> {
@@ -158,7 +160,14 @@ export async function answerChanges(p: { userId: string; proposalId: string; acc
 
   const applied: Applied[] = [];
   const skipped: Skipped[] = [];
-  for (const a of prop.actions) {
+  // Transfers oldest first: an earlier one is labeled before a later one teaches a rule
+  // for the same address, so the rule never asks about a transfer this answer covers
+  const when = new Map((await query<{ id: string; t: Date }>(
+    `SELECT id, block_time AS t FROM normalized_events WHERE user_id = $2 AND id = ANY($1::uuid[])`,
+    [prop.actions.filter((a) => a.tool === 'apply_correction').map((a) => String(a.args.event_id)), p.userId],
+  )).rows.map((r) => [r.id, new Date(r.t).getTime()]));
+  const order = (a: ChangeAction): number => (a.tool === 'apply_correction' ? when.get(String(a.args.event_id)) ?? 0 : Number.MAX_SAFE_INTEGER);
+  for (const a of [...prop.actions].sort((x, y) => order(x) - order(y))) {
     try {
       const r = await applyChange(p.userId, a, prop.operator_message);
       if ('done' in r) applied.push(r); else skipped.push(r);
@@ -169,7 +178,19 @@ export async function answerChanges(p: { userId: string; proposalId: string; acc
   }
   await query(`UPDATE label_proposals SET result = $2 WHERE id = $1`, [prop.id, JSON.stringify({ changed: applied.length, skipped: skipped.length })]);
 
-  const notes = applied.map((a) => a.note).filter((n): n is string => !!n);
+  // A rule's question about other transfers is left out when this same answer labeled
+  // them since (the question was superseded): the operator already said what they were
+  const asked = applied.flatMap((a) => (a.rule && 'proposal' in a.rule && a.rule.proposal ? [a.rule.proposal.id] : []));
+  const stillOpen = new Set(asked.length === 0 ? [] : (await query<{ id: string }>(
+    `SELECT id FROM label_proposals WHERE id = ANY($1::uuid[]) AND status = 'pending'`, [asked],
+  )).rows.map((r) => r.id));
+  for (const a of applied) {
+    if (a.rule && 'proposal' in a.rule && a.rule.proposal && !stillOpen.has(a.rule.proposal.id)) {
+      a.note = describeRuleOutcome({ ...a.rule, proposal: null });
+    }
+  }
+  // Said once, however many changes share it
+  const notes = [...new Set(applied.map((a) => a.note).filter((n): n is string => !!n))];
   let text: string;
   if (prop.actions.length === 1) {
     text = applied.length === 1
