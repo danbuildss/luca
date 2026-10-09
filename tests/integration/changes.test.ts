@@ -179,7 +179,8 @@ describeDb('changes by chat, no buttons (integration)', () => {
     expect(create).not.toHaveBeenCalled();
     expect(done.text).toMatch(/^Done:\n/);
     expect(done.text).not.toMatch(/earlier payment/);
-    expect(done.text.match(/New transfers with this address will be labeled the same way\./g) ?? []).toHaveLength(1);
+    expect(done.text.match(/New transfers with these addresses will be labeled the same way\./g) ?? []).toHaveLength(1);
+    expect(done.text).not.toContain('New transfers with this address');
     expect((await Promise.all(ev.map((e) => label(e.id)))).map((l) => l.label))
       .toEqual(['expense', 'internal_transfer', 'swap', 'swap', 'swap', 'swap', 'swap', 'unknown']);
     // The wrong incoming-expense rule for 0x8f10 is switched off by the answer to 5
@@ -201,9 +202,22 @@ describeDb('changes by chat, no buttons (integration)', () => {
     const q = await says(user.id, '1 was a swap, 2 was revenue');
     expect(create).not.toHaveBeenCalled();
     expect(q.text).toMatch(/^Make these 2 changes\?\n1\. Label the USDC payment to .+\$106\.88\) as swap\n2\. Label the USDC transfer from .+\$56\.65\) as revenue/);
-    await says(user.id, 'yes');
+    const done = await says(user.id, 'yes');
+    expect(done.text).toMatch(/\n\nNew transfers with these addresses will be labeled the same way\.$/);
     expect((await label(a.id)).label).toBe('swap');
     expect((await label(b.id)).label).toBe('revenue');
+  });
+
+  it('two transfers with one address, answered together: "this address", said once', async () => {
+    const { user, wallet } = await seedUserWithWallet();
+    const to = addr();
+    await insertClassifiedEvent({ wallet, direction: 'out', counterparty: to, amount: 40, usdValue: 40, label: 'unknown', at: '3 days' });
+    await insertClassifiedEvent({ wallet, direction: 'out', counterparty: to, amount: 60, usdValue: 60, label: 'unknown', at: '2 days' });
+    await says(user.id, 'what still needs context?');
+    await says(user.id, '1 and 2 were expenses');
+    const done = await says(user.id, 'yes');
+    expect(done.text.match(/New transfers with this address will be labeled the same way\./g) ?? []).toHaveLength(1);
+    expect(done.text).not.toContain('these addresses');
   });
 
   it('a number that is not in the last list changes nothing', async () => {
