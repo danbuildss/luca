@@ -121,7 +121,7 @@ export async function createChanges(userId: string, actions: ChangeAction[], ope
 
 // `rule`: what the change did to the address's rule, so its follow-up question can be
 // dropped when the same answer already labeled the transfers it would ask about
-type Applied = { done: string; note: string | null; rule?: RuleOutcome };
+type Applied = { done: string; note: string | null; rule?: RuleOutcome; address?: string };
 type Skipped = { ask: string; why: string };
 
 // Applies one change after validating it again, now
@@ -162,15 +162,27 @@ export async function answerChanges(p: { userId: string; proposalId: string; acc
   const skipped: Skipped[] = [];
   // Transfers oldest first: an earlier one is labeled before a later one teaches a rule
   // for the same address, so the rule never asks about a transfer this answer covers
-  const when = new Map((await query<{ id: string; t: Date }>(
-    `SELECT id, block_time AS t FROM normalized_events WHERE user_id = $2 AND id = ANY($1::uuid[])`,
+  const events = (await query<{ id: string; t: Date; address: string | null }>(
+    `SELECT id, block_time AS t, LOWER(CASE WHEN direction = 'in' THEN from_address ELSE to_address END) AS address
+     FROM normalized_events WHERE user_id = $2 AND id = ANY($1::uuid[])`,
     [prop.actions.filter((a) => a.tool === 'apply_correction').map((a) => String(a.args.event_id)), p.userId],
-  )).rows.map((r) => [r.id, new Date(r.t).getTime()]));
+  )).rows;
+  const when = new Map(events.map((r) => [r.id, new Date(r.t).getTime()]));
+  // The address each change is about, so a rule note can say "these addresses" when an
+  // answer taught more than one
+  const groupAddress = new Map((await query<{ id: string; address: string }>(
+    `SELECT id, counterparty_address AS address FROM question_groups WHERE user_id = $2 AND id = ANY($1::uuid[])`,
+    [prop.actions.filter((a) => a.tool === 'label_question_group').map((a) => String(a.args.group_id)), p.userId],
+  )).rows.map((r) => [r.id, r.address]));
+  const eventAddress = new Map(events.map((r) => [r.id, r.address]));
+  const addressOf = (a: ChangeAction): string | undefined => (a.tool === 'apply_correction'
+    ? eventAddress.get(String(a.args.event_id)) ?? undefined
+    : groupAddress.get(String(a.args.group_id)));
   const order = (a: ChangeAction): number => (a.tool === 'apply_correction' ? when.get(String(a.args.event_id)) ?? 0 : Number.MAX_SAFE_INTEGER);
   for (const a of [...prop.actions].sort((x, y) => order(x) - order(y))) {
     try {
       const r = await applyChange(p.userId, a, prop.operator_message);
-      if ('done' in r) applied.push(r); else skipped.push(r);
+      if ('done' in r) applied.push({ ...r, address: addressOf(a) }); else skipped.push(r);
     } catch (err) {
       logger.error({ err, userId: p.userId, tool: a.tool }, 'Confirmed change failed');
       skipped.push({ ask: a.ask, why: 'something went wrong on my side' });
@@ -188,6 +200,12 @@ export async function answerChanges(p: { userId: string; proposalId: string; acc
     if (a.rule && 'proposal' in a.rule && a.rule.proposal && !stillOpen.has(a.rule.proposal.id)) {
       a.note = describeRuleOutcome({ ...a.rule, proposal: null });
     }
+  }
+  // Several addresses learned in one answer: "these addresses", said once
+  const learned = new Set(applied.filter((a) => a.rule?.kind === 'learned' && a.address).map((a) => a.address));
+  if (learned.size > 1) {
+    const one = 'New transfers with this address will be labeled the same way.';
+    for (const a of applied) if (a.note === one) a.note = 'New transfers with these addresses will be labeled the same way.';
   }
   // Said once, however many changes share it
   const notes = [...new Set(applied.map((a) => a.note).filter((n): n is string => !!n))];

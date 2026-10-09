@@ -294,7 +294,7 @@ DONE = """Done:
 - Labeled the USDC transfer from 0x1a2b…9f3c (on Oct 9, $250.00) as revenue
 - Labeled the USDC payment to 0x7d4e…06ab (on Oct 9, $56.65) as expense
 
-New transfers with this address will be labeled the same way."""
+New transfers with these addresses will be labeled the same way."""
 
 CHECK_ACK = ("Checking the last 30 days across your 2 wallets against the chain now. "
              "I'll message you with the result, usually within a few minutes.")
