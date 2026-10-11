@@ -94,6 +94,33 @@ export const buildingData: BuildingData = {
 
   buildLog: [
     {
+      date: '2026-10-06',
+      title: 'Answer Luca by number',
+      description: 'Luca lists what it could not place as a numbered list. Answering "1 was an expense, 4 and 7 were swaps" used to go to the AI, which wrote its own confirmation and then changed nothing when told yes. Luca now reads a numbered answer itself, matches each number to the transaction it listed, and asks one yes/no question that shows exactly what will change.',
+      status: 'fixed',
+      evidenceLink: 'https://github.com/danbuildss/luca/pull/110',
+      public: true,
+      draft: true,
+    },
+    {
+      date: '2026-10-05',
+      title: 'Money coming in is never learned as an expense',
+      description: 'Real-wallet testing found a rule that labelled every incoming transfer from one address as an expense. A label that runs against the direction of the money now applies to that one transaction only and teaches no rule, and Luca says so when it asks.',
+      status: 'fixed',
+      evidenceLink: 'https://github.com/danbuildss/luca/pull/106',
+      public: true,
+      draft: true,
+    },
+    {
+      date: '2026-10-04',
+      title: 'One morning message, and quiet nights',
+      description: 'Luca now sends one message in the morning, only when something happened, with the whole week on Mondays. Questions about transfers it cannot place go in that message as one numbered list instead of arriving one by one, and nothing is sent between 22:00 and 08:00 in your timezone.',
+      status: 'shipped',
+      evidenceLink: 'https://github.com/danbuildss/luca/pull/104',
+      public: true,
+      draft: true,
+    },
+    {
       date: '2026-09-30',
       title: 'Luca recognises staking from the chain',
       description: "When tokens move into a staking contract, Luca now reads the contract's own record of the stake before and after the transfer, so a stake is recognised as capital moved, not spending. It found a real 700,000 BNKR stake this way without being told.",
