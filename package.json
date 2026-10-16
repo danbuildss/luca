@@ -35,7 +35,7 @@
     "node-cron": "^4.6.0",
     "openai": "^4.28.0",
     "p-retry": "^6.2.0",
-    "pg": "^8.11.3",
+    "pg": "^8.23.1",
     "pino": "^8.18.0",
     "telegraf": "^4.16.3",
     "zod": "^3.22.4"
@@ -43,12 +43,12 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/pg": "^8.11.0",
-    "@typescript-eslint/eslint-plugin": "^8.70.1",
+    "@typescript-eslint/eslint-plugin": "^8.71.1",
     "@typescript-eslint/parser": "^8.70.1",
-    "@vitest/coverage-v8": "^5.0.2",
+    "@vitest/coverage-v8": "^5.0.3",
     "concurrently": "^8.2.2",
     "eslint": "^8.56.0",
-    "tsx": "^4.7.1",
+    "tsx": "^4.23.15",
     "typescript": "^5.3.3",
     "vitest": "^5.0.2"
   },
