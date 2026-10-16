@@ -100,7 +100,7 @@ export const buildingData: BuildingData = {
       status: 'fixed',
       evidenceLink: 'https://github.com/danbuildss/luca/pull/110',
       public: true,
-      draft: true,
+      draft: false,
     },
     {
       date: '2026-10-05',
@@ -109,7 +109,7 @@ export const buildingData: BuildingData = {
       status: 'fixed',
       evidenceLink: 'https://github.com/danbuildss/luca/pull/106',
       public: true,
-      draft: true,
+      draft: false,
     },
     {
       date: '2026-10-04',
@@ -118,7 +118,7 @@ export const buildingData: BuildingData = {
       status: 'shipped',
       evidenceLink: 'https://github.com/danbuildss/luca/pull/104',
       public: true,
-      draft: true,
+      draft: false,
     },
     {
       date: '2026-09-30',
@@ -127,7 +127,7 @@ export const buildingData: BuildingData = {
       status: 'shipped',
       evidenceLink: 'https://github.com/danbuildss/luca/pull/100',
       public: true,
-      draft: true,
+      draft: false,
     },
     {
       date: '2026-09-30',
@@ -136,7 +136,7 @@ export const buildingData: BuildingData = {
       status: 'shipped',
       evidenceLink: 'https://github.com/danbuildss/luca/pull/101',
       public: true,
-      draft: true,
+      draft: false,
     },
     {
       date: '2026-09-28',
@@ -145,7 +145,7 @@ export const buildingData: BuildingData = {
       status: 'fixed',
       evidenceLink: 'https://github.com/danbuildss/luca/pull/98',
       public: true,
-      draft: true,
+      draft: false,
     },
     {
       date: '2026-09-27',

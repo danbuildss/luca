@@ -48,16 +48,13 @@ describe('/building', () => {
   });
 
   it('build log: newest first, same-day entries in the order written', () => {
+    // Its own entries, so publishing real ones never changes what this checks
     const data = clone();
-    data.buildLog.push({ date: '2026-09-28', title: 'Later entry', description: 'x', status: 'shipped', public: true, draft: false });
-    const titles = publishedLog(data).map((e) => e.title);
-    expect(titles[0]).toBe('Later entry');
-    expect(titles.slice(1, 4)).toEqual([
-      "Luca no longer says it changed something it didn't",
-      'The ACCUM fee view can be shared',
-      'Corrections now ask before changing history',
-    ]);
-    expect(titles.at(-1)).toBe('Balance reconciliation caught missing gas entries');
+    const entry = (date: string, title: string) => ({ date, title, description: 'x', status: 'shipped' as const, public: true, draft: false });
+    data.buildLog = [entry('2026-01-02', 'Same day, first'), entry('2026-01-01', 'Earliest'), entry('2026-01-02', 'Same day, second'), entry('2026-01-03', 'Latest')];
+    expect(publishedLog(data).map((e) => e.title)).toEqual(['Latest', 'Same day, first', 'Same day, second', 'Earliest']);
+    // The real log: its oldest entry is last
+    expect(publishedLog(buildingData).at(-1)?.title).toBe('Balance reconciliation caught missing gas entries');
     expect(displayDate('2026-09-24')).toBe('Sep 24, 2026');
   });
 
