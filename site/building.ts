@@ -59,7 +59,7 @@ export const buildingData: BuildingData = {
   current: {
     text: 'Testing Luca against real financial activity and onboarding the first outside operators.',
     statusLine: 'Base · Invite-only beta · Read-only',
-    lastUpdated: '2026-09-27',
+    lastUpdated: '2026-10-16',
   },
 
   roadmap: [
@@ -78,7 +78,7 @@ export const buildingData: BuildingData = {
     item('now', 'Real operator testing', 'testing'),
     item('now', 'Classification trust', 'testing'),
     item('now', 'Learning from corrections across different operators', 'testing'),
-    item('now', 'Improving proactive briefs & financial judgment', 'building'),
+    item('now', 'Improving proactive briefs & financial judgment', 'testing'),
 
     item('next', 'Deeper entity & counterparty memory', 'exploring'),
     item('next', 'Deeper entity-level books', 'exploring'),

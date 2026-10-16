@@ -32,9 +32,12 @@ describe('/building', () => {
 
   it('shows CURRENTLY from the data, with the last-updated date', () => {
     const html = renderBuildingPage(buildingData);
-    expect(html).toContain('Testing Luca against real financial activity and onboarding the first outside operators.');
-    expect(html).toContain('Base · Invite-only beta · Read-only');
-    expect(html).toContain('Last updated: <time datetime="2026-09-27">Sep 27, 2026</time>');
+    // From the data, so the weekly update never needs a test change
+    const { text, statusLine, lastUpdated } = buildingData.current;
+    expect(html).toContain(text);
+    expect(html).toContain(statusLine);
+    expect(html).toContain(`Last updated: <time datetime="${lastUpdated}">${displayDate(lastUpdated)}</time>`);
+    expect(displayDate('2026-09-27')).toBe('Sep 27, 2026');
   });
 
   it('roadmap: SHIPPED, NOW, NEXT, LATER in that order; NEXT and LATER are direction, not commitments', () => {
