@@ -208,6 +208,54 @@
       </div>
       <ol class="b-log">
       <li>
+        <p class="b-date"><time datetime="2026-10-06">Oct 6, 2026</time></p>
+        <div>
+          <h3>Answer Luca by number</h3>
+          <p>Luca lists what it could not place as a numbered list. Answering &quot;1 was an expense, 4 and 7 were swaps&quot; used to go to the AI, which wrote its own confirmation and then changed nothing when told yes. Luca now reads a numbered answer itself, matches each number to the transaction it listed, and asks one yes/no question that shows exactly what will change.</p>
+          <p class="b-log-meta"><span class="b-status">fixed</span><a class="b-evidence" href="https://github.com/danbuildss/luca/pull/110" target="_blank" rel="noopener">Evidence</a></p>
+        </div>
+      </li>
+      <li>
+        <p class="b-date"><time datetime="2026-10-05">Oct 5, 2026</time></p>
+        <div>
+          <h3>Money coming in is never learned as an expense</h3>
+          <p>Real-wallet testing found a rule that labelled every incoming transfer from one address as an expense. A label that runs against the direction of the money now applies to that one transaction only and teaches no rule, and Luca says so when it asks.</p>
+          <p class="b-log-meta"><span class="b-status">fixed</span><a class="b-evidence" href="https://github.com/danbuildss/luca/pull/106" target="_blank" rel="noopener">Evidence</a></p>
+        </div>
+      </li>
+      <li>
+        <p class="b-date"><time datetime="2026-10-04">Oct 4, 2026</time></p>
+        <div>
+          <h3>One morning message, and quiet nights</h3>
+          <p>Luca now sends one message in the morning, only when something happened, with the whole week on Mondays. Questions about transfers it cannot place go in that message as one numbered list instead of arriving one by one, and nothing is sent between 22:00 and 08:00 in your timezone.</p>
+          <p class="b-log-meta"><span class="b-status">shipped</span><a class="b-evidence" href="https://github.com/danbuildss/luca/pull/104" target="_blank" rel="noopener">Evidence</a></p>
+        </div>
+      </li>
+      <li>
+        <p class="b-date"><time datetime="2026-09-30">Sep 30, 2026</time></p>
+        <div>
+          <h3>Luca recognises staking from the chain</h3>
+          <p>When tokens move into a staking contract, Luca now reads the contract&#39;s own record of the stake before and after the transfer, so a stake is recognised as capital moved, not spending. It found a real 700,000 BNKR stake this way without being told.</p>
+          <p class="b-log-meta"><span class="b-status">shipped</span><a class="b-evidence" href="https://github.com/danbuildss/luca/pull/100" target="_blank" rel="noopener">Evidence</a></p>
+        </div>
+      </li>
+      <li>
+        <p class="b-date"><time datetime="2026-09-30">Sep 30, 2026</time></p>
+        <div>
+          <h3>New wallets: Luca now says when your books are ready</h3>
+          <p>Our first outside operator asked for his balance seconds after adding a wallet and got an empty answer. Now Luca shows what it can already see, says it is still reading your history, and messages you once your books are ready. Answers that need complete books wait until then. The welcome message is also no longer sent twice.</p>
+          <p class="b-log-meta"><span class="b-status">shipped</span><a class="b-evidence" href="https://github.com/danbuildss/luca/pull/101" target="_blank" rel="noopener">Evidence</a></p>
+        </div>
+      </li>
+      <li>
+        <p class="b-date"><time datetime="2026-09-28">Sep 28, 2026</time></p>
+        <div>
+          <h3>AI classification now runs in production</h3>
+          <p>Luca&#39;s AI classifier, which labels the transfers no rule can, had not been running. It runs now, and anything it can&#39;t place stays unknown for you to answer.</p>
+          <p class="b-log-meta"><span class="b-status">fixed</span><a class="b-evidence" href="https://github.com/danbuildss/luca/pull/98" target="_blank" rel="noopener">Evidence</a></p>
+        </div>
+      </li>
+      <li>
         <p class="b-date"><time datetime="2026-09-27">Sep 27, 2026</time></p>
         <div>
           <h3>Luca no longer says it changed something it didn&#39;t</h3>
