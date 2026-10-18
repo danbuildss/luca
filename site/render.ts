@@ -214,7 +214,8 @@ export function renderBuildingPage(data: BuildingData): string {
       <li><a href="https://t.me/asklucaai" target="_blank" rel="noopener">Telegram</a></li>
       <li><a href="https://tally.so/r/J9yy8X" target="_blank" rel="noopener">Apply</a></li>
     </ul>
-    <p class="footer-copy">© 2026 Luca · Built by <a href="https://somehow-internet.vercel.app" target="_blank" rel="noopener">SOMEHOW</a></p>
+    <p class="footer-copy">© 2026 Luca · Built by <a class="built-by" href="https://somehowinternet.app" target="_blank" rel="noopener">SOMEHOW</a></p>
+    <a class="somehow-pill" href="https://somehowinternet.app" target="_blank" rel="noopener">somehowinternet.app</a>
   </div>
 </footer>
 
