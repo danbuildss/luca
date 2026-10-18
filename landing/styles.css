@@ -315,14 +315,11 @@ html:not(.js) .typing { display: none; }
 .footer-links a, .footer-copy a { color: var(--ink-3); text-decoration: none; font-size: 14px; }
 .footer-links a:hover, .footer-copy a:hover { color: var(--ink); }
 .footer-copy { width: 100%; font-size: 13px; color: var(--ink-3); }
-/* Built by SOMEHOW: an underlined credit, and a pill linking to the studio */
+/* © line, then "Built by SOMEHOW" underneath, as the last thing on the page */
+.footer-copy { display: grid; gap: 8px; }
+.footer-copy p { margin: 0; }
 .footer-copy a.built-by { color: var(--ink-2); text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 4px; }
 .footer-copy a.built-by:hover { color: var(--ink); text-decoration-color: currentColor; }
-.somehow-pill { display: inline-flex; align-items: center; height: 36px; padding: 0 18px; border-radius: 999px;
-  border: 1px solid var(--line-2); background: var(--card); color: var(--ink); font-size: 14px; font-weight: 500;
-  text-decoration: none; transition: background-color .15s, border-color .15s; }
-.somehow-pill:hover { background: var(--paper-2); border-color: var(--ink-3); }
-.somehow-pill:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
 @media (max-width: 520px) { .footer-links { margin-left: 0; width: 100%; } }
 
 /* ═══ Motion preferences ═══════════════════════════════ */
